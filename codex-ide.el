@@ -60,6 +60,11 @@
   "Face used for item detail lines."
   :group 'codex-ide)
 
+(defface codex-ide-header-line-face
+  '((t :inherit (header-line font-lock-comment-face) :weight light :height 0.9))
+  "Face used for the Codex session header line."
+  :group 'codex-ide)
+
 (defcustom codex-ide-cli-path "codex"
   "Path to the Codex CLI executable."
   :type 'string
@@ -712,7 +717,7 @@ FORMAT-STRING and ARGS are passed to `format'."
   "Return a compact header summary for RATE-LIMITS."
   (when-let* ((primary (alist-get 'primary rate-limits))
               (used-percent (alist-get 'usedPercent primary)))
-    (format "quota: %s%% used%s"
+    (format "quota: %s%%%% used%s"
             used-percent
             (if-let ((plan-type (alist-get 'planType rate-limits)))
                 (format " (%s)" plan-type)
@@ -723,8 +728,7 @@ FORMAT-STRING and ARGS are passed to `format'."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (when-let ((buffer (codex-ide-session-buffer session)))
     (with-current-buffer buffer
-      (let* ((working-dir (codex-ide-session-directory session))
-             (context (with-current-buffer buffer
+      (let* ((context (with-current-buffer buffer
                         (codex-ide--get-active-buffer-context)))
              (focus (if context
                         (format "%s:%s"
@@ -738,20 +742,17 @@ FORMAT-STRING and ARGS are passed to `format'."
               (codex-ide--format-rate-limit-summary
                (codex-ide--session-metadata-get session :rate-limits))))
         (setq header-line-format
-              (string-join
-               (delq nil
-                     (list
-                      (format " Codex  [%s]"
-                              (file-name-nondirectory
-                               (directory-file-name working-dir)))
-                      (format "focus: %s" focus)
-                      (format "thread: %s"
-                              (or (codex-ide-session-thread-id session) "none"))
-                      (format "status: %s"
-                              (or (codex-ide-session-status session) "disconnected"))
-                      token-summary
-                      rate-limit-summary))
-               "  "))))))
+              (propertize
+               (string-join
+                (delq nil
+                      (list
+                       (format "focus: %s" focus)
+                       (format "status: %s"
+                               (or (codex-ide-session-status session) "disconnected"))
+                       token-summary
+                       rate-limit-summary))
+                "  ")
+               'face 'codex-ide-header-line-face))))))
 
 (defun codex-ide--make-buffer-context (&optional buffer)
   "Build Codex context for BUFFER or the current buffer.
