@@ -51,7 +51,7 @@
   :group 'codex-ide)
 
 (defface codex-ide-item-summary-face
-  '((t :inherit font-lock-keyword-face))
+  '((t :inherit font-lock-function-name-face))
   "Face used for item summary lines."
   :group 'codex-ide)
 
@@ -1053,7 +1053,7 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
 
 (defun codex-ide--item-detail-line (text)
   "Format TEXT as an indented detail line."
-  (format "  |- %s\n" text))
+  (format "  └ %s\n" text))
 
 (defun codex-ide--item-detail-block (text)
   "Format TEXT as a block of indented detail lines."
