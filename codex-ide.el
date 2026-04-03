@@ -1996,7 +1996,8 @@ MODE can be nil or `new', `continue', or `resume'."
               (codex-ide--track-active-buffer)
               (codex-ide--insert-input-prompt session)
               (message "Codex started in %s"
-                       (file-name-nondirectory (directory-file-name working-dir))))
+                       (file-name-nondirectory (directory-file-name working-dir)))
+              session)
           (error
            (codex-ide-log-message session "Session startup failed: %s" (error-message-string err))
            (when (process-live-p (codex-ide-session-process session))
