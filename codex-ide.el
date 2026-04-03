@@ -668,11 +668,20 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
       (codex-ide--clear-markdown-properties start end)
       (goto-char start)
       (while (re-search-forward "`\\([^`\n]+\\)`" end t)
-        (add-text-properties
-         (match-beginning 0)
-         (match-end 0)
-         '(face font-lock-keyword-face
-           codex-ide-markdown t)))
+        (let ((code-start (match-beginning 1))
+              (code-end (match-end 1)))
+          (add-text-properties
+           code-start code-end
+           '(face font-lock-keyword-face
+             codex-ide-markdown t))
+          (add-text-properties
+           (match-beginning 0) code-start
+           '(display ""
+             codex-ide-markdown t))
+          (add-text-properties
+           code-end (match-end 0)
+           '(display ""
+             codex-ide-markdown t))))
       (goto-char start)
       (while (re-search-forward "\\(\\[\\([^]\n]+\\)\\](\\(/[^)\n]+\\))\\)" end t)
         (let* ((match-start (match-beginning 1))
