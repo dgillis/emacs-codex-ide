@@ -938,7 +938,7 @@ FORMAT-STRING and ARGS are passed to `format'."
               (format "ctx: %s/%s"
                       (codex-ide--format-compact-number used)
                       (codex-ide--format-compact-number window))
-              (format "left: %s (%.0f%%)"
+              (format "left: %s (%.0f%%%%)"
                       (codex-ide--format-compact-number remaining)
                       remaining-percent)
               (when (numberp last-input)
