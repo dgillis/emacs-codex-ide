@@ -2435,9 +2435,7 @@ If no live session exists, prompt to start one."
   (interactive)
   (let* ((session (codex-ide--session-for-current-project))
          (buffer (codex-ide-session-buffer session)))
-    (if-let ((window (get-buffer-window buffer)))
-        (select-window window)
-      (codex-ide--display-buffer-in-side-window buffer))))
+    (codex-ide--display-buffer-in-codex-window buffer)))
 
 ;;;###autoload
 (defun codex-ide-list-sessions ()
