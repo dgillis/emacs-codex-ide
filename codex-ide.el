@@ -777,14 +777,16 @@ window by switching it to BUFFER.  Fall back to creating a new Codex window."
                                  end)))
           (add-text-properties
            fence-start code-start
-           '(codex-ide-markdown t))
+           '(display ""
+             codex-ide-markdown t))
           (add-text-properties
            code-start closing-start
            '(codex-ide-markdown t))
           (codex-ide--fontify-code-block-region code-start closing-start language)
           (add-text-properties
            closing-start closing-end
-           '(codex-ide-markdown t))
+           '(display ""
+             codex-ide-markdown t))
           (goto-char closing-end))))))
 
 (defun codex-ide--render-markdown-region (start end)
