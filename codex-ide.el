@@ -694,33 +694,130 @@ window by switching it to BUFFER.  Fall back to creating a new Codex window."
         (match-string 1 label)
       label)))
 
+(defun codex-ide--markdown-language-mode (language)
+  "Return an Emacs major mode function for fenced code block LANGUAGE."
+  (let* ((lang (downcase (string-trim (or language ""))))
+         (mode
+          (alist-get
+           lang
+           '(("bash" . sh-mode)
+             ("c" . c-mode)
+             ("c++" . c++-mode)
+             ("cpp" . c++-mode)
+             ("elisp" . emacs-lisp-mode)
+             ("emacs-lisp" . emacs-lisp-mode)
+             ("go" . go-mode)
+             ("java" . java-mode)
+             ("javascript" . js-mode)
+             ("js" . js-mode)
+             ("json" . json-mode)
+             ("python" . python-mode)
+             ("py" . python-mode)
+             ("ruby" . ruby-mode)
+             ("rust" . rust-mode)
+             ("shell" . sh-mode)
+             ("sh" . sh-mode)
+             ("typescript" . typescript-mode)
+             ("ts" . typescript-mode)
+             ("tsx" . tsx-ts-mode)
+             ("yaml" . yaml-mode)
+             ("yml" . yaml-mode))
+           nil nil #'string=)))
+    (cond
+     ((and mode (fboundp mode))
+      mode)
+     ((string-empty-p lang)
+      nil)
+     (t
+      (let ((candidate (intern-soft (format "%s-mode" lang))))
+        (when (fboundp candidate)
+          candidate))))))
+
+(defun codex-ide--fontify-code-block-region (start end language)
+  "Apply syntax highlighting to region START END using LANGUAGE."
+  (when-let ((mode (codex-ide--markdown-language-mode language)))
+    (let ((source-buffer (current-buffer))
+          (code (buffer-substring-no-properties start end)))
+      (with-temp-buffer
+        (insert code)
+        (funcall mode)
+        (font-lock-ensure (point-min) (point-max))
+        (let ((pos (point-min)))
+          (while (< pos (point-max))
+            (let* ((next (next-property-change pos (current-buffer) (point-max)))
+                   (face (get-text-property pos 'face))
+                   (font-lock-face (get-text-property pos 'font-lock-face))
+                   (props (append
+                           (when face (list 'face face))
+                           (when font-lock-face
+                             (list 'font-lock-face font-lock-face))))
+                   (target-start (+ start (1- pos)))
+                   (target-end (min end (+ start (1- next)))))
+              (when props
+                (with-current-buffer source-buffer
+                  (add-text-properties
+                   target-start
+                   target-end
+                  props)))
+              (setq pos next))))))))
+
+(defun codex-ide--render-fenced-code-blocks (start end)
+  "Render fenced code blocks between START and END."
+  (goto-char start)
+  (while (re-search-forward "^```\\([^`\n]*\\)[ \t]*$" end t)
+    (let* ((fence-start (match-beginning 0))
+           (language (string-trim (or (match-string-no-properties 1) "")))
+           (code-start (min (1+ (match-end 0)) end)))
+      (when (and (< code-start end)
+                 (re-search-forward "^```[ \t]*$" end t))
+        (let* ((closing-start (match-beginning 0))
+               (closing-end (min (if (eq (char-after (match-end 0)) ?\n)
+                                     (1+ (match-end 0))
+                                   (match-end 0))
+                                 end)))
+          (add-text-properties
+           fence-start code-start
+           '(codex-ide-markdown t))
+          (add-text-properties
+           code-start closing-start
+           '(codex-ide-markdown t))
+          (codex-ide--fontify-code-block-region code-start closing-start language)
+          (add-text-properties
+           closing-start closing-end
+           '(codex-ide-markdown t))
+          (goto-char closing-end))))))
+
 (defun codex-ide--render-markdown-region (start end)
   "Apply lightweight markdown rendering between START and END."
   (save-excursion
     (let ((inhibit-read-only t))
       (codex-ide--clear-markdown-properties start end)
       (goto-char start)
+      (codex-ide--render-fenced-code-blocks start end)
+      (goto-char start)
       (while (re-search-forward "\\(\\[\\([^]\n]+\\)\\](\\(/[^)\n]+\\))\\)" end t)
-        (let* ((match-start (match-beginning 1))
-               (match-end (match-end 1))
-               (label (match-string-no-properties 2))
-               (display-label (codex-ide--normalize-markdown-link-label label))
-               (target (match-string-no-properties 3))
-               (parsed (codex-ide--parse-file-link-target target)))
-          (when parsed
-            (make-text-button
-             match-start match-end
-             'action #'codex-ide--open-file-link
-             'follow-link t
-             'help-echo target
-             'face 'link
-             'codex-ide-markdown t
-             'codex-ide-path (nth 0 parsed)
-             'codex-ide-line (nth 1 parsed)
-             'codex-ide-column (nth 2 parsed))
-            (add-text-properties
-             match-start match-end
-             `(display ,display-label)))))
+        (unless (or (get-text-property (match-beginning 1) 'codex-ide-markdown)
+                    (get-text-property (1- (match-end 1)) 'codex-ide-markdown))
+          (let* ((match-start (match-beginning 1))
+                 (match-end (match-end 1))
+                 (label (match-string-no-properties 2))
+                 (display-label (codex-ide--normalize-markdown-link-label label))
+                 (target (match-string-no-properties 3))
+                 (parsed (codex-ide--parse-file-link-target target)))
+            (when parsed
+              (make-text-button
+               match-start match-end
+               'action #'codex-ide--open-file-link
+               'follow-link t
+               'help-echo target
+               'face 'link
+               'codex-ide-markdown t
+               'codex-ide-path (nth 0 parsed)
+               'codex-ide-line (nth 1 parsed)
+               'codex-ide-column (nth 2 parsed))
+              (add-text-properties
+               match-start match-end
+               `(display ,display-label))))))
       (goto-char start)
       (while (re-search-forward "`\\([^`\n]+\\)`" end t)
         (unless (or (get-text-property (match-beginning 0) 'codex-ide-markdown)
