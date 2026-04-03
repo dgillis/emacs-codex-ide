@@ -306,6 +306,10 @@ Add this variable to `savehist-additional-variables' to persist it.")
     map)
   "Keymap for `codex-ide-session-mode'.")
 
+(defvar codex-ide-session-prompt-minor-mode-map
+  (make-sparse-keymap)
+  "Keymap for `codex-ide-session-prompt-minor-mode'.")
+
 (define-key codex-ide-session-mode-map (kbd "C-c C-c") #'codex-ide-interrupt)
 (define-key codex-ide-session-mode-map (kbd "C-c RET") #'codex-ide-submit)
 (define-key codex-ide-session-mode-map (kbd "C-c C-k") #'codex-ide-send-escape)
@@ -315,9 +319,35 @@ Add this variable to `savehist-additional-variables' to persist it.")
 (define-key codex-ide-session-mode-map (kbd "M-p") #'codex-ide-previous-prompt-history)
 (define-key codex-ide-session-mode-map (kbd "M-n") #'codex-ide-next-prompt-history)
 
+(define-minor-mode codex-ide-session-prompt-minor-mode
+  "Minor mode enabled only while point is in the active Codex prompt."
+  :lighter " Prompt"
+  :keymap codex-ide-session-prompt-minor-mode-map)
+
+(defun codex-ide--point-in-active-prompt-p (&optional session pos)
+  "Return non-nil when POS is inside SESSION's active prompt region."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (setq pos (or pos (point)))
+  (when-let ((overlay (and session (codex-ide-session-input-overlay session))))
+    (let ((start (overlay-start overlay))
+          (end (overlay-end overlay)))
+      (and start
+           end
+           (<= start pos)
+           (<= pos end)))))
+
+(defun codex-ide--sync-prompt-minor-mode (&optional session)
+  "Enable or disable `codex-ide-session-prompt-minor-mode' for SESSION."
+  (setq session (or session (and (boundp 'codex-ide--session) codex-ide--session)))
+  (when (and session (derived-mode-p 'codex-ide-session-mode))
+    (let ((inside (codex-ide--point-in-active-prompt-p session)))
+      (unless (eq inside codex-ide-session-prompt-minor-mode)
+        (codex-ide-session-prompt-minor-mode (if inside 1 -1))))))
+
 (define-derived-mode codex-ide-session-mode text-mode "Codex-IDE"
   "Major mode for Codex app-server session buffers."
-  (setq-local truncate-lines nil))
+  (setq-local truncate-lines nil)
+  (add-hook 'post-command-hook #'codex-ide--sync-prompt-minor-mode nil t))
 
 (define-derived-mode codex-ide-log-mode special-mode "Codex-IDE-Log"
   "Major mode for Codex IDE log buffers."
@@ -916,7 +946,8 @@ Optionally seed it with INITIAL-TEXT."
             (overlay-put overlay 'evaporate t)
             (setf (codex-ide-session-input-overlay session) overlay))
           (when moving
-            (goto-char (point-max))))))))
+            (goto-char (point-max)))
+          (codex-ide--sync-prompt-minor-mode session))))))
 
 (defun codex-ide--current-input (&optional session)
   "Return the current editable input text for SESSION."
@@ -1038,6 +1069,7 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
           (codex-ide--style-user-prompt-region start (point-max))
           (codex-ide--freeze-region start (point-max)))
         (codex-ide--delete-input-overlay session)
+        (codex-ide--sync-prompt-minor-mode session)
         (goto-char (point-max))
         (insert "\n\n")
         (setf (codex-ide-session-output-prefix-inserted session) t
