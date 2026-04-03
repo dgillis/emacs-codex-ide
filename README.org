@@ -42,15 +42,38 @@ That same pattern applies more broadly: codex-ide focuses on a strong
 Emacs-native Codex session, rich transcript rendering, and a bridge that lets
 the agent work with the editor you are already using instead of replacing it.
 
-* Suggested setup
+* Installation
+
+** Prerequisites
+
+- Emacs 30 or newer
+- Codex CLI installed and available on =PATH=
+- =transient= installed
+- =python3= and =emacsclient= available if you want the optional Emacs MCP bridge
+
+** Installing the Emacs package
+
+To install with =use-package= and built-in =:vc= support on Emacs >= 30:
 
 #+begin_src emacs-lisp
-(add-to-list 'load-path (expand-file-name "~/.emacs.d/lib/local/codex-ide"))
-
 (use-package codex-ide
+  :vc (:url "https://github.com/dgillis/codex-ide" :rev :newest)
   :bind ("C-c C-;" . codex-ide-menu)
   :custom
   (codex-ide-use-side-window nil))
+#+end_src
+
+After installation, run =M-x codex-ide-menu= or =M-x codex-ide= to start a
+session.
+
+If the =codex= executable is not on your =PATH= inside Emacs, set
+=codex-ide-cli-path= explicitly:
+
+#+begin_src emacs-lisp
+(use-package codex-ide
+  :vc (:url "https://github.com/dgillis/codex-ide" :rev :newest)
+  :custom
+  (codex-ide-cli-path "/path/to/codex"))
 #+end_src
 
 * Optional Emacs MCP bridge
