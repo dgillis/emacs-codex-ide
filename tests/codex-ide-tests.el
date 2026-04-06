@@ -415,6 +415,83 @@
               (should (eq shown-buffer (codex-ide-session-log-buffer session)))
               (should (looking-at-p ".*Processing incoming notification line:")))))))))
 
+(ert-deftest codex-ide-agent-text-carries-item-type-property ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (codex-ide--handle-notification
+           session
+           '((method . "turn/started")
+             (params . ((turn . ((id . "turn-1")))))))
+          (codex-ide--handle-notification
+           session
+           '((method . "item/started")
+             (params . ((item . ((id . "cmd-1")
+                                 (type . "commandExecution")
+                                 (cwd . "/tmp")))))))
+          (codex-ide--handle-notification
+           session
+           '((method . "item/reasoning/summaryTextDelta")
+             (params . ((delta . "Reasoning summary")))))
+          (codex-ide--handle-notification
+           session
+           '((method . "item/agentMessage/delta")
+             (params . ((itemId . "msg-1")
+                        (delta . "Final answer")))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (goto-char (point-min))
+            (search-forward "Ran")
+            (should (equal (get-text-property
+                            (1- (point))
+                            codex-ide-agent-item-type-property)
+                           "commandExecution"))
+            (goto-char (point-min))
+            (search-forward "cwd: /tmp")
+            (should (equal (get-text-property
+                            (1- (point))
+                            codex-ide-agent-item-type-property)
+                           "commandExecution"))
+            (goto-char (point-min))
+            (search-forward "Reasoning summary")
+            (should (equal (get-text-property
+                            (1- (point))
+                            codex-ide-agent-item-type-property)
+                           "reasoning"))
+            (goto-char (point-min))
+            (search-forward "Final answer")
+            (should (equal (get-text-property
+                            (1- (point))
+                            codex-ide-agent-item-type-property)
+                           "agentMessage"))))))))
+
+(ert-deftest codex-ide-item-type-at-point-returns-and-reports-item-type ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (reported nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (codex-ide--handle-notification
+           session
+           '((method . "turn/started")
+             (params . ((turn . ((id . "turn-1")))))))
+          (codex-ide--handle-notification
+           session
+           '((method . "item/reasoning/summaryTextDelta")
+             (params . ((delta . "Reasoning summary")))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (goto-char (point-min))
+            (search-forward "Reasoning summary")
+            (backward-char)
+            (should (equal (codex-ide--item-type-at-point) "reasoning"))
+            (cl-letf (((symbol-function 'called-interactively-p)
+                       (lambda (&rest _) t))
+                      ((symbol-function 'message)
+                       (lambda (format-string &rest args)
+                         (setq reported (apply #'format format-string args)))))
+              (codex-ide--item-type-at-point))
+            (should (equal reported "reasoning"))))))))
+
 (ert-deftest codex-ide-send-active-buffer-context-submits-formatted-context ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-path (codex-ide-test--make-project-file

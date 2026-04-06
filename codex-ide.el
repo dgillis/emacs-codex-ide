@@ -784,13 +784,22 @@ window by switching it to BUFFER.  Fall back to creating a new Codex window."
 (defconst codex-ide-log-marker-property 'codex-ide-log-marker
   "Text property storing the log marker for transcript text.")
 
+(defconst codex-ide-agent-item-type-property 'codex-ide-agent-item-type
+  "Text property storing the originating agent item type for transcript text.")
+
 (defvar codex-ide--current-transcript-log-marker nil
   "Marker for the log line associated with the transcript text being inserted.")
 
+(defvar codex-ide--current-agent-item-type nil
+  "Item type associated with the agent transcript text being inserted.")
+
 (defun codex-ide--current-agent-text-properties ()
   "Return text properties for agent-originated transcript text."
-  (when (markerp codex-ide--current-transcript-log-marker)
-    (list codex-ide-log-marker-property codex-ide--current-transcript-log-marker)))
+  (append
+   (when (markerp codex-ide--current-transcript-log-marker)
+     (list codex-ide-log-marker-property codex-ide--current-transcript-log-marker))
+   (when (stringp codex-ide--current-agent-item-type)
+     (list codex-ide-agent-item-type-property codex-ide--current-agent-item-type))))
 
 (defun codex-ide--append-to-buffer (buffer text &optional face properties)
   "Append TEXT to BUFFER as read-only transcript text.
@@ -1114,6 +1123,17 @@ FORMAT-STRING and ARGS are passed to `format'."
     (pop-to-buffer (marker-buffer marker))
     (goto-char marker)
     (beginning-of-line)))
+
+(defun codex-ide--item-type-at-point ()
+  "Return the agent item type property at point.
+When called interactively, echo the item type in the minibuffer."
+  (interactive)
+  (let ((item-type (get-text-property (point) codex-ide-agent-item-type-property)))
+    (when (called-interactively-p 'interactive)
+      (if item-type
+          (message "%s" item-type)
+        (user-error "No agent item type at point")))
+    item-type))
 
 (defun codex-ide--freeze-region (start end)
   "Make the region from START to END read-only."
@@ -1852,37 +1872,40 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (let* ((buffer (codex-ide-session-buffer session))
          (item-id (alist-get 'id item))
+         (item-type (alist-get 'type item))
          (summary (codex-ide--summarize-item-start item)))
-    (when summary
-      (unless (codex-ide-session-output-prefix-inserted session)
-        (codex-ide--begin-turn-display session))
-      (codex-ide--ensure-output-spacing buffer)
-      (codex-ide--append-agent-text
-       buffer
-       (format "* %s\n" summary)
-       'codex-ide-item-summary-face)
-      (codex-ide--render-item-start-details session item)
-      (codex-ide--put-item-state
-       session
-       item-id
-       (list :type (alist-get 'type item)
-             :summary summary
-             :details-rendered t
-             :saw-output nil)))))
+    (let ((codex-ide--current-agent-item-type item-type))
+      (when summary
+        (unless (codex-ide-session-output-prefix-inserted session)
+          (codex-ide--begin-turn-display session))
+        (codex-ide--ensure-output-spacing buffer)
+        (codex-ide--append-agent-text
+         buffer
+         (format "* %s\n" summary)
+         'codex-ide-item-summary-face)
+        (codex-ide--render-item-start-details session item)
+        (codex-ide--put-item-state
+         session
+         item-id
+         (list :type item-type
+               :summary summary
+               :details-rendered t
+               :saw-output nil))))))
 
 (defun codex-ide--render-plan-delta (&optional session params)
   "Render a plan delta PARAMS for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (let ((delta (or (alist-get 'delta params) ""))
         (buffer (codex-ide-session-buffer session)))
-    (unless (string-empty-p delta)
-      (unless (codex-ide-session-output-prefix-inserted session)
-        (codex-ide--begin-turn-display session))
-      (codex-ide--ensure-output-spacing buffer)
-      (codex-ide--append-agent-text
-       buffer
-       (format "* Plan: %s\n" delta)
-       'font-lock-doc-face))))
+    (let ((codex-ide--current-agent-item-type "plan"))
+      (unless (string-empty-p delta)
+        (unless (codex-ide-session-output-prefix-inserted session)
+          (codex-ide--begin-turn-display session))
+        (codex-ide--ensure-output-spacing buffer)
+        (codex-ide--append-agent-text
+         buffer
+         (format "* Plan: %s\n" delta)
+         'font-lock-doc-face)))))
 
 (defun codex-ide--render-reasoning-delta (&optional session params)
   "Render a reasoning summary delta PARAMS for SESSION."
@@ -1891,14 +1914,15 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
                    (alist-get 'text params)
                    ""))
         (buffer (codex-ide-session-buffer session)))
-    (unless (string-empty-p delta)
-      (unless (codex-ide-session-output-prefix-inserted session)
-        (codex-ide--begin-turn-display session))
-      (codex-ide--ensure-output-spacing buffer)
-      (codex-ide--append-agent-text
-       buffer
-       (format "* Reasoning: %s\n" delta)
-       'shadow))))
+    (let ((codex-ide--current-agent-item-type "reasoning"))
+      (unless (string-empty-p delta)
+        (unless (codex-ide-session-output-prefix-inserted session)
+          (codex-ide--begin-turn-display session))
+        (codex-ide--ensure-output-spacing buffer)
+        (codex-ide--append-agent-text
+         buffer
+         (format "* Reasoning: %s\n" delta)
+         'shadow)))))
 
 (defun codex-ide--render-item-completion (&optional session item)
   "Render any completion-only details for ITEM in SESSION."
@@ -1908,52 +1932,53 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
          (state (codex-ide--item-state session item-id))
          (item-type (alist-get 'type item))
          (status (alist-get 'status item)))
-    (pcase item-type
-      ("commandExecution"
-       (cond
-        ((equal status "failed")
-         (codex-ide--append-agent-text
-          buffer
-          (codex-ide--item-detail-line
-           (format "failed%s"
-                   (if-let ((exit-code (alist-get 'exitCode item)))
-                       (format " with exit code %s" exit-code)
-                     "")))
-          'error))
-        ((equal status "declined")
-         (codex-ide--append-agent-text
-          buffer
-          (codex-ide--item-detail-line "declined")
-          'warning))))
-      ("mcpToolCall"
-       (when-let ((error-info (alist-get 'error item)))
-         (codex-ide--append-agent-text
-          buffer
-          (codex-ide--item-detail-line
-           (format "error: %s"
-                   (or (alist-get 'message error-info) error-info)))
-          'error)))
-      ("dynamicToolCall"
-       (when (eq (alist-get 'success item) :json-false)
-         (codex-ide--append-agent-text
-          buffer
-          (codex-ide--item-detail-line "tool call failed")
-          'error)))
-      ("fileChange"
-       (let ((diff-text (codex-ide--file-change-diff-text item))
-             (streamed-diff (plist-get state :diff-text)))
-         (codex-ide--render-file-change-diff-text
-          buffer
-          (if (and (stringp diff-text)
-                   (not (string-empty-p diff-text)))
-              diff-text
-            streamed-diff))))
-      ("exitedReviewMode"
-       (when-let ((review (alist-get 'review item)))
-         (codex-ide--append-agent-text
-          buffer
-          (codex-ide--item-detail-block review)
-          'codex-ide-item-detail-face))))
+    (let ((codex-ide--current-agent-item-type item-type))
+      (pcase item-type
+        ("commandExecution"
+         (cond
+          ((equal status "failed")
+           (codex-ide--append-agent-text
+            buffer
+            (codex-ide--item-detail-line
+             (format "failed%s"
+                     (if-let ((exit-code (alist-get 'exitCode item)))
+                         (format " with exit code %s" exit-code)
+                       "")))
+            'error))
+          ((equal status "declined")
+           (codex-ide--append-agent-text
+            buffer
+            (codex-ide--item-detail-line "declined")
+            'warning))))
+        ("mcpToolCall"
+         (when-let ((error-info (alist-get 'error item)))
+           (codex-ide--append-agent-text
+            buffer
+            (codex-ide--item-detail-line
+             (format "error: %s"
+                     (or (alist-get 'message error-info) error-info)))
+            'error)))
+        ("dynamicToolCall"
+         (when (eq (alist-get 'success item) :json-false)
+           (codex-ide--append-agent-text
+            buffer
+            (codex-ide--item-detail-line "tool call failed")
+            'error)))
+        ("fileChange"
+         (let ((diff-text (codex-ide--file-change-diff-text item))
+               (streamed-diff (plist-get state :diff-text)))
+           (codex-ide--render-file-change-diff-text
+            buffer
+            (if (and (stringp diff-text)
+                     (not (string-empty-p diff-text)))
+                diff-text
+              streamed-diff))))
+        ("exitedReviewMode"
+         (when-let ((review (alist-get 'review item)))
+           (codex-ide--append-agent-text
+            buffer
+            (codex-ide--item-detail-block review)
+            'codex-ide-item-detail-face)))))
     (codex-ide--clear-item-state session item-id)))
 
 (defun codex-ide--ensure-agent-message-prefix (&optional session item-id)
@@ -2577,17 +2602,18 @@ CHOICES is an alist of labels to returned values."
       ("item/agentMessage/delta"
        (let ((item-id (alist-get 'itemId params))
              (delta (or (alist-get 'delta params) "")))
-         (codex-ide--ensure-agent-message-prefix session item-id)
-         (unless (string-empty-p delta)
-         (codex-ide-log-message
-            session
-            "Agent delta for item %s (%d chars)"
-            item-id
-            (length delta)))
-         (codex-ide--append-agent-text buffer delta)
-         (when-let ((start (codex-ide-session-current-message-start-marker session)))
-           (with-current-buffer buffer
-             (codex-ide--render-markdown-region start (point-max))))))
+         (let ((codex-ide--current-agent-item-type "agentMessage"))
+           (codex-ide--ensure-agent-message-prefix session item-id)
+           (unless (string-empty-p delta)
+             (codex-ide-log-message
+              session
+              "Agent delta for item %s (%d chars)"
+              item-id
+              (length delta)))
+           (codex-ide--append-agent-text buffer delta)
+           (when-let ((start (codex-ide-session-current-message-start-marker session)))
+             (with-current-buffer buffer
+               (codex-ide--render-markdown-region start (point-max)))))))
       ("item/commandExecution/outputDelta"
        (let ((item-id (alist-get 'itemId params)))
          (codex-ide-log-message
@@ -2644,11 +2670,12 @@ CHOICES is an alist of labels to returned values."
         session
         (when interrupted "[Agent interrupted]"))))
       ("error"
-       (codex-ide-log-message session "Error notification: %S" params)
-       (codex-ide--append-agent-text
-        buffer
-        (format "\n[Codex error] %S\n" params)
-        'error))
+       (let ((codex-ide--current-agent-item-type "error"))
+         (codex-ide-log-message session "Error notification: %S" params)
+         (codex-ide--append-agent-text
+          buffer
+          (format "\n[Codex error] %S\n" params)
+          'error)))
       (_
        nil))))
 
