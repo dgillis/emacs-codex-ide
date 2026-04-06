@@ -15,6 +15,8 @@ done
 ROOT_DIR="$(cd -P "$(dirname "$SOURCE_PATH")/.." && pwd)"
 
 "$ROOT_DIR/bin/generate-autoloads.sh"
+git -C "$ROOT_DIR" add codex-ide-autoloads.el
+
 "$ROOT_DIR/bin/run-tests.sh"
 
 exec emacs -Q --batch \
