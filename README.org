@@ -10,7 +10,7 @@
 * Overview
 
 Codex IDE for Emacs is a pure Emacs Codex client, inspired by
-[claude-code-ide.el](https://github.com/manzaltu/claude-code-ide.el).
+[[https://github.com/manzaltu/claude-code-ide.el][claude-code-ide.el]].
 
 This package provides native integration with =codex app-server= which unlike
 terminal-based wrappers, renders Codex sessions as normal Emacs buffers and
