@@ -9,16 +9,12 @@
 
 * Overview
 
-Codex IDE for Emacs provides native integration with =codex app-server=. Unlike
-terminal-based wrappers, this package renders Codex sessions as normal Emacs
-buffers and keeps the interaction surface fully inside Emacs. Prompts are sent
-through the app-server protocol, assistant output is streamed back into the
-buffer, and the current editor state can be folded directly into prompts.
+Codex IDE for Emacs is a pure Emacs Codex client, inspired by
+[claude-code-ide.el](https://github.com/manzaltu/claude-code-ide.el).
 
-The result is an Emacs-aware Codex workflow that leans on Emacs itself as the
-IDE surface. You keep ordinary buffers, windows, movement, search, editing, and
-navigation commands, while Codex gets access to project context and, when
-enabled, an MCP bridge back into the live Emacs session.
+This package provides native integration with =codex app-server= which unlike
+terminal-based wrappers, renders Codex sessions as normal Emacs buffers and
+keeps the interaction surface fully inside Emacs.
 
 ** Features
 
@@ -56,22 +52,6 @@ editor automation when you explicitly opt into it.
 The screenshots below show the current UI running inside Emacs, with Codex
 rendered as a native buffer rather than a terminal pane.
 
-*** Prompting and Approvals
-
-Session buffers support in-place prompt editing, streamed responses, and
-approval flows for actions that need confirmation.
-
-#+CAPTION: Prompt submission and in-buffer approval handling inside a Codex session.
-[[file:screenshots/codex-prompts-in-emacs.png]]
-
-*** Syntax-Highlighted Code Blocks
-
-Assistant-generated fenced code blocks are rendered directly in the transcript
-and fontified using an appropriate Emacs major mode when one is available.
-
-#+CAPTION: Python output rendered in the session buffer with syntax highlighting.
-[[file:screenshots/code-syntax-coloring.png]]
-
 *** Buffer-Aware Context
 
 Codex IDE tracks the active project buffer so prompts can carry file, line, and
@@ -87,6 +67,23 @@ assistant output straight into the corresponding file and location.
 
 #+CAPTION: Clickable file links in the session transcript opening source locations in Emacs.
 [[file:screenshots/clickable-code-links.png]]
+
+*** Syntax-Highlighted Code Blocks
+
+Assistant-generated fenced code blocks are rendered directly in the transcript
+and fontified using an appropriate Emacs major mode when one is available.
+
+#+CAPTION: Python output rendered in the session buffer with syntax highlighting.
+[[file:screenshots/code-syntax-coloring.png]]
+
+*** Prompting and Approvals
+
+Session buffers support in-place prompt editing, streamed responses, and
+approval flows for actions that need confirmation.
+
+#+CAPTION: Prompt submission and in-buffer approval handling inside a Codex session.
+[[file:screenshots/codex-prompts-in-emacs.png]]
+
 
 * Installation
 
