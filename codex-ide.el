@@ -32,6 +32,23 @@
   :group 'tools
   :prefix "codex-ide-")
 
+(defun codex-ide--apply-log-setting-to-sessions (enabled)
+  "Apply logging state ENABLED to all live sessions."
+  (maphash
+   (lambda (_directory session)
+     (if enabled
+         (progn
+           (codex-ide--ensure-log-buffer session)
+           (codex-ide-log-message session "Logging enabled"))
+       (codex-ide--kill-session-log-buffer session)))
+   codex-ide--sessions))
+
+(defun codex-ide--set-log-enabled (_symbol value)
+  "Set `codex-ide-enable-log' to VALUE and update live sessions."
+  (set-default 'codex-ide-enable-log value)
+  (when (boundp 'codex-ide--sessions)
+    (codex-ide--apply-log-setting-to-sessions value)))
+
 (require 'codex-ide-bridge)
 
 (defface codex-ide-user-prompt-face
@@ -171,6 +188,15 @@
   :type 'number
   :group 'codex-ide)
 
+(defcustom codex-ide-enable-log nil
+  "Whether Codex IDE logging is enabled.
+
+When non-nil, Codex IDE keeps a per-project log buffer and records internal
+events plus stderr output from the Codex app-server process."
+  :type 'boolean
+  :set #'codex-ide--set-log-enabled
+  :group 'codex-ide)
+
 (defcustom codex-ide-log-max-lines 10000
   "Maximum number of lines to keep in each Codex log buffer.
 
@@ -219,9 +245,13 @@ Add this variable to `savehist-additional-variables' to persist it.")
     :initform nil
     :accessor codex-ide-session-directory)
    (process
-    :initarg :process
+   :initarg :process
     :initform nil
     :accessor codex-ide-session-process)
+   (stderr-process
+    :initarg :stderr-process
+    :initform nil
+    :accessor codex-ide-session-stderr-process)
    (buffer
     :initarg :buffer
     :initform nil
@@ -373,6 +403,53 @@ Add this variable to `savehist-additional-variables' to persist it.")
           codex-ide-buffer-name-prefix
           (codex-ide--project-name directory)))
 
+(defun codex-ide--initialize-log-buffer (buffer directory)
+  "Prepare BUFFER for logging for DIRECTORY."
+  (with-current-buffer buffer
+    (codex-ide-log-mode)
+    (setq-local default-directory directory)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert (format "Codex log for %s\n\n"
+                      (abbreviate-file-name directory))))))
+
+(defun codex-ide--ensure-log-buffer (session)
+  "Return SESSION's log buffer, creating it when logging is enabled."
+  (when codex-ide-enable-log
+    (or (and (buffer-live-p (codex-ide-session-log-buffer session))
+             (codex-ide-session-log-buffer session))
+        (let* ((directory (codex-ide-session-directory session))
+               (buffer (get-buffer-create (codex-ide--log-buffer-name directory))))
+          (codex-ide--initialize-log-buffer buffer directory)
+          (setf (codex-ide-session-log-buffer session) buffer)
+          buffer))))
+
+(defun codex-ide--kill-session-log-buffer (session)
+  "Kill SESSION's log buffer, if it exists."
+  (when-let ((buffer (codex-ide-session-log-buffer session)))
+    (setf (codex-ide-session-log-buffer session) nil)
+    (when (buffer-live-p buffer)
+      (let ((kill-buffer-query-functions nil))
+        (kill-buffer buffer)))))
+
+(defun codex-ide--append-log-output (session output)
+  "Append OUTPUT to SESSION's log buffer when logging is enabled."
+  (when-let ((buffer (and codex-ide-enable-log
+                          (codex-ide--ensure-log-buffer session))))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t)
+            (moving (= (point) (point-max))))
+        (goto-char (point-max))
+        (insert output)
+        (codex-ide--trim-log-buffer)
+        (when moving
+          (goto-char (point-max)))))))
+
+(defun codex-ide--stderr-filter (process chunk)
+  "Append stderr CHUNK from PROCESS to the owning session log."
+  (when-let ((session (process-get process 'codex-session)))
+    (codex-ide--append-log-output session chunk)))
+
 (defun codex-ide--session-buffer-p (buffer)
   "Return non-nil when BUFFER looks like a Codex session buffer."
   (when-let ((name (cond
@@ -502,9 +579,14 @@ current buffer's project directory."
 (defun codex-ide--cleanup-session (&optional session)
   "Drop internal state for SESSION's working directory."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
-  (let ((directory (and session (codex-ide-session-directory session))))
+  (let ((directory (and session (codex-ide-session-directory session)))
+        (stderr-process (and session (codex-ide-session-stderr-process session))))
     (when session
       (codex-ide-log-message session "Cleaning up session state"))
+    (when (process-live-p stderr-process)
+      (delete-process stderr-process))
+    (when session
+      (setf (codex-ide-session-stderr-process session) nil))
     (when session
       (remhash session codex-ide--session-metadata))
     (remhash directory codex-ide--sessions)
@@ -517,10 +599,13 @@ current buffer's project directory."
 When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
   (when session
     (let ((process (codex-ide-session-process session))
+          (stderr-process (codex-ide-session-stderr-process session))
           (log-buffer (codex-ide-session-log-buffer session)))
       (when (process-live-p process)
         (codex-ide-log-message session "Stopping process during session teardown")
         (delete-process process))
+      (when (process-live-p stderr-process)
+        (delete-process stderr-process))
       (codex-ide--cleanup-session session)
       (when (and kill-log-buffer
                  (buffer-live-p log-buffer))
@@ -904,7 +989,8 @@ window by switching it to BUFFER.  Fall back to creating a new Codex window."
 FORMAT-STRING and ARGS are passed to `format'."
   (unless (codex-ide-session-p session)
     (error "Invalid Codex session: %S" session))
-  (when-let ((buffer (codex-ide-session-log-buffer session)))
+  (when-let ((buffer (and codex-ide-enable-log
+                          (codex-ide--ensure-log-buffer session))))
     (with-current-buffer buffer
       (let ((inhibit-read-only t)
             (moving (= (point) (point-max))))
@@ -1878,12 +1964,11 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
   "Create a new app-server-backed session for the current working directory."
   (let ((working-dir (codex-ide--get-working-directory)))
     (let* ((buffer (get-buffer-create (codex-ide--get-buffer-name)))
-           (log-buffer (get-buffer-create (codex-ide--log-buffer-name working-dir)))
            (process-connection-type nil)
            (session (make-codex-ide-session
                      :directory working-dir
                      :buffer buffer
-                     :log-buffer log-buffer
+                     :log-buffer nil
                      :request-counter 0
                      :pending-requests (make-hash-table :test 'equal)
                      :item-states (make-hash-table :test 'equal)
@@ -1891,6 +1976,14 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
                      :prompt-history-draft nil
                      :partial-line ""
                      :status "starting"))
+           (stderr-process (make-pipe-process
+                            :name (format "codex-ide-stderr[%s]"
+                                          (file-name-nondirectory
+                                           (directory-file-name working-dir)))
+                            :buffer nil
+                            :coding 'utf-8-unix
+                            :noquery t
+                            :filter #'codex-ide--stderr-filter))
            (process (make-process
                      :name (format "codex-ide[%s]"
                                    (file-name-nondirectory
@@ -1900,9 +1993,11 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
                      :coding 'utf-8-unix
                      :filter #'codex-ide--process-filter
                      :sentinel #'codex-ide--process-sentinel
-                     :stderr log-buffer)))
+                     :stderr stderr-process)))
       (setf (codex-ide-session-process session) process)
+      (setf (codex-ide-session-stderr-process session) stderr-process)
       (process-put process 'codex-session session)
+      (process-put stderr-process 'codex-session session)
       (with-current-buffer buffer
         (codex-ide-session-mode)
         (setq-local default-directory working-dir)
@@ -1912,21 +2007,19 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
         (insert (format "Codex session for %s\n\n"
                         (abbreviate-file-name working-dir)))
         (codex-ide--freeze-region (point-min) (point-max)))
-      (with-current-buffer log-buffer
-        (codex-ide-log-mode)
-        (setq-local default-directory working-dir)
-        (let ((inhibit-read-only t))
-          (erase-buffer)
-          (insert (format "Codex log for %s\n\n"
-                          (abbreviate-file-name working-dir)))))
+      (when codex-ide-enable-log
+        (codex-ide--ensure-log-buffer session))
       (set-process-query-on-exit-flag process nil)
+      (set-process-query-on-exit-flag stderr-process nil)
       (with-current-buffer buffer
         (codex-ide--set-session session))
       (codex-ide-log-message
        session
        "Created session buffer %s and log buffer %s"
        (buffer-name buffer)
-       (buffer-name log-buffer))
+       (if-let ((log-buffer (codex-ide-session-log-buffer session)))
+           (buffer-name log-buffer)
+         "<disabled>"))
       (codex-ide-log-message
        session
        "Starting process: %s"
@@ -2647,6 +2740,19 @@ If no live session exists for the current buffer, prompt to start one first."
             (buffer (codex-ide-session-buffer session)))
       (codex-ide--toggle-existing-window buffer)
     (user-error "No Codex session for this project")))
+
+;;;###autoload
+(defun codex-ide-toggle-log (&optional arg)
+  "Toggle Codex IDE logging.
+
+With prefix ARG, enable logging when ARG is positive and disable it
+otherwise."
+  (interactive "P")
+  (let ((enabled (if arg
+                     (> (prefix-numeric-value arg) 0)
+                   (not codex-ide-enable-log))))
+    (codex-ide--set-log-enabled 'codex-ide-enable-log enabled)
+    (message "Codex logging %s" (if enabled "enabled" "disabled"))))
 
 ;;;###autoload
 (defun codex-ide-toggle-recent ()
