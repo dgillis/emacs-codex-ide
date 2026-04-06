@@ -210,6 +210,21 @@
             (should (looking-at-p "> hello"))
             (should (string= (codex-ide--current-input session) "hello"))))))))
 
+(ert-deftest codex-ide-input-prompt-allows-insert-at-input-start ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session nil)
+            (goto-char (marker-position
+                        (codex-ide-session-input-start-marker session)))
+            (insert "h")
+            (goto-char (marker-position
+                        (codex-ide-session-input-prompt-start-marker session)))
+            (should (looking-at-p "> h"))
+            (should (string= (codex-ide--current-input session) "h"))))))))
+
 (ert-deftest codex-ide-compose-turn-input-includes-context-only-on-first-send ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-path (codex-ide-test--make-project-file
@@ -299,6 +314,68 @@
       (codex-ide--render-markdown-region markdown-start (point-max))
       (should (eq (get-text-property summary-start 'face)
                   'codex-ide-item-summary-face)))))
+
+(ert-deftest codex-ide-render-markdown-region-renders-file-links ()
+  (with-temp-buffer
+    (insert "See [`foo.el`](/tmp/foo.el#L3C2)\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (goto-char (point-min))
+    (search-forward "foo.el")
+    (let ((pos (1- (point))))
+      (should (button-at pos))
+      (should (eq (get-text-property pos 'face) 'link))
+      (should (eq (get-text-property pos 'action) #'codex-ide--open-file-link))
+      (should (equal (get-text-property pos 'codex-ide-path) "/tmp/foo.el"))
+      (should (= (get-text-property pos 'codex-ide-line) 3))
+      (should (= (get-text-property pos 'codex-ide-column) 2))
+      (should (equal (get-text-property pos 'display) "foo.el")))))
+
+(ert-deftest codex-ide-render-markdown-region-renders-inline-code ()
+  (with-temp-buffer
+    (insert "prefix `code` suffix")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (goto-char (point-min))
+    (search-forward "code")
+    (let ((code-pos (- (point) 2))
+          (open-tick-pos 8)
+          (close-tick-pos 13))
+      (should (eq (get-text-property code-pos 'face) 'font-lock-keyword-face))
+      (should (get-text-property code-pos 'codex-ide-markdown))
+      (should (equal (get-text-property open-tick-pos 'display) ""))
+      (should (equal (get-text-property close-tick-pos 'display) "")))))
+
+(ert-deftest codex-ide-render-markdown-region-renders-fenced-code-blocks ()
+  (with-temp-buffer
+    (insert "```elisp\n(setq x 1)\n```\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (goto-char (point-min))
+    (should (equal (get-text-property (point-min) 'display) ""))
+    (search-forward "setq")
+    (let ((code-pos (- (point) 2)))
+      (should (get-text-property code-pos 'codex-ide-markdown))
+      (should (or (get-text-property code-pos 'face)
+                  (get-text-property code-pos 'font-lock-face))))
+    (goto-char (point-max))
+    (forward-line -1)
+    (should (equal (get-text-property (point) 'display) ""))))
+
+(ert-deftest codex-ide-render-file-change-diff-text-omits-detail-prefix ()
+  (with-temp-buffer
+    (codex-ide--render-file-change-diff-text
+     (current-buffer)
+     (mapconcat #'identity
+                '("diff --git a/foo b/foo"
+                  "@@ -1 +1 @@"
+                  "-old"
+                  "+new")
+                "\n"))
+    (should (equal (buffer-string)
+                   (concat
+                    "diff:\n"
+                    "diff --git a/foo b/foo\n"
+                    "@@ -1 +1 @@\n"
+                    "-old\n"
+                    "+new\n")))))
 
 (ert-deftest codex-ide-bridge-mcp-config-args-reflect-enabled-settings ()
   (let ((project-dir (codex-ide-test--make-temp-project)))

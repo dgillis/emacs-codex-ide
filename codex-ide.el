@@ -1096,6 +1096,7 @@ FORMAT-STRING and ARGS are passed to `format'."
                               rear-nonsticky nil
                               front-sticky nil))
     (add-text-properties start end '(read-only t
+                                     rear-nonsticky (read-only)
                                      front-sticky (read-only)))))
 
 (defun codex-ide--delete-input-overlay (session)
@@ -1554,12 +1555,12 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
       (unless (string-empty-p trimmed)
         (codex-ide--append-to-buffer
          buffer
-         (codex-ide--item-detail-line "diff:")
+         "diff:\n"
          'codex-ide-item-detail-face)
         (dolist (line (split-string trimmed "\n"))
           (codex-ide--append-to-buffer
            buffer
-           (codex-ide--item-detail-line line)
+           (concat line "\n")
            (codex-ide--file-change-diff-face line)))))))
 
 (defun codex-ide--file-change-diff-text (item)
