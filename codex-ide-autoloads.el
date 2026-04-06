@@ -45,6 +45,12 @@ Whether to focus the Codex window after showing it.")
 (defvar codex-ide-session-enable-visual-line-mode t "\
 Whether Codex session buffers should enable `visual-line-mode' by default.")
 (custom-autoload 'codex-ide-session-enable-visual-line-mode "codex-ide" t)
+(defvar codex-ide-header-line-status-style 'auto "\
+How the Codex session header line should render status glyphs.
+When set to `auto', use emoji when the current graphical Emacs frame can
+display the configured emoji glyphs, otherwise fall back to safer Unicode
+symbols.  `emoji' and `symbol' force those styles.")
+(custom-autoload 'codex-ide-header-line-status-style "codex-ide" t)
 (defvar codex-ide-approval-policy "on-request" "\
 Approval policy for new or resumed Codex threads.")
 (custom-autoload 'codex-ide-approval-policy "codex-ide" t)

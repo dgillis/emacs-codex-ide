@@ -182,6 +182,51 @@
       (codex-ide-session-mode)
       (should-not visual-line-mode))))
 
+(ert-deftest codex-ide-status-glyph-prefers-emoji-when-available ()
+  (let ((codex-ide-header-line-status-style 'auto))
+    (cl-letf (((symbol-function 'display-graphic-p)
+               (lambda (&optional _frame) t))
+              ((symbol-function 'char-displayable-p)
+               (lambda (_char) t)))
+      (should (equal (codex-ide--status-glyph "running") "⏳"))
+      (should-not (codex-ide--status-glyph "idle"))
+      (should-not (codex-ide--status-glyph "interrupting")))))
+
+(ert-deftest codex-ide-status-glyph-falls-back-to-symbols-without-emoji-support ()
+  (let ((codex-ide-header-line-status-style 'auto))
+    (cl-letf (((symbol-function 'display-graphic-p)
+               (lambda (&optional _frame) nil)))
+      (should (equal (codex-ide--status-glyph "running") "●"))
+      (should-not (codex-ide--status-glyph "idle"))
+      (should-not (codex-ide--status-glyph "failed")))))
+
+(ert-deftest codex-ide-update-header-line-prefixes-status-indicator ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-header-line-status-style 'symbol))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-status session) "running")
+          (codex-ide--update-header-line session)
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (equal (substring-no-properties (nth 0 header-line-format))
+                           "● Running  "))
+            (should (equal (substring-no-properties (nth 1 header-line-format))
+                           "focus: none"))))))))
+
+(ert-deftest codex-ide-update-header-line-omits-indicator-when-not-running ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-header-line-status-style 'symbol))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-status session) "idle")
+          (codex-ide--update-header-line session)
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (equal (length header-line-format) 1))
+            (should (equal (substring-no-properties (car header-line-format))
+                           "focus: none"))))))))
+
 (ert-deftest codex-ide-start-session-new-initializes-thread-without-real-cli ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (requests '()))
