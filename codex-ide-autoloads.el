@@ -42,6 +42,9 @@ Height of the Codex side window when using top or bottom placement.")
 (defvar codex-ide-focus-on-open t "\
 Whether to focus the Codex window after showing it.")
 (custom-autoload 'codex-ide-focus-on-open "codex-ide" t)
+(defvar codex-ide-session-enable-visual-line-mode t "\
+Whether Codex session buffers should enable `visual-line-mode' by default.")
+(custom-autoload 'codex-ide-session-enable-visual-line-mode "codex-ide" t)
 (defvar codex-ide-approval-policy "on-request" "\
 Approval policy for new or resumed Codex threads.")
 (custom-autoload 'codex-ide-approval-policy "codex-ide" t)

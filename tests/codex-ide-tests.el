@@ -155,6 +155,7 @@
                                codex-ide--sessions)))
           (with-current-buffer (codex-ide-session-buffer session)
             (should (derived-mode-p 'codex-ide-session-mode))
+            (should visual-line-mode)
             (should (string-match-p "Codex session for" (buffer-string))))
           (with-current-buffer (codex-ide-session-log-buffer session)
             (should (derived-mode-p 'codex-ide-log-mode))
@@ -169,6 +170,17 @@
                               (codex-ide-session-process session))
                              'codex-session)
                   session)))))))
+
+(ert-deftest codex-ide-session-mode-enables-visual-line-mode-by-default ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (should visual-line-mode)))
+
+(ert-deftest codex-ide-session-mode-allows-opting-out-of-visual-line-mode ()
+  (let ((codex-ide-session-enable-visual-line-mode nil))
+    (with-temp-buffer
+      (codex-ide-session-mode)
+      (should-not visual-line-mode))))
 
 (ert-deftest codex-ide-start-session-new-initializes-thread-without-real-cli ()
   (let ((project-dir (codex-ide-test--make-temp-project))

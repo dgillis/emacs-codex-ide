@@ -176,6 +176,12 @@
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-session-enable-visual-line-mode t
+  "Whether Codex session buffers should enable `visual-line-mode' by default."
+  :type 'boolean
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-approval-policy "on-request"
   "Approval policy for new or resumed Codex threads."
   :type '(choice (const "untrusted")
@@ -399,6 +405,8 @@ Add this variable to `savehist-additional-variables' to persist it.")
 (define-derived-mode codex-ide-session-mode text-mode "Codex-IDE"
   "Major mode for Codex app-server session buffers."
   (setq-local truncate-lines nil)
+  (when codex-ide-session-enable-visual-line-mode
+    (visual-line-mode 1))
   (setq-local mode-line-process '((:eval (codex-ide--mode-line-status))))
   (add-hook 'post-command-hook #'codex-ide--sync-prompt-minor-mode nil t))
 
@@ -1179,8 +1187,6 @@ FORMAT-STRING and ARGS are passed to `format'."
                 (delq nil
                       (list
                        (format "focus: %s" focus)
-                       (format "status: %s"
-                               (or (codex-ide-session-status session) "disconnected"))
                        token-summary
                        rate-limit-summary))
                 "  ")
