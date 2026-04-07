@@ -2,128 +2,17 @@
 
 ;;; Commentary:
 
-;; These tests exercise codex-ide without depending on a real `codex`
-;; executable. Process and RPC interactions are stubbed with in-memory fakes.
+;; Core codex-ide tests plus the suite entrypoint for split test modules.
 
 ;;; Code:
 
-(require 'cl-lib)
 (require 'ert)
 (require 'json)
 (require 'package)
 (require 'project)
 (require 'seq)
-
-(setq load-prefer-newer t)
-(setq load-suffixes '(".el"))
-
-(add-to-list 'load-path
-             (file-name-directory
-              (directory-file-name
-               (file-name-directory (or load-file-name buffer-file-name)))))
-
+(require 'codex-ide-test-fixtures)
 (require 'codex-ide)
-(require 'codex-ide-bridge)
-
-(cl-defstruct (codex-ide-test-process
-               (:constructor codex-ide-test-process-create))
-  live
-  plist
-  sent-strings)
-
-(defconst codex-ide-test--root-directory
-  (file-name-directory
-   (directory-file-name
-    (file-name-directory (or load-file-name buffer-file-name))))
-  "Repository root used by the codex-ide test suite.")
-
-(defun codex-ide-test--process-put (process key value)
-  "Store VALUE at KEY on fake PROCESS."
-  (setf (codex-ide-test-process-plist process)
-        (plist-put (codex-ide-test-process-plist process) key value))
-  value)
-
-(defun codex-ide-test--process-get (process key)
-  "Return KEY from fake PROCESS."
-  (plist-get (codex-ide-test-process-plist process) key))
-
-(defun codex-ide-test--cleanup-buffers (buffers-before)
-  "Kill buffers created after BUFFERS-BEFORE."
-  (dolist (buffer (buffer-list))
-    (unless (memq buffer buffers-before)
-      (when (buffer-live-p buffer)
-        (let ((kill-buffer-query-functions nil))
-          (kill-buffer buffer))))))
-
-(defmacro codex-ide-test-with-fixture (directory &rest body)
-  "Run BODY in an isolated codex-ide fixture rooted at DIRECTORY."
-  (declare (indent 1) (debug t))
-  `(let* ((default-directory (file-name-as-directory ,directory))
-          (buffers-before (buffer-list))
-         (codex-ide--cli-available nil)
-          (codex-ide--sessions (make-hash-table :test 'equal))
-          (codex-ide--last-accessed-buffer nil)
-          (codex-ide--active-buffer-contexts (make-hash-table :test 'equal))
-          (codex-ide--active-buffer-objects (make-hash-table :test 'equal))
-          (codex-ide--last-sent-buffer-contexts (make-hash-table :test 'equal))
-          (codex-ide-persisted-project-state (make-hash-table :test 'equal))
-          (codex-ide--session-metadata (make-hash-table :test 'eq))
-          (codex-ide-enable-emacs-tool-bridge nil))
-     (unwind-protect
-         (progn ,@body)
-       (when codex-ide-track-active-buffer-mode
-         (codex-ide-track-active-buffer-mode -1))
-       (codex-ide-test--cleanup-buffers buffers-before))))
-
-(defmacro codex-ide-test-with-fake-processes (&rest body)
-  "Run BODY with process primitives redirected to fake process objects."
-  (declare (indent 0) (debug t))
-  `(cl-letf (((symbol-function 'make-process)
-              (lambda (&rest plist)
-                (codex-ide-test-process-create
-                 :live t
-                 :plist (list :make-process-spec plist)
-                 :sent-strings nil)))
-             ((symbol-function 'make-pipe-process)
-              (lambda (&rest plist)
-                (codex-ide-test-process-create
-                 :live t
-                 :plist (list :make-pipe-process-spec plist)
-                 :sent-strings nil)))
-             ((symbol-function 'process-live-p)
-              (lambda (process)
-                (and (codex-ide-test-process-p process)
-                     (codex-ide-test-process-live process))))
-             ((symbol-function 'delete-process)
-              (lambda (process)
-                (setf (codex-ide-test-process-live process) nil)
-                nil))
-             ((symbol-function 'process-put)
-              #'codex-ide-test--process-put)
-             ((symbol-function 'process-get)
-              #'codex-ide-test--process-get)
-             ((symbol-function 'process-send-string)
-              (lambda (process string)
-                (setf (codex-ide-test-process-sent-strings process)
-                      (append (codex-ide-test-process-sent-strings process)
-                              (list string)))))
-             ((symbol-function 'set-process-query-on-exit-flag)
-              (lambda (&rest _) nil))
-             ((symbol-function 'accept-process-output)
-              (lambda (&rest _) nil)))
-     ,@body))
-
-(defun codex-ide-test--make-temp-project ()
-  "Create and return a temporary project directory."
-  (make-temp-file "codex-ide-tests-" t))
-
-(defun codex-ide-test--make-project-file (directory name contents)
-  "Create file NAME with CONTENTS under DIRECTORY and return its path."
-  (let ((path (expand-file-name name directory)))
-    (make-directory (file-name-directory path) t)
-    (with-temp-file path
-      (insert contents))
-    path))
 
 (ert-deftest codex-ide-app-server-command-includes-bridge-and-extra-flags ()
   (let ((codex-ide-cli-path "/tmp/codex")
@@ -257,14 +146,15 @@
             (puthash (alist-get 'project-dir context)
                      context
                      codex-ide--active-buffer-contexts)
-              (let* ((first-item (aref (codex-ide--compose-turn-input "Explain this") 0))
-                     (second-item (aref (codex-ide--compose-turn-input "Explain again") 0))
-                     (first-text (alist-get 'text first-item))
-                     (second-text (alist-get 'text second-item)))
-                (should (string-match-p "\\[Emacs context\\]" first-text))
-              (should (string-match-p "Last file/buffer focused in Emacs: .*src/example\\.el" first-text))
-                (should-not (string-match-p "\\[Emacs context\\]" second-text))
-                (should (string= second-text "Explain again")))))))))
+            (let* ((first-item (aref (codex-ide--compose-turn-input "Explain this") 0))
+                   (second-item (aref (codex-ide--compose-turn-input "Explain again") 0))
+                   (first-text (alist-get 'text first-item))
+                   (second-text (alist-get 'text second-item)))
+              (should (string-match-p "\\[Emacs context\\]" first-text))
+              (should (string-match-p "Last file/buffer focused in Emacs: .*src/example\\.el"
+                                      first-text))
+              (should-not (string-match-p "\\[Emacs context\\]" second-text))
+              (should (string= second-text "Explain again")))))))))
 
 (ert-deftest codex-ide-compose-turn-input-includes-selected-region-when-active ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
@@ -285,7 +175,8 @@
         (with-temp-buffer
           (setq default-directory (file-name-as-directory project-dir))
           (setq prompt-text (alist-get 'text (aref (codex-ide--compose-turn-input "Explain this") 0))))
-        (should (string-match-p "Selected region: line 1, column 1 to line 1, column 8" prompt-text))))))
+        (should (string-match-p "Selected region: line 1, column 1 to line 1, column 8"
+                                prompt-text))))))
 
 (ert-deftest codex-ide-prompt-uses-origin-buffer-context-for-non-file-buffers ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
@@ -515,7 +406,8 @@
                            (setq submitted prompt))))
                 (codex-ide-send-active-buffer-context)
                 (should (string-match-p "\\[Emacs context\\]" submitted))
-                (should (string-match-p "Last file/buffer focused in Emacs: .*lib/example\\.el" submitted))
+                (should (string-match-p "Last file/buffer focused in Emacs: .*lib/example\\.el"
+                                        submitted))
                 (should (string-match-p "Buffer: example.el" submitted))))))))))
 
 (ert-deftest codex-ide-send-active-buffer-context-includes-selected-region ()
@@ -624,230 +516,6 @@
                     "@@ -1 +1 @@\n"
                     "-old\n"
                     "+new\n")))))
-
-(ert-deftest codex-ide-bridge-mcp-config-args-reflect-enabled-settings ()
-  (let ((project-dir (codex-ide-test--make-temp-project)))
-    (codex-ide-test-with-fixture project-dir
-      (let ((codex-ide-enable-emacs-tool-bridge t)
-            (codex-ide-emacs-tool-bridge-name "editor")
-            (codex-ide-emacs-bridge-python-command "python3")
-            (codex-ide-emacs-bridge-emacsclient-command "emacsclient")
-            (codex-ide-emacs-bridge-script-path "/tmp/codex-ide-mcp.py")
-            (codex-ide-emacs-bridge-server-name "testsrv")
-            (codex-ide-emacs-bridge-startup-timeout 15)
-            (codex-ide-emacs-bridge-tool-timeout 45))
-        (cl-letf (((symbol-function 'executable-find)
-                   (lambda (command)
-                     (pcase command
-                       ("python3" "/usr/bin/python3")
-                       ("emacsclient" "/usr/bin/emacsclient")
-                       (_ nil)))))
-          (should
-           (equal (codex-ide-bridge-mcp-config-args)
-                  '("-c" "mcp_servers.editor.command=\"/usr/bin/python3\""
-                    "-c" "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp.py\",\"--emacsclient\",\"/usr/bin/emacsclient\",\"--server-name\",\"testsrv\"]"
-                    "-c" "mcp_servers.editor.startup_timeout_sec=15"
-                    "-c" "mcp_servers.editor.tool_timeout_sec=45"))))))))
-
-(ert-deftest codex-ide-bridge-mcp-config-args-omit-default-server-name ()
-  (let ((project-dir (codex-ide-test--make-temp-project)))
-    (codex-ide-test-with-fixture project-dir
-      (let ((codex-ide-enable-emacs-tool-bridge t)
-            (codex-ide-emacs-tool-bridge-name "editor")
-            (codex-ide-emacs-bridge-python-command "python3")
-            (codex-ide-emacs-bridge-emacsclient-command "emacsclient")
-            (codex-ide-emacs-bridge-script-path "/tmp/codex-ide-mcp.py")
-            (codex-ide-emacs-bridge-server-name nil)
-            (codex-ide-emacs-bridge-startup-timeout 15)
-            (codex-ide-emacs-bridge-tool-timeout 45))
-        (cl-letf (((symbol-function 'executable-find)
-                   (lambda (command)
-                     (pcase command
-                       ("python3" "/usr/bin/python3")
-                       ("emacsclient" "/usr/bin/emacsclient")
-                       (_ nil)))))
-          (should
-           (equal (codex-ide-bridge-mcp-config-args)
-                  '("-c" "mcp_servers.editor.command=\"/usr/bin/python3\""
-                    "-c" "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp.py\",\"--emacsclient\",\"/usr/bin/emacsclient\"]"
-                    "-c" "mcp_servers.editor.startup_timeout_sec=15"
-                    "-c" "mcp_servers.editor.tool_timeout_sec=45"))))))))
-
-(ert-deftest codex-ide-mcp-script-starts-with-optional-server-name-flag ()
-  (let ((script-path (expand-file-name "codex-ide-mcp.py"
-                                       codex-ide-test--root-directory))
-        (mock-emacsclient (make-temp-file "codex-ide-emacsclient-" nil ".py"))
-        (argv-log (make-temp-file "codex-ide-emacsclient-argv-"))
-        (input-buffer (generate-new-buffer " *codex-ide-mcp-test-input*"))
-        (output-buffer (generate-new-buffer " *codex-ide-mcp-test*")))
-    (unwind-protect
-        (let (argv)
-          (with-temp-file mock-emacsclient
-            (insert "#!/usr/bin/env python3\n")
-            (insert "import json\n")
-            (insert "import sys\n")
-            (insert (format "with open(%S, 'w', encoding='utf-8') as handle:\n" argv-log))
-            (insert "    json.dump(sys.argv[1:], handle)\n")
-            (insert "print(\"[]\")\n"))
-          (set-file-modes mock-emacsclient #o755)
-          (with-current-buffer input-buffer
-            (let ((json-object-type 'alist)
-                  (json-array-type 'list)
-                  (json-key-type 'string))
-              (insert
-               (json-encode
-                '((jsonrpc . "2.0")
-                  (id . 1)
-                  (method . "tools/call")
-                  (params . ((name . "emacs_get_context")
-                             (arguments . ())))))
-               "\n")))
-          (should
-           (equal
-            (with-current-buffer input-buffer
-              (call-process-region
-               (point-min)
-               (point-max)
-               "python3"
-               nil
-               output-buffer
-               nil
-               script-path
-               "--emacsclient"
-               mock-emacsclient
-               "--server-name"
-               "testsrv"))
-            0))
-          (with-temp-buffer
-            (insert-file-contents argv-log)
-            (setq argv (json-read)))
-          (should (= (length argv) 4))
-          (should (equal (aref argv 0) "-s"))
-          (should (equal (aref argv 1) "testsrv"))
-          (should (equal (aref argv 2) "--eval"))
-          (should (string-match-p "codex-ide-bridge--json-tool-call"
-                                  (aref argv 3)))
-          (should (string-match-p "princ"
-                                  (aref argv 3)))
-          (with-current-buffer output-buffer
-            (should (string-match-p "\"jsonrpc\":\"2.0\"" (buffer-string)))))
-      (when (file-exists-p mock-emacsclient)
-        (delete-file mock-emacsclient))
-      (when (file-exists-p argv-log)
-        (delete-file argv-log))
-      (kill-buffer input-buffer)
-      (kill-buffer output-buffer))))
-
-(ert-deftest codex-ide-mcp-script-uses-emacsclient-bridge-responses ()
-  (let ((script-path (expand-file-name "codex-ide-mcp.py"
-                                       codex-ide-test--root-directory))
-        (mock-emacsclient (make-temp-file "codex-ide-emacsclient-" nil ".py"))
-        (input-buffer (generate-new-buffer " *codex-ide-mcp-input*"))
-        (output-buffer (generate-new-buffer " *codex-ide-mcp-output*")))
-    (unwind-protect
-        (progn
-          (with-temp-file mock-emacsclient
-            (insert "#!/usr/bin/env python3\n")
-            (insert "import json\n")
-            (insert "import sys\n")
-            (insert "expr = sys.argv[-1]\n")
-            (insert "response = []\n")
-            (insert "if 'emacs_open_file' in expr:\n")
-            (insert "    response = {'tool': 'emacs_open_file', 'params': {'path': '/tmp/example.el', 'line': 9, 'column': 2}}\n")
-            (insert "elif 'emacs_eval' in expr:\n")
-            (insert "    response = {'value': '42'}\n")
-            (insert "print(json.dumps(response, separators=(',', ':')))\n"))
-          (set-file-modes mock-emacsclient #o755)
-          (with-current-buffer input-buffer
-            (dolist (message
-                     (list
-                      `((jsonrpc . "2.0") (id . 1) (method . "initialize")
-                        (params . ((protocolVersion . "2024-11-05")
-                                   (capabilities . ,(make-hash-table))
-                                   (clientInfo . ((name . "ert") (version . "1"))))))
-                      `((jsonrpc . "2.0") (id . 2) (method . "tools/list")
-                        (params . ,(make-hash-table)))
-                      `((jsonrpc . "2.0") (id . 3) (method . "tools/call")
-                        (params . ((name . "emacs_open_file")
-                                   (arguments . ((path . "/tmp/example.el")
-                                                 (line . 9)
-                                                 (column . 2))))))
-                      `((jsonrpc . "2.0") (id . 4) (method . "tools/call")
-                        (params . ((name . "emacs_eval")
-                                   (arguments . ((expression . "(+ 40 2)"))))))))
-              (let ((json-object-type 'alist)
-                    (json-array-type 'list)
-                    (json-key-type 'string))
-                (insert (json-encode message))
-                (insert "\n"))))
-          (should
-           (equal
-            (with-current-buffer input-buffer
-              (call-process-region
-               (point-min)
-               (point-max)
-               "python3"
-               nil
-               output-buffer
-               nil
-               script-path
-               "--emacsclient"
-               mock-emacsclient
-               "--server-name"
-               "testsrv"))
-            0))
-          (with-current-buffer output-buffer
-            (let ((responses nil))
-              (goto-char (point-min))
-              (while (not (eobp))
-                (let ((line (buffer-substring-no-properties
-                             (line-beginning-position)
-                             (line-end-position))))
-                  (unless (string-empty-p line)
-                    (push (let ((json-object-type 'alist)
-                                (json-array-type 'list)
-                                (json-key-type 'string))
-                            (json-read-from-string line))
-                          responses)))
-                (forward-line 1))
-              (setq responses (nreverse responses))
-              (should (= (length responses) 4))
-              (should
-               (equal (alist-get "protocolVersion"
-                                 (alist-get "result" (nth 0 responses) nil nil #'equal)
-                                 nil nil #'equal)
-                      "2024-11-05"))
-              (let ((tools (alist-get "tools"
-                                      (alist-get "result" (nth 1 responses) nil nil #'equal)
-                                      nil nil #'equal)))
-                (should (= (length tools) 4))
-                (should
-                 (equal (mapcar (lambda (tool)
-                                  (alist-get "name" tool nil nil #'equal))
-                                tools)
-                        '("emacs_get_context"
-                          "emacs_open_file"
-                          "emacs_run_command"
-                          "emacs_eval"))))
-              (let* ((open-file-text
-                      (alist-get "text"
-                                 (car (alist-get "content"
-                                                 (alist-get "result" (nth 2 responses) nil nil #'equal)
-                                                 nil nil #'equal))
-                                 nil nil #'equal))
-                     (eval-text
-                      (alist-get "text"
-                                 (car (alist-get "content"
-                                                 (alist-get "result" (nth 3 responses) nil nil #'equal)
-                                                 nil nil #'equal))
-                                 nil nil #'equal)))
-                (should (string-match-p "\"tool\": \"emacs_open_file\"" open-file-text))
-                (should (string-match-p "\"path\": \"/tmp/example.el\"" open-file-text))
-                (should (string-match-p "\"value\": \"42\"" eval-text))))))
-      (when (file-exists-p mock-emacsclient)
-        (delete-file mock-emacsclient))
-      (kill-buffer input-buffer)
-      (kill-buffer output-buffer))))
 
 (ert-deftest codex-ide-package-generate-autoloads-captures-public-entry-points ()
   (let* ((temp-dir (make-temp-file "codex-ide-autoloads-" t))
