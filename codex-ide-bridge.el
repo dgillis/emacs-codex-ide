@@ -6,7 +6,7 @@
 
 ;; This module provides the Emacs-side half of the optional Codex MCP bridge.
 ;; The external MCP server talks to the running Emacs instance via emacsclient
-;; and lands in `codex-ide-bridge-dispatch-json'.
+;; and dispatches JSON tool calls into `codex-ide-bridge--tool-call'.
 
 ;;; Code:
 
@@ -70,21 +70,6 @@ When nil, use the current value of `server-name'."
 This only affects explicit calls to `codex-ide-bridge-ensure-server'.  Session
 startup now prompts once about enabling the Emacs tool bridge, and enabling the
 bridge starts the Emacs server automatically when needed."
-  :type 'boolean
-  :group 'codex-ide)
-
-;;;###autoload
-(defcustom codex-ide-emacs-bridge-command-whitelist '(save-buffer)
-  "Interactive Emacs commands exposed through the MCP bridge.
-
-Each entry should name an interactive command that can safely run without
-prompting for extra input."
-  :type '(repeat function)
-  :group 'codex-ide)
-
-;;;###autoload
-(defcustom codex-ide-emacs-bridge-allow-eval nil
-  "Whether to expose an unrestricted Elisp eval tool to Codex."
   :type 'boolean
   :group 'codex-ide)
 
@@ -198,18 +183,24 @@ Errors from `server-running-p' are treated as nil."
     (let* ((bridge-name codex-ide-emacs-tool-bridge-name)
            (prefix (format "mcp_servers.%s" bridge-name))
            (script-path (codex-ide-bridge--resolved-script-path))
-           (server-name (codex-ide-bridge--resolved-server-name))
-           (script-args (append
-                         (list script-path
-                               "--emacsclient"
-                               codex-ide-emacs-bridge-emacsclient-command)
-                         (when (and server-name
-                                    (not (string-empty-p server-name)))
-                           (list "--server-name" server-name)))))
+           (python-command
+            (or (executable-find codex-ide-emacs-bridge-python-command)
+                codex-ide-emacs-bridge-python-command))
+           (emacsclient-command
+            (or (executable-find codex-ide-emacs-bridge-emacsclient-command)
+                codex-ide-emacs-bridge-emacsclient-command))
+           (server-name codex-ide-emacs-bridge-server-name)
+           (script-args
+            (append (list script-path
+                          "--emacsclient"
+                          emacsclient-command)
+                    (when (and server-name
+                               (not (string-empty-p server-name)))
+                      (list "--server-name" server-name)))))
       (list "-c" (format "%s.command=%s"
                          prefix
                          (codex-ide-bridge--toml-string
-                          codex-ide-emacs-bridge-python-command))
+                          python-command))
             "-c" (format "%s.args=%s"
                          prefix
                          (codex-ide-bridge--toml-array script-args))
@@ -219,19 +210,6 @@ Errors from `server-running-p' are treated as nil."
             "-c" (format "%s.tool_timeout_sec=%s"
                          prefix
                          codex-ide-emacs-bridge-tool-timeout)))))
-
-(defun codex-ide-bridge--allowed-command-names ()
-  "Return sorted command names allowed through the bridge."
-  (sort
-   (delete-dups
-    (delq nil
-          (mapcar (lambda (entry)
-                    (cond
-                     ((symbolp entry) (symbol-name entry))
-                     ((stringp entry) entry)
-                     (t nil)))
-                  codex-ide-emacs-bridge-command-whitelist)))
-   #'string<))
 
 (defun codex-ide-bridge--current-context ()
   "Return the current Emacs buffer context as an alist."
@@ -245,16 +223,38 @@ Errors from `server-running-p' are treated as nil."
             (line . ,(line-number-at-pos))
             (column . ,(current-column)))))))
 
-(defun codex-ide-bridge--describe ()
-  "Return bridge metadata for the external MCP proxy."
-  `((serverName . ,(codex-ide-bridge--resolved-server-name))
-    (enabled . ,(if (codex-ide-bridge-enabled-p) t :json-false))
-    (allowedCommands . ,(vconcat (codex-ide-bridge--allowed-command-names)))
-    (allowEval . ,(if codex-ide-emacs-bridge-allow-eval t :json-false))
-    (context . ,(or (codex-ide-bridge--current-context) :json-null))))
+(defun codex-ide-bridge--tool-call (name params)
+  "Dispatch bridge tool NAME using PARAMS."
+  (let ((handler (intern-soft (format "codex-ide-bridge--tool-call--%s" name))))
+    (if (fboundp handler)
+        (funcall handler params)
+      (let ((error-message (format "Bridge tool not implemented: %s" name)))
+        (message "%s" error-message)
+        `((error . ,error-message))))))
 
-(defun codex-ide-bridge--open-file (params)
-  "Handle an open-file bridge request with PARAMS."
+;;;###autoload
+(defun codex-ide-bridge--json-tool-call (payload)
+  "Decode JSON PAYLOAD, dispatch a bridge tool call, and return JSON."
+  (let* ((json-object-type 'alist)
+         (json-array-type 'list)
+         (json-false :json-false)
+         (json-null :json-null)
+         (request (json-read-from-string payload))
+         (name (alist-get 'name request))
+         (params (or (alist-get 'params request) '())))
+    (unless (stringp name)
+      (error "Missing tool name"))
+    (json-encode (codex-ide-bridge--tool-call name params))))
+
+;; These functions are the Elisp implementations of the MCP bridge commands.
+
+(defun codex-ide-bridge--tool-call--emacs_get_context (_params)
+  "Handle an `emacs_get_context' bridge request."
+  (or (codex-ide-bridge--current-context)
+      '((context . :json-null))))
+
+(defun codex-ide-bridge--tool-call--emacs_open_file (params)
+  "Handle an `emacs_open_file' bridge request with PARAMS."
   (let ((path (alist-get 'path params))
         (line (alist-get 'line params))
         (column (alist-get 'column params)))
@@ -272,57 +272,25 @@ Errors from `server-running-p' are treated as nil."
       (line . ,(line-number-at-pos))
       (column . ,(1+ (current-column))))))
 
-(defun codex-ide-bridge--run-command (params)
-  "Handle a command bridge request with PARAMS."
+(defun codex-ide-bridge--tool-call--emacs_run_command (params)
+  "Handle an `emacs_run_command' bridge request with PARAMS."
   (let* ((command-name (alist-get 'command params))
-         (allowed (codex-ide-bridge--allowed-command-names))
          (command-symbol (and (stringp command-name)
                               (intern-soft command-name))))
     (unless (and command-symbol
-                 (member command-name allowed)
                  (commandp command-symbol))
-      (error "Command not allowed: %s" (or command-name "unknown")))
+      (error "Unknown command: %s" (or command-name "unknown")))
     (call-interactively command-symbol)
     `((command . ,command-name)
       (buffer . ,(buffer-name))
       (context . ,(or (codex-ide-bridge--current-context) :json-null)))))
 
-(defun codex-ide-bridge--eval (params)
-  "Handle an eval bridge request with PARAMS."
-  (unless codex-ide-emacs-bridge-allow-eval
-    (error "Elisp eval is disabled"))
+(defun codex-ide-bridge--tool-call--emacs_eval (params)
+  "Handle an `emacs_eval' bridge request with PARAMS."
   (let* ((expression (alist-get 'expression params))
          (form (car (read-from-string expression)))
          (result (eval form t)))
     `((value . ,(format "%S" result)))))
-
-(defun codex-ide-bridge--dispatch (request)
-  "Dispatch a decoded bridge REQUEST alist."
-  (let ((action (alist-get 'action request))
-        (params (alist-get 'params request)))
-    (pcase action
-      ("describe" (codex-ide-bridge--describe))
-      ("get_context" (or (codex-ide-bridge--current-context) :json-null))
-      ("open_file" (codex-ide-bridge--open-file params))
-      ("run_command" (codex-ide-bridge--run-command params))
-      ("eval" (codex-ide-bridge--eval params))
-      (_ (error "Unsupported bridge action: %s" action)))))
-
-;;;###autoload
-(defun codex-ide-bridge-dispatch-json (payload)
-  "Dispatch PAYLOAD, a JSON bridge request, and return a JSON response string."
-  (condition-case err
-      (let* ((json-object-type 'alist)
-             (json-array-type 'list)
-             (json-false :json-false)
-             (json-null :json-null)
-             (request (json-read-from-string payload))
-             (result (codex-ide-bridge--dispatch request)))
-        (json-encode `((ok . t)
-                       (result . ,result))))
-    (error
-     (json-encode `((ok . :json-false)
-                    (error . ,(error-message-string err)))))))
 
 (provide 'codex-ide-bridge)
 

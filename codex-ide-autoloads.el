@@ -150,15 +150,6 @@ This only affects explicit calls to `codex-ide-bridge-ensure-server'.  Session
 startup now prompts once about enabling the Emacs tool bridge, and enabling the
 bridge starts the Emacs server automatically when needed.")
 (custom-autoload 'codex-ide-suppress-server-start-prompts "codex-ide-bridge" t)
-(defvar codex-ide-emacs-bridge-command-whitelist '(save-buffer) "\
-Interactive Emacs commands exposed through the MCP bridge.
-
-Each entry should name an interactive command that can safely run without
-prompting for extra input.")
-(custom-autoload 'codex-ide-emacs-bridge-command-whitelist "codex-ide-bridge" t)
-(defvar codex-ide-emacs-bridge-allow-eval nil "\
-Whether to expose an unrestricted Elisp eval tool to Codex.")
-(custom-autoload 'codex-ide-emacs-bridge-allow-eval "codex-ide-bridge" t)
 (defvar codex-ide-emacs-bridge-startup-timeout 10 "\
 Startup timeout in seconds for the Emacs MCP bridge.")
 (custom-autoload 'codex-ide-emacs-bridge-startup-timeout "codex-ide-bridge" t)
@@ -179,8 +170,8 @@ Return an alist describing the current Emacs bridge configuration.")
 Ensure the target Emacs server for the bridge is running.")
 (autoload 'codex-ide-bridge-mcp-config-args "codex-ide-bridge" "\
 Return `codex app-server' CLI args that register the Emacs MCP bridge.")
-(autoload 'codex-ide-bridge-dispatch-json "codex-ide-bridge" "\
-Dispatch PAYLOAD, a JSON bridge request, and return a JSON response string.
+(autoload 'codex-ide-bridge--json-tool-call "codex-ide-bridge" "\
+Decode JSON PAYLOAD, dispatch a bridge tool call, and return JSON.
 
 (fn PAYLOAD)")
 (register-definition-prefixes "codex-ide-bridge" '("codex-ide-bridge--"))
