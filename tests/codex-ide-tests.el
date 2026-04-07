@@ -102,6 +102,80 @@
               (forward-line 0)
               (should (looking-at-p "> ")))))))))
 
+(ert-deftest codex-ide-thread-choice-candidates-disambiguate-duplicate-previews ()
+  (let* ((first-thread '((id . "thread-12345678")
+                         (preview . "Investigate failure")))
+         (second-thread '((id . "thread-abcdefgh")
+                          (preview . "Investigate failure")))
+         (choices (codex-ide--thread-choice-candidates
+                   (list first-thread second-thread))))
+    (should
+     (equal
+      (mapcar #'car choices)
+      '("Investigate failure [thread-1]"
+        "Investigate failure [thread-a]")))))
+
+(ert-deftest codex-ide-pick-thread-returns-selected-thread-object ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (selected nil)
+        (recorded-extra-properties nil)
+        (thread '((id . "thread-12345678")
+                  (updatedAt . 1744038896)
+                  (preview . "[Emacs context]\n[/Emacs context]\n\nInvestigate failure"))))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--list-threads)
+                     (lambda (_session) (list thread)))
+                    ((symbol-function 'completing-read)
+                     (lambda (_prompt collection &rest _args)
+                       (setq recorded-extra-properties completion-extra-properties)
+                       (setq selected (caar collection))
+                       selected)))
+            (should (equal (codex-ide--pick-thread session) thread))
+            (should (equal selected "Investigate failure"))
+            (should (eq (plist-get recorded-extra-properties :display-sort-function)
+                        'identity))
+            (should (eq (plist-get recorded-extra-properties :cycle-sort-function)
+                        'identity))
+            (should
+             (equal
+              (funcall (plist-get recorded-extra-properties :affixation-function)
+                       (list selected))
+              `((,selected
+                 ,(format "%s "
+                          (format-time-string "%Y-%m-%dT%H:%M:%S%z"
+                                              (seconds-to-time 1744038896)))
+                 " [thread-1]"))))))))))
+
+(ert-deftest codex-ide-start-session-resume-aborts-cleanly-on-picker-quit ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+                   (lambda () t))
+                  ((symbol-function 'codex-ide-mcp-bridge-prompt-to-enable)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide-mcp-bridge-ensure-server)
+                    (lambda () nil))
+                  ((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method _params)
+                     (pcase method
+                       ("initialize" '((ok . t)))
+                       (_ (ert-fail (format "Unexpected method %s" method)))))
+                   )
+                  ((symbol-function 'codex-ide--pick-thread)
+                   (lambda (&rest _) (signal 'quit nil))))
+          (should
+           (eq (condition-case nil
+                   (progn
+                     (codex-ide--start-session 'resume)
+                     :no-quit)
+                 (quit :quit))
+               :quit))
+          (should-not (codex-ide--get-session))
+          (should-not (codex-ide--has-live-sessions-p)))))))
+
 (ert-deftest codex-ide-input-prompt-prefix-is-read-only ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
@@ -151,6 +225,7 @@
                    (first-text (alist-get 'text first-item))
                    (second-text (alist-get 'text second-item)))
               (should (string-match-p "\\[Emacs context\\]" first-text))
+              (should (string-match-p "\\[/Emacs context\\]" first-text))
               (should (string-match-p "Last file/buffer focused in Emacs: .*src/example\\.el"
                                       first-text))
               (should-not (string-match-p "\\[Emacs context\\]" second-text))
@@ -211,6 +286,7 @@
           (let* ((input (alist-get 'input submitted))
                  (text (alist-get 'text (aref input 0))))
             (should (string-match-p "\\[Emacs context\\]" text))
+            (should (string-match-p "\\[/Emacs context\\]" text))
             (should (string-match-p
                      "Last file/buffer focused in Emacs: \\[buffer\\] \\*codex origin\\*"
                      text))
@@ -250,6 +326,8 @@
                          "\n> Explain this\nContext: file=.*src/example\\.el\" buffer=\"example\\.el\" line=1 column=3"
                          buffer-text))
                 (should (string-match-p "\\[Emacs context\\]"
+                                        (alist-get 'text (aref input 0))))
+                (should (string-match-p "\\[/Emacs context\\]"
                                         (alist-get 'text (aref input 0))))))))))))
 
 (ert-deftest codex-ide-process-filter-handles-responses-notifications-and-partials ()
@@ -394,6 +472,23 @@
               "{\"name\":\"test_tool\",\"params\":{\"value\":7}}")
              "{\"ok\":true,\"value\":7}"))))
 
+(ert-deftest codex-ide-format-thread-updated-at-formats-local-iso-timestamp ()
+  (let ((updated-at 1744038896))
+    (should
+     (equal
+      (codex-ide--format-thread-updated-at updated-at)
+      (format-time-string "%Y-%m-%dT%H:%M:%S%z"
+                          (seconds-to-time updated-at))))))
+
+(ert-deftest codex-ide-thread-choice-preview-strips-emacs-context-from-preview ()
+  (should
+   (equal
+    (codex-ide--thread-choice-preview
+     (concat "[Emacs context]\n"
+             "Buffer: example.el\n"
+             "[/Emacs context]\n\n  Explain the failure"))
+    "Explain the failure")))
+
 (ert-deftest codex-ide-mcp-bridge-get-buffer-info-returns-shared-buffer-shape ()
   (let ((buffer (generate-new-buffer " *codex-ide-mcp-bridge-info*")))
     (unwind-protect
@@ -457,6 +552,7 @@
                            (setq submitted prompt))))
                 (codex-ide-send-active-buffer-context)
                 (should (string-match-p "\\[Emacs context\\]" submitted))
+                (should (string-match-p "\\[/Emacs context\\]" submitted))
                 (should (string-match-p "Last file/buffer focused in Emacs: .*lib/example\\.el"
                                         submitted))
                 (should (string-match-p "Buffer: example.el" submitted))))))))))

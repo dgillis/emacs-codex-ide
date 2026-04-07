@@ -1429,7 +1429,8 @@ The return value contains 1-based line numbers and 0-based columns."
                     "Buffer: %s\n"
                     "Cursor: line %s, column %s\n"
                     "%s"
-                    "Treat references like \"this file\", \"this buffer\", or \"the current file\" as referring to this buffer unless I say otherwise.\n")
+                    "Treat references like \"this file\", \"this buffer\", or \"the current file\" as referring to this buffer unless I say otherwise.\n"
+                    "[/Emacs context]\n")
             (alist-get 'display-file context)
             (alist-get 'buffer-name context)
             (alist-get 'line context)
@@ -2172,18 +2173,64 @@ The result is an alist with `formatted' and `summary' entries."
   "Extract the thread id from RESULT."
   (alist-get 'id (alist-get 'thread result)))
 
-(defun codex-ide--thread-choice-label (thread)
-  "Build a completion label for THREAD."
-  (let* ((name (or (alist-get 'name thread)
-                   (alist-get 'preview thread)
-                   "Untitled"))
-         (thread-id (alist-get 'id thread))
-         (updated-at (alist-get 'updatedAt thread))
-         (preview (string-trim (or name ""))))
-    (format "%s [%s] %s"
-            (if (string-empty-p preview) "Untitled" preview)
-            (substring thread-id 0 (min 8 (length thread-id)))
-            (or updated-at ""))))
+(defun codex-ide--format-thread-updated-at (updated-at)
+  "Format UPDATED-AT for thread labels."
+  (cond
+   ((numberp updated-at)
+    (format-time-string "%Y-%m-%dT%H:%M:%S%z"
+                        (seconds-to-time updated-at)))
+   ((stringp updated-at) updated-at)
+   (t "")))
+
+(defun codex-ide--thread-choice-preview (value)
+  "Format thread preview VALUE for completion labels."
+  (let* ((text (or value ""))
+         (context-end "[/Emacs context]")
+         (start (if (and (stringp text)
+                         (string-match (regexp-quote context-end) text))
+                    (match-end 0)
+                  0)))
+    (string-trim (substring text start))))
+
+(defun codex-ide--thread-choice-short-id (thread)
+  "Return a short id for THREAD."
+  (let ((thread-id (alist-get 'id thread)))
+    (substring thread-id 0 (min 8 (length thread-id)))))
+
+(defun codex-ide--thread-choice-candidates (threads)
+  "Return completion candidates alist for THREADS."
+  (let ((counts (make-hash-table :test #'equal)))
+    (dolist (thread threads)
+      (let* ((raw (or (alist-get 'name thread)
+                      (alist-get 'preview thread)
+                      "Untitled"))
+             (preview (codex-ide--thread-choice-preview raw))
+             (candidate (if (string-empty-p preview) "Untitled" preview)))
+        (puthash candidate (1+ (gethash candidate counts 0)) counts)))
+    (mapcar
+     (lambda (thread)
+       (let* ((raw (or (alist-get 'name thread)
+                       (alist-get 'preview thread)
+                       "Untitled"))
+              (preview (codex-ide--thread-choice-preview raw))
+              (candidate (if (string-empty-p preview) "Untitled" preview)))
+         (cons (if (> (gethash candidate counts 0) 1)
+                   (format "%s [%s]" candidate
+                           (codex-ide--thread-choice-short-id thread))
+                 candidate)
+               thread)))
+     threads)))
+
+(defun codex-ide--thread-choice-affixation (candidates choices)
+  "Return affixation data for CANDIDATES using CHOICES."
+  (mapcar
+   (lambda (candidate)
+     (let ((thread (cdr (assoc candidate choices))))
+       (list candidate
+             (format "%s " (codex-ide--format-thread-updated-at
+                            (alist-get 'updatedAt thread)))
+             (format " [%s]" (codex-ide--thread-choice-short-id thread)))))
+   candidates))
 
 (defun codex-ide--list-threads (&optional session)
   "List threads for the current working directory using SESSION."
@@ -2196,7 +2243,8 @@ The result is an alist with `formatted' and `summary' entries."
                   "thread/list"
                   `((cwd . ,working-dir)
                     (limit . 50)
-                    (sortKey . "updated_at"))))
+                    (sortKey . "updated_at")
+                    )))
          (data (alist-get 'data result)))
     (append data nil)))
 
@@ -2207,9 +2255,13 @@ The result is an alist with `formatted' and `summary' entries."
     (error "No Codex session available"))
   (let* ((working-dir (codex-ide--get-working-directory))
          (threads (codex-ide--list-threads session))
-         (choices (mapcar (lambda (thread)
-                            (cons (codex-ide--thread-choice-label thread) thread))
-                          threads)))
+         (choices (codex-ide--thread-choice-candidates threads))
+         (completion-extra-properties
+          `(:affixation-function
+            ,(lambda (candidates)
+               (codex-ide--thread-choice-affixation candidates choices))
+            :display-sort-function identity
+            :cycle-sort-function identity)))
     (unless choices
       (user-error "No Codex threads found for %s"
                   (abbreviate-file-name working-dir)))
@@ -2380,7 +2432,15 @@ MODE can be nil or `new', `continue', or `resume'."
            (when (buffer-live-p (codex-ide-session-buffer session))
              (kill-buffer (codex-ide-session-buffer session)))
            (codex-ide--cleanup-session session)
-           (signal (car err) (cdr err))))))))
+           (signal (car err) (cdr err)))
+          (quit
+           (codex-ide-log-message session "Session startup aborted")
+           (when (process-live-p (codex-ide-session-process session))
+             (delete-process (codex-ide-session-process session)))
+           (when (buffer-live-p (codex-ide-session-buffer session))
+             (kill-buffer (codex-ide-session-buffer session)))
+           (codex-ide--cleanup-session session)
+           (signal 'quit nil)))))))
 
 (defun codex-ide--toggle-existing-window (buffer)
   "Toggle BUFFER visibility."
