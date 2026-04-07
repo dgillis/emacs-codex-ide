@@ -70,7 +70,7 @@ changed since the last prompt sent to that session.
 When set to `always', include the active file context on every prompt.
 When nil, never include active-buffer context automatically.")
 (custom-autoload 'codex-ide-include-active-buffer-context "codex-ide" t)
-(defvar codex-ide-resume-summary-turn-limit 20 "\
+(defvar codex-ide-resume-summary-turn-limit 100 "\
 How many recent turns to summarize when resuming a stored thread.")
 (custom-autoload 'codex-ide-resume-summary-turn-limit "codex-ide" t)
 (autoload 'codex-ide-session-mode "codex-ide" "\

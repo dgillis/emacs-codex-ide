@@ -235,7 +235,7 @@ When nil, never include active-buffer context automatically."
   :group 'codex-ide)
 
 ;;;###autoload
-(defcustom codex-ide-resume-summary-turn-limit 20
+(defcustom codex-ide-resume-summary-turn-limit 100
   "How many recent turns to summarize when resuming a stored thread."
   :type 'integer
   :group 'codex-ide)
@@ -2475,12 +2475,13 @@ Signal an error when THREAD-READ lacks replayable transcript items."
 (defun codex-ide--thread-choice-preview (value)
   "Format thread preview VALUE for completion labels."
   (let* ((text (or value ""))
-         (context-end "[/Emacs context]")
-         (start (if (and (stringp text)
-                         (string-match (regexp-quote context-end) text))
-                    (match-end 0)
-                  0)))
-    (string-trim (substring text start))))
+         (stripped (codex-ide--strip-emacs-context-prefix text)))
+    (string-trim
+     (if (and (stringp text)
+              (string-prefix-p "[Emacs context]" text)
+              (equal stripped text))
+         ""
+       stripped))))
 
 (defun codex-ide--thread-choice-short-id (thread)
   "Return a short id for THREAD."
@@ -2518,7 +2519,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
      (let ((thread (cdr (assoc candidate choices))))
        (list candidate
              (format "%s " (codex-ide--format-thread-updated-at
-                            (alist-get 'updatedAt thread)))
+                            (alist-get 'createdAt thread)))
              (format " [%s]" (codex-ide--thread-choice-short-id thread)))))
    candidates))
 
@@ -2538,13 +2539,17 @@ Signal an error when THREAD-READ lacks replayable transcript items."
          (data (alist-get 'data result)))
     (append data nil)))
 
-(defun codex-ide--pick-thread (&optional session)
-  "Prompt to select a thread for the current working directory using SESSION."
+(defun codex-ide--pick-thread (&optional session omit-thread-id)
+  "Prompt to select a thread for the current working directory using SESSION.
+When OMIT-THREAD-ID is non-nil, exclude that thread from the choices."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
   (let* ((working-dir (codex-ide--get-working-directory))
-         (threads (codex-ide--list-threads session))
+         (threads (seq-remove
+                   (lambda (thread)
+                     (equal (alist-get 'id thread) omit-thread-id))
+                   (codex-ide--list-threads session)))
          (choices (codex-ide--thread-choice-candidates threads))
          (completion-extra-properties
           `(:affixation-function
@@ -2553,7 +2558,10 @@ Signal an error when THREAD-READ lacks replayable transcript items."
             :display-sort-function identity
             :cycle-sort-function identity)))
     (unless choices
-      (user-error "No Codex threads found for %s"
+      (user-error "%s for %s"
+                  (if omit-thread-id
+                      "No other Codex threads found"
+                    "No Codex threads found")
                   (abbreviate-file-name working-dir)))
     (cdr (assoc (completing-read "Resume Codex thread: " choices nil t)
                 choices))))
@@ -2622,10 +2630,11 @@ Signal an error when THREAD-READ lacks replayable transcript items."
         (setq-local default-directory working-dir)
         (setq-local codex-ide--session session)
         (add-hook 'kill-buffer-hook #'codex-ide--handle-session-buffer-killed nil t)
-        (erase-buffer)
-        (insert (format "Codex session for %s\n\n"
-                        (abbreviate-file-name working-dir)))
-        (codex-ide--freeze-region (point-min) (point-max)))
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (format "Codex session for %s\n\n"
+                          (abbreviate-file-name working-dir)))
+          (codex-ide--freeze-region (point-min) (point-max))))
       (codex-ide--ensure-log-buffer session)
       (set-process-query-on-exit-flag process nil)
       (set-process-query-on-exit-flag stderr-process nil)
@@ -2654,9 +2663,22 @@ MODE can be nil or `new', `continue', or `resume'."
   (let* ((working-dir (codex-ide--get-working-directory))
          (existing-session (codex-ide--get-session))
          (existing-buffer (and existing-session
-                               (codex-ide-session-buffer existing-session))))
+                               (codex-ide-session-buffer existing-session)))
+         (resume-thread nil))
     (when (and existing-session
                (not (buffer-live-p existing-buffer)))
+      (codex-ide--teardown-session existing-session t)
+      (setq existing-session nil
+            existing-buffer nil))
+    (when (and (eq (or mode 'new) 'resume)
+               existing-session
+               (process-live-p (codex-ide-session-process existing-session))
+               (buffer-live-p existing-buffer))
+      (setq resume-thread
+            (with-current-buffer existing-buffer
+              (codex-ide--pick-thread
+               existing-session
+               (codex-ide-session-thread-id existing-session))))
       (codex-ide--teardown-session existing-session t)
       (setq existing-session nil
             existing-buffer nil))
@@ -2710,8 +2732,9 @@ MODE can be nil or `new', `continue', or `resume'."
                      (codex-ide--restore-thread-read-transcript
                       session thread-read))))
                 ('resume
-                 (let* ((thread (with-current-buffer (codex-ide-session-buffer session)
-                                  (codex-ide--pick-thread session)))
+                 (let* ((thread (or resume-thread
+                                    (with-current-buffer (codex-ide-session-buffer session)
+                                      (codex-ide--pick-thread session))))
                         (thread-id (alist-get 'id thread))
                         (thread-read
                          (condition-case err
@@ -3209,7 +3232,11 @@ If no live session exists, prompt to start one."
 (defun codex-ide-resume ()
   "Resume a Codex session using an Emacs picker."
   (interactive)
-  (codex-ide--start-session 'resume))
+  (condition-case nil
+      (codex-ide--start-session 'resume)
+    (quit
+     (message "Codex resume canceled")
+     nil)))
 
 ;;;###autoload
 (defun codex-ide-continue ()

@@ -67,8 +67,7 @@
 (defun codex-ide--resume-description ()
   "Return the dynamic description for the resume action."
   (if (codex-ide--has-active-session-p)
-      (propertize "Resume session (session already running)"
-                  'face 'transient-inactive-value)
+      "Resume with picker (replaces current session)"
     "Resume with picker"))
 
 (defun codex-ide--continue-description ()
@@ -87,12 +86,9 @@
     (codex-ide)))
 
 (defun codex-ide--resume-if-no-session ()
-  "Resume Codex when there is no active session."
+  "Resume Codex using the thread picker."
   (interactive)
-  (if (codex-ide--has-active-session-p)
-      (message "Codex session already running in %s"
-               (abbreviate-file-name (codex-ide--get-working-directory)))
-    (codex-ide-resume)))
+  (codex-ide-resume))
 
 (defun codex-ide--continue-if-no-session ()
   "Continue the most recent Codex session when there is no active session."

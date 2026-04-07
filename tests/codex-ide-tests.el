@@ -120,7 +120,7 @@
         (selected nil)
         (recorded-extra-properties nil)
         (thread '((id . "thread-12345678")
-                  (updatedAt . 1744038896)
+                  (createdAt . 1744038896)
                   (preview . "[Emacs context]\n[/Emacs context]\n\nInvestigate failure"))))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
@@ -138,15 +138,36 @@
                         'identity))
             (should (eq (plist-get recorded-extra-properties :cycle-sort-function)
                         'identity))
-            (should
-             (equal
-              (funcall (plist-get recorded-extra-properties :affixation-function)
-                       (list selected))
-              `((,selected
-                 ,(format "%s "
-                          (format-time-string "%Y-%m-%dT%H:%M:%S%z"
-                                              (seconds-to-time 1744038896)))
-                 " [thread-1]"))))))))))
+            (let ((affixation
+                   (car (funcall (plist-get recorded-extra-properties
+                                            :affixation-function)
+                                 (list selected)))))
+              (should (equal (car affixation) selected))
+              (should (equal (nth 1 affixation)
+                             (format "%s "
+                                     (format-time-string "%Y-%m-%dT%H:%M:%S%z"
+                                                         (seconds-to-time 1744038896)))))
+              (should (equal (nth 2 affixation) " [thread-1]")))))))))
+
+(ert-deftest codex-ide-pick-thread-excludes-omitted-thread-id ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (selected nil)
+        (current-thread '((id . "thread-current")
+                          (preview . "Current thread")))
+        (other-thread '((id . "thread-other")
+                        (preview . "Other thread"))))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--list-threads)
+                     (lambda (_session) (list current-thread other-thread)))
+                    ((symbol-function 'completing-read)
+                     (lambda (_prompt collection &rest _args)
+                       (setq selected (caar collection))
+                       selected)))
+            (should (equal (codex-ide--pick-thread session "thread-current")
+                           other-thread))
+            (should (equal selected "Other thread"))))))))
 
 (ert-deftest codex-ide-start-session-resume-aborts-cleanly-on-picker-quit ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -175,6 +196,59 @@
                :quit))
           (should-not (codex-ide--get-session))
           (should-not (codex-ide--has-live-sessions-p)))))))
+
+(ert-deftest codex-ide-resume-treats-picker-quit-as-cancel ()
+  (let ((reported nil))
+    (cl-letf (((symbol-function 'codex-ide--start-session)
+               (lambda (&rest _) (signal 'quit nil)))
+              ((symbol-function 'message)
+               (lambda (format-string &rest args)
+                 (setq reported (apply #'format format-string args)))))
+      (should-not (codex-ide-resume))
+      (should (equal reported "Codex resume canceled")))))
+
+(ert-deftest codex-ide-resume-if-no-session-always-invokes-resume ()
+  (let ((called nil))
+    (cl-letf (((symbol-function 'codex-ide--has-active-session-p)
+               (lambda () t))
+              ((symbol-function 'codex-ide-resume)
+               (lambda ()
+                 (setq called t)
+                 'resumed)))
+      (should (eq (codex-ide--resume-if-no-session) 'resumed))
+      (should called))))
+
+(ert-deftest codex-ide-start-session-resume-keeps-existing-session-on-picker-quit ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+                   (lambda () t))
+                  ((symbol-function 'codex-ide-mcp-bridge-prompt-to-enable)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide-mcp-bridge-ensure-server)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide--display-buffer-in-side-window)
+                   (lambda (_buffer) (selected-window)))
+                  ((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method _params)
+                     (pcase method
+                       ("initialize" '((ok . t)))
+                       ("thread/start" '((thread . ((id . "thread-current")))))
+                       (_ (ert-fail (format "Unexpected method %s" method))))))
+                  ((symbol-function 'codex-ide--pick-thread)
+                   (lambda (&rest _) (signal 'quit nil))))
+          (let ((session (codex-ide--start-session 'new)))
+            (should
+             (eq (condition-case nil
+                     (progn
+                       (codex-ide--start-session 'resume)
+                       :no-quit)
+                   (quit :quit))
+                 :quit))
+            (should (eq (codex-ide--get-session) session))
+            (should (process-live-p (codex-ide-session-process session)))
+            (should (buffer-live-p (codex-ide-session-buffer session)))))))))
 
 (ert-deftest codex-ide-input-prompt-prefix-is-read-only ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -489,6 +563,15 @@
              "[/Emacs context]\n\n  Explain the failure"))
     "Explain the failure")))
 
+(ert-deftest codex-ide-thread-choice-preview-hides-truncated-emacs-context-prefix ()
+  (should
+   (equal
+    (codex-ide--thread-choice-preview
+     (concat "[Emacs context]\n"
+             "You are Codex running inside Emacs.\n"
+             "Prefer Emacs-aware behavior"))
+    "")))
+
 (ert-deftest codex-ide-thread-read-display-user-text-strips-emacs-context-prefix ()
   (should
    (equal
@@ -682,6 +765,54 @@
                 (forward-line 0)
                 (should (looking-at-p "> "))))))))))
 
+(ert-deftest codex-ide-start-session-resume-replaces-existing-session-with-selected-thread ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests '())
+        (selected-thread '((id . "thread-resume-2")
+                           (preview . "Other thread"))))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+                   (lambda () t))
+                  ((symbol-function 'codex-ide-mcp-bridge-prompt-to-enable)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide-mcp-bridge-ensure-server)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide--display-buffer-in-side-window)
+                   (lambda (_buffer) (selected-window)))
+                  ((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method _params)
+                     (push method requests)
+                     (pcase method
+                       ("initialize" '((ok . t)))
+                       ("thread/start" '((thread . ((id . "thread-current")))))
+                       ("thread/read"
+                        '((thread . ((id . "thread-resume-2")
+                                     (turns . (((id . "turn-1")
+                                                (items . (((type . "userMessage")
+                                                           (content . (((type . "text")
+                                                                        (text . "Switch threads")))))
+                                                          ((type . "agentMessage")
+                                                           (id . "item-1")
+                                                           (text . "Switched.")))))))))))
+                       ("thread/resume" '((ok . t)))
+                       (_ (ert-fail (format "Unexpected method %s" method))))))
+                  ((symbol-function 'codex-ide--pick-thread)
+                   (lambda (&optional _session omit-thread-id)
+                     (should (equal omit-thread-id "thread-current"))
+                     selected-thread)))
+          (let ((original-session (codex-ide--start-session 'new)))
+            (setq requests nil)
+            (let ((new-session (codex-ide--start-session 'resume)))
+              (should-not (eq new-session original-session))
+              (should (string= (codex-ide-session-thread-id new-session)
+                               "thread-resume-2"))
+              (should (equal (nreverse requests)
+                             '("initialize" "thread/read" "thread/resume")))
+              (with-current-buffer (codex-ide-session-buffer new-session)
+                (should (string-match-p "^> Switch threads"
+                                        (buffer-string)))))))))))
+
 (ert-deftest codex-ide-start-session-resume-errors-when-thread-read-is-not-replayable ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (thread '((id . "thread-resume-bad")
@@ -808,6 +939,165 @@
               (codex-ide-send-active-buffer-context)))
           (should (string-match-p "Selected region: line 1, column 1 to line 1, column 5"
                                   submitted)))))))
+
+(ert-deftest codex-ide-context-payload-uses-explicit-non-file-origin-buffer ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (let ((codex-ide-include-active-buffer-context 'always)
+            (origin-buffer (generate-new-buffer " *codex-ide-origin*")))
+        (unwind-protect
+            (with-current-buffer origin-buffer
+              (setq-local default-directory (file-name-as-directory project-dir))
+              (insert "ephemeral")
+              (goto-char (point-min))
+              (forward-char 3)
+              (let ((codex-ide--prompt-origin-buffer origin-buffer))
+                (let* ((payload (codex-ide--context-payload-for-prompt))
+                       (formatted (alist-get 'formatted payload))
+                       (summary (alist-get 'summary payload)))
+                  (should (string-match-p
+                           "Last file/buffer focused in Emacs: \\[buffer\\]  \\*codex-ide-origin\\*"
+                           formatted))
+                  (should (string-match-p "Buffer:  \\*codex-ide-origin\\*" formatted))
+                  (should (string-match-p "Cursor: line 1, column 3" formatted))
+                  (should (string-match-p "Context: file=\"\\[buffer\\]  \\*codex-ide-origin\\*\"" summary))
+                  (should (string-match-p "buffer=\" \\*codex-ide-origin\\*\"" summary)))))
+          (kill-buffer origin-buffer))))))
+
+(ert-deftest codex-ide-push-prompt-history-deduplicates-and-trims ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (codex-ide--push-prompt-history session "first")
+          (codex-ide--push-prompt-history session "second   ")
+          (codex-ide--push-prompt-history session "first")
+          (codex-ide--push-prompt-history session "   ")
+          (should (equal (codex-ide--project-persisted-get :prompt-history session)
+                         '("first" "second"))))))))
+
+(ert-deftest codex-ide-browse-prompt-history-replaces-current-input ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-history-1")
+          (codex-ide--project-persisted-put
+           :prompt-history
+           '("latest prompt" "older prompt")
+           session)
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "draft")
+            (codex-ide--browse-prompt-history -1)
+            (should (string= (codex-ide--current-input session) "latest prompt"))
+            (should (= (codex-ide-session-prompt-history-index session) 0))
+            (codex-ide--browse-prompt-history -1)
+            (should (string= (codex-ide--current-input session) "older prompt"))
+            (should (= (codex-ide-session-prompt-history-index session) 1))
+            (should-error (codex-ide--browse-prompt-history -1) :type 'user-error)
+            (codex-ide--browse-prompt-history 1)
+            (should (string= (codex-ide--current-input session) "latest prompt"))
+            (codex-ide--browse-prompt-history 1)
+            (should (string= (codex-ide--current-input session) ""))
+            (should-not (codex-ide-session-prompt-history-index session))))))))
+
+(ert-deftest codex-ide-goto-prompt-line-navigates-between-prompts ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (let ((inhibit-read-only t))
+              (erase-buffer)
+              (insert "> first prompt\nassistant reply\n> second prompt\n"))
+            (goto-char (point-max))
+            (forward-line -1)
+            (should (looking-at-p "> second prompt"))
+            (codex-ide--goto-prompt-line -1)
+            (should (looking-at-p "> first prompt"))
+            (should-error (codex-ide--goto-prompt-line -1) :type 'user-error)
+            (codex-ide--goto-prompt-line 1)
+            (should (looking-at-p "> second prompt"))
+            (should-error (codex-ide--goto-prompt-line 1) :type 'user-error)))))))
+
+(ert-deftest codex-ide-reopen-input-after-submit-error-resets-turn-state ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-submit-1"
+                (codex-ide-session-current-turn-id session) "turn-1"
+                (codex-ide-session-current-message-item-id session) "item-1"
+                (codex-ide-session-current-message-prefix-inserted session) t
+                (codex-ide-session-current-message-start-marker session) (point-marker)
+                (codex-ide-session-output-prefix-inserted session) t
+                (codex-ide-session-status session) "running")
+          (puthash "item-1" '(:type "agentMessage")
+                   (codex-ide-session-item-states session))
+          (codex-ide--reopen-input-after-submit-error
+           session
+           "retry prompt"
+           '(error "boom"))
+          (should-not (codex-ide-session-current-turn-id session))
+          (should-not (codex-ide-session-current-message-item-id session))
+          (should-not (codex-ide-session-current-message-prefix-inserted session))
+          (should-not (codex-ide-session-output-prefix-inserted session))
+          (should (string= (codex-ide-session-status session) "idle"))
+          (should (= (hash-table-count (codex-ide-session-item-states session)) 0))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (string-match-p "\\[Submit failed\\] boom" (buffer-string)))
+            (goto-char (point-max))
+            (forward-line 0)
+            (should (looking-at-p "> retry prompt"))))))))
+
+(ert-deftest codex-ide-finish-turn-resets-state-and-opens-fresh-prompt ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-finish-1"
+                (codex-ide-session-current-turn-id session) "turn-1"
+                (codex-ide-session-current-message-item-id session) "item-1"
+                (codex-ide-session-current-message-prefix-inserted session) t
+                (codex-ide-session-current-message-start-marker session) (point-marker)
+                (codex-ide-session-output-prefix-inserted session) t
+                (codex-ide-session-interrupt-requested session) t
+                (codex-ide-session-status session) "running")
+          (puthash "item-1" '(:type "agentMessage")
+                   (codex-ide-session-item-states session))
+          (codex-ide--finish-turn session "[Agent interrupted]")
+          (should-not (codex-ide-session-current-turn-id session))
+          (should-not (codex-ide-session-current-message-item-id session))
+          (should-not (codex-ide-session-current-message-prefix-inserted session))
+          (should-not (codex-ide-session-output-prefix-inserted session))
+          (should-not (codex-ide-session-interrupt-requested session))
+          (should (string= (codex-ide-session-status session) "idle"))
+          (should (= (hash-table-count (codex-ide-session-item-states session)) 0))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (string-match-p "\\[Agent interrupted\\]" (buffer-string)))
+            (goto-char (point-max))
+            (forward-line 0)
+            (should (looking-at-p "> "))))))))
+
+(ert-deftest codex-ide-mcp-bridge-request-exempt-from-approval-detects-nested-bridge-mentions ()
+  (let ((codex-ide-emacs-bridge-require-approval nil)
+        (codex-ide-emacs-tool-bridge-name "emacs"))
+    (should
+     (codex-ide-mcp-bridge-request-exempt-from-approval-p
+      `((tool . "shell")
+        (metadata . ((server . "mcp_servers.emacs")
+                     (arguments . [((name . "view_file_buffer"))
+                                   ((path . "/tmp/example.el"))]))))))
+    (let ((codex-ide-emacs-bridge-require-approval t))
+      (should-not
+       (codex-ide-mcp-bridge-request-exempt-from-approval-p
+        '((metadata . ((server . "mcp_servers.emacs")))))))
+    (let ((codex-ide-emacs-bridge-require-approval nil))
+      (should-not
+       (codex-ide-mcp-bridge-request-exempt-from-approval-p
+        '((tool . "shell")
+          (metadata . ((server . "mcp_servers.other")
+                       (arguments . [((name . "different_tool"))])))))))))
 
 (ert-deftest codex-ide-clear-markdown-properties-preserves-non-markdown-faces ()
   (with-temp-buffer
