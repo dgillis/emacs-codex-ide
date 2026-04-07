@@ -12,7 +12,7 @@ Keep the module boundaries clear:
 
 - `codex-ide.el`: main package entry point and core session UI. Owns session lifecycle, process management, JSON-RPC transport, transcript rendering, prompt submission, session/log buffers, modeline/header state, and project-aware buffer context.
 - `codex-ide-bridge.el`: Emacs-side bridge helpers. Owns optional bridge configuration, server readiness checks, tool dispatch, and context reporting for the external bridge process.
-- `codex-ide-mcp.py`: standalone MCP proxy that talks to a running Emacs via `emacsclient` and forwards JSON tool calls into `codex-ide-bridge--json-tool-call`.
+- `bin/codex-ide-mcp-server.py`: standalone MCP proxy that talks to a running Emacs via `emacsclient` and forwards JSON tool calls into `codex-ide-bridge--json-tool-call`.
 - `codex-ide-transient.el`: transient-based command menus and configuration UI. Treat this as command-surface glue, not the home for core business logic.
 - `tests/codex-ide-tests.el`: ERT coverage for session setup, command assembly, process handling, bridge config, context composition, and transcript behavior.
 - `bin/run-tests.sh`: canonical test runner.

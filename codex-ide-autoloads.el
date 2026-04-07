@@ -136,7 +136,7 @@ Path to the `emacsclient' executable used by the bridge.")
 (defvar codex-ide-emacs-bridge-script-path nil "\
 Path to the standalone Emacs MCP bridge script.
 
-When nil, codex-ide uses `codex-ide-mcp.py' from the package directory.")
+When nil, codex-ide uses `bin/codex-ide-mcp-server.py' from the package directory.")
 (custom-autoload 'codex-ide-emacs-bridge-script-path "codex-ide-bridge" t)
 (defvar codex-ide-emacs-bridge-server-name nil "\
 Server name the bridge should use with `emacsclient'.

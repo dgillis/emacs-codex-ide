@@ -50,7 +50,7 @@ and ensures the current Emacs instance is reachable via `emacsclient'."
 (defcustom codex-ide-emacs-bridge-script-path nil
   "Path to the standalone Emacs MCP bridge script.
 
-When nil, codex-ide uses `codex-ide-mcp.py' from the package directory."
+When nil, codex-ide uses `bin/codex-ide-mcp-server.py' from the package directory."
   :type '(choice (const :tag "Default" nil)
                  (file :tag "Bridge script"))
   :group 'codex-ide)
@@ -104,7 +104,7 @@ bridge starts the Emacs server automatically when needed."
 (defun codex-ide-bridge--resolved-script-path ()
   "Return the absolute path to the standalone bridge script."
   (expand-file-name
-   (or codex-ide-emacs-bridge-script-path "codex-ide-mcp.py")
+   (or codex-ide-emacs-bridge-script-path "bin/codex-ide-mcp-server.py")
    codex-ide-bridge--directory))
 
 (defun codex-ide-bridge--resolved-server-name ()

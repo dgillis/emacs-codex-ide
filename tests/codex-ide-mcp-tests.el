@@ -12,7 +12,7 @@
 (require 'codex-ide-test-fixtures)
 
 (ert-deftest codex-ide-mcp-script-starts-with-optional-server-name-flag ()
-  (let ((script-path (expand-file-name "codex-ide-mcp.py"
+  (let ((script-path (expand-file-name "bin/codex-ide-mcp-server.py"
                                        codex-ide-test--root-directory))
         (mock-emacsclient (make-temp-file "codex-ide-emacsclient-" nil ".py"))
         (argv-log (make-temp-file "codex-ide-emacsclient-argv-"))
@@ -77,7 +77,7 @@
       (kill-buffer output-buffer))))
 
 (ert-deftest codex-ide-mcp-script-uses-emacsclient-bridge-responses ()
-  (let ((script-path (expand-file-name "codex-ide-mcp.py"
+  (let ((script-path (expand-file-name "bin/codex-ide-mcp-server.py"
                                        codex-ide-test--root-directory))
         (mock-emacsclient (make-temp-file "codex-ide-emacsclient-" nil ".py"))
         (input-buffer (generate-new-buffer " *codex-ide-mcp-input*"))

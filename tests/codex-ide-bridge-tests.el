@@ -18,7 +18,7 @@
             (codex-ide-emacs-tool-bridge-name "editor")
             (codex-ide-emacs-bridge-python-command "python3")
             (codex-ide-emacs-bridge-emacsclient-command "emacsclient")
-            (codex-ide-emacs-bridge-script-path "/tmp/codex-ide-mcp.py")
+            (codex-ide-emacs-bridge-script-path "/tmp/codex-ide-mcp-server.py")
             (codex-ide-emacs-bridge-server-name "testsrv")
             (codex-ide-emacs-bridge-startup-timeout 15)
             (codex-ide-emacs-bridge-tool-timeout 45))
@@ -31,7 +31,7 @@
           (should
            (equal (codex-ide-bridge-mcp-config-args)
                   '("-c" "mcp_servers.editor.command=\"/usr/bin/python3\""
-                    "-c" "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp.py\",\"--emacsclient\",\"/usr/bin/emacsclient\",\"--server-name\",\"testsrv\"]"
+                    "-c" "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp-server.py\",\"--emacsclient\",\"/usr/bin/emacsclient\",\"--server-name\",\"testsrv\"]"
                     "-c" "mcp_servers.editor.startup_timeout_sec=15"
                     "-c" "mcp_servers.editor.tool_timeout_sec=45"))))))))
 
@@ -42,7 +42,7 @@
             (codex-ide-emacs-tool-bridge-name "editor")
             (codex-ide-emacs-bridge-python-command "python3")
             (codex-ide-emacs-bridge-emacsclient-command "emacsclient")
-            (codex-ide-emacs-bridge-script-path "/tmp/codex-ide-mcp.py")
+            (codex-ide-emacs-bridge-script-path "/tmp/codex-ide-mcp-server.py")
             (codex-ide-emacs-bridge-server-name nil)
             (codex-ide-emacs-bridge-startup-timeout 15)
             (codex-ide-emacs-bridge-tool-timeout 45))
@@ -55,7 +55,7 @@
           (should
            (equal (codex-ide-bridge-mcp-config-args)
                   '("-c" "mcp_servers.editor.command=\"/usr/bin/python3\""
-                    "-c" "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp.py\",\"--emacsclient\",\"/usr/bin/emacsclient\"]"
+                    "-c" "mcp_servers.editor.args=[\"/tmp/codex-ide-mcp-server.py\",\"--emacsclient\",\"/usr/bin/emacsclient\"]"
                     "-c" "mcp_servers.editor.startup_timeout_sec=15"
                     "-c" "mcp_servers.editor.tool_timeout_sec=45"))))))))
 
