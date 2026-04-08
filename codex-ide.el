@@ -3322,8 +3322,8 @@ If no live session exists, prompt to start one."
     (codex-ide--display-buffer-in-codex-window buffer)))
 
 ;;;###autoload
-(defun codex-ide-list-sessions ()
-  "List active Codex sessions and switch to the selected one."
+(defun codex-ide-list-session-buffers ()
+  "List active Codex session buffers and switch to the selected one."
   (interactive)
   (codex-ide--cleanup-dead-sessions)
   (let (sessions)
@@ -3333,11 +3333,11 @@ If no live session exists, prompt to start one."
          (push (cons (abbreviate-file-name directory) session) sessions)))
      codex-ide--sessions)
     (if sessions
-        (let* ((choice (completing-read "Switch to Codex session: "
+        (let* ((choice (completing-read "Switch to Codex session buffer: "
                                         sessions nil t))
                (session (alist-get choice sessions nil nil #'string=)))
           (codex-ide--display-buffer-in-side-window (codex-ide-session-buffer session)))
-      (message "No active Codex sessions"))))
+      (message "No active Codex session buffers"))))
 
 ;;;###autoload
 (defun codex-ide-interrupt ()

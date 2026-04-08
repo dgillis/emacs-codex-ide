@@ -16,7 +16,7 @@
 (declare-function codex-ide-continue "codex-ide" ())
 (declare-function codex-ide-prompt "codex-ide" ())
 (declare-function codex-ide-stop "codex-ide" ())
-(declare-function codex-ide-list-sessions "codex-ide" ())
+(declare-function codex-ide-list-session-buffers "codex-ide" ())
 (declare-function codex-ide-switch-to-buffer "codex-ide" ())
 (declare-function codex-ide-send-active-buffer-context "codex-ide" ())
 (declare-function codex-ide-interrupt "codex-ide" ())
@@ -77,15 +77,18 @@
                   'face 'transient-inactive-value)
     "Continue most recent"))
 
-(defun codex-ide--start-if-no-session ()
-  "Start Codex when there is no active session."
+(defun codex-ide--start-from-menu ()
+  "Start Codex, optionally replacing an active session."
   (interactive)
   (if (codex-ide--has-active-session-p)
-      (message "Codex session already running in %s"
-               (abbreviate-file-name (codex-ide--get-working-directory)))
+      (when (y-or-n-p
+             (format "Quit existing Codex session in %s and start a new one? "
+                     (abbreviate-file-name (codex-ide--get-working-directory))))
+        (codex-ide-stop)
+        (codex-ide))
     (codex-ide)))
 
-(defun codex-ide--resume-if-no-session ()
+(defun codex-ide--resume-from-menu ()
   "Resume Codex using the thread picker."
   (interactive)
   (codex-ide-resume))
@@ -231,11 +234,11 @@
   [:description codex-ide--session-status]
   ["Codex IDE"
    ["Session"
-    ("s" codex-ide--start-if-no-session :description codex-ide--start-description)
+    ("s" codex-ide--start-from-menu :description codex-ide--start-description)
     ("c" codex-ide--continue-if-no-session :description codex-ide--continue-description)
-    ("r" codex-ide--resume-if-no-session :description codex-ide--resume-description)
+    ("r" codex-ide--resume-from-menu :description codex-ide--resume-description)
     ("q" "Stop current session" codex-ide-stop)
-    ("l" "List sessions" codex-ide-list-sessions)]
+    ("l" "List session buffers" codex-ide-list-session-buffers)]
    ["Navigation"
    ("b" "Switch to Codex buffer" codex-ide-switch-to-buffer)
     ("w" "Toggle current window" codex-ide-toggle)

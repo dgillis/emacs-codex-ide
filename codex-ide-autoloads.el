@@ -93,8 +93,8 @@ Report Codex CLI availability and version." t)
 Stop the Codex session for the current project or directory." t)
 (autoload 'codex-ide-switch-to-buffer "codex-ide" "\
 Show the Codex buffer for the current project." t)
-(autoload 'codex-ide-list-sessions "codex-ide" "\
-List active Codex sessions and switch to the selected one." t)
+(autoload 'codex-ide-list-session-buffers "codex-ide" "\
+List active Codex session buffers and switch to the selected one." t)
 (autoload 'codex-ide-interrupt "codex-ide" "\
 Interrupt the active Codex turn for the current project." t)
 (autoload 'codex-ide-prompt "codex-ide" "\
