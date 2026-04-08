@@ -2570,6 +2570,37 @@ When OMIT-THREAD-ID is non-nil, exclude that thread from the choices."
   "Return the most recent thread for the current working directory using SESSION."
   (car (codex-ide--list-threads session)))
 
+(defun codex-ide--resume-thread-into-session (session thread-id action)
+  "Attach SESSION to THREAD-ID and optionally replay prior transcript.
+ACTION is a short past-tense label used in log messages, such as
+\"Continued\" or \"Resumed\"."
+  (unless session
+    (error "No Codex session available"))
+  (unless (and (stringp thread-id)
+               (not (string-empty-p thread-id)))
+    (error "Invalid thread id: %S" thread-id))
+  (let ((thread-read
+         (condition-case err
+             (codex-ide--read-thread session thread-id t)
+           (error
+            (codex-ide-log-message
+             session
+             "Unable to read stored thread %s before %s: %s"
+             thread-id
+             (downcase action)
+             (error-message-string err))
+            nil))))
+    (codex-ide--request-sync
+     session
+     "thread/resume"
+     (with-current-buffer (codex-ide-session-buffer session)
+       (codex-ide--thread-resume-params thread-id)))
+    (setf (codex-ide-session-thread-id session) thread-id)
+    (codex-ide-log-message session "%s thread %s" action thread-id)
+    (when thread-read
+      (codex-ide--restore-thread-read-transcript session thread-read)))
+  session)
+
 (defun codex-ide--initialize-session (&optional session)
   "Initialize SESSION with the app-server."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
@@ -2710,52 +2741,16 @@ MODE can be nil or `new', `continue', or `resume'."
                                       (codex-ide--latest-thread session))
                                     (user-error "No Codex threads found for %s"
                                                 (abbreviate-file-name working-dir))))
-                        (thread-id (alist-get 'id thread))
-                        (thread-read
-                         (condition-case err
-                             (codex-ide--read-thread session thread-id t)
-                           (error
-                            (codex-ide-log-message
-                             session
-                             "Unable to read stored thread %s before continue: %s"
-                             thread-id
-                             (error-message-string err))
-                            nil))))
-                   (codex-ide--request-sync
-                    session
-                    "thread/resume"
-                    (with-current-buffer (codex-ide-session-buffer session)
-                   (codex-ide--thread-resume-params thread-id)))
-                   (setf (codex-ide-session-thread-id session) thread-id)
-                   (codex-ide-log-message session "Continued thread %s" thread-id)
-                   (when thread-read
-                     (codex-ide--restore-thread-read-transcript
-                      session thread-read))))
+                        (thread-id (alist-get 'id thread)))
+                   (codex-ide--resume-thread-into-session
+                    session thread-id "Continued")))
                 ('resume
                  (let* ((thread (or resume-thread
                                     (with-current-buffer (codex-ide-session-buffer session)
                                       (codex-ide--pick-thread session))))
-                        (thread-id (alist-get 'id thread))
-                        (thread-read
-                         (condition-case err
-                             (codex-ide--read-thread session thread-id t)
-                           (error
-                            (codex-ide-log-message
-                             session
-                             "Unable to read stored thread %s before resume: %s"
-                             thread-id
-                             (error-message-string err))
-                            nil))))
-                   (codex-ide--request-sync
-                    session
-                    "thread/resume"
-                    (with-current-buffer (codex-ide-session-buffer session)
-                   (codex-ide--thread-resume-params thread-id)))
-                   (setf (codex-ide-session-thread-id session) thread-id)
-                   (codex-ide-log-message session "Resumed thread %s" thread-id)
-                   (when thread-read
-                     (codex-ide--restore-thread-read-transcript
-                      session thread-read)))))
+                        (thread-id (alist-get 'id thread)))
+                   (codex-ide--resume-thread-into-session
+                    session thread-id "Resumed"))))
               (setf (codex-ide-session-status session) "idle")
               (codex-ide--update-header-line session)
               (codex-ide--display-buffer-in-side-window (codex-ide-session-buffer session))

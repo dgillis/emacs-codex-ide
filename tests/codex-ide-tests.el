@@ -822,6 +822,41 @@
                 (forward-line 0)
                 (should (looking-at-p "> "))))))))))
 
+(ert-deftest codex-ide-resume-thread-into-session-replays-thread-read-transcript ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests '()))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method params)
+                     (push (cons method params) requests)
+                     (pcase method
+                       ("thread/read"
+                        '((thread . ((id . "thread-explicit-1")
+                                     (name . "Explicit flow")
+                                     (preview . "Replay exact thread")))
+                          (turns . (((id . "turn-1")
+                                     (items . (((type . "userMessage")
+                                                (content . (((type . "text")
+                                                             (text . "Resume this exact thread.")))))
+                                               ((type . "agentMessage")
+                                                (id . "item-1")
+                                                (text . "Exact thread resumed.")))))))))
+                       ("thread/resume" '((ok . t)))
+                       (_ (ert-fail (format "Unexpected method %s" method)))))))
+          (let ((session (codex-ide--create-process-session)))
+            (should (eq (codex-ide--resume-thread-into-session
+                         session "thread-explicit-1" "Resumed")
+                        session))
+            (should (string= (codex-ide-session-thread-id session)
+                             "thread-explicit-1"))
+            (should (equal (mapcar #'car (nreverse requests))
+                           '("thread/read" "thread/resume")))
+            (with-current-buffer (codex-ide-session-buffer session)
+              (let ((buffer-text (buffer-string)))
+                (should (string-match-p "^> Resume this exact thread\\." buffer-text))
+                (should (string-match-p "Exact thread resumed\\." buffer-text))))))))))
+
 (ert-deftest codex-ide-start-session-resume-replaces-existing-session-with-selected-thread ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (requests '())
