@@ -13,6 +13,8 @@
 (require 'seq)
 (require 'codex-ide-test-fixtures)
 (require 'codex-ide)
+(require 'codex-ide-session-buffer-list-tests)
+(require 'codex-ide-session-thread-list-tests)
 
 (ert-deftest codex-ide-app-server-command-includes-bridge-and-extra-flags ()
   (let ((codex-ide-cli-path "/tmp/codex")
@@ -120,6 +122,12 @@
     (with-temp-buffer
       (codex-ide-session-mode)
       (should-not visual-line-mode))))
+
+(ert-deftest codex-ide-session-mode-binds-tab-to-button-navigation ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (should (eq (key-binding (kbd "TAB")) #'forward-button))
+    (should (eq (key-binding (kbd "<backtab>")) #'backward-button))))
 
 (ert-deftest codex-ide-start-session-new-initializes-thread-without-real-cli ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -262,6 +270,24 @@
             (should (equal (codex-ide--pick-thread session "thread-current")
                            other-thread))
             (should (equal selected "Other thread"))))))))
+
+(ert-deftest codex-ide-ensure-query-session-for-thread-selection-creates-and-initializes-session ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method _params)
+                     (push method requests)
+                     (pcase method
+                       ("initialize" '((ok . t)))
+                       (_ (ert-fail (format "Unexpected method %s" method)))))))
+          (let ((session (codex-ide--ensure-query-session-for-thread-selection
+                          project-dir)))
+            (should (codex-ide-session-p session))
+            (should (memq session codex-ide--sessions))
+            (should (equal (nreverse requests) '("initialize")))
+            (should (string= (codex-ide-session-status session) "idle"))))))))
 
 (ert-deftest codex-ide-start-session-resume-aborts-cleanly-on-picker-quit ()
   (let ((project-dir (codex-ide-test--make-temp-project)))

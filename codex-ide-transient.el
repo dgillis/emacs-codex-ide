@@ -29,6 +29,11 @@
 (declare-function codex-ide--get-process "codex-ide" ())
 (declare-function codex-ide--ensure-cli "codex-ide" ())
 
+(autoload 'codex-ide-session-buffer-list "codex-ide-session-buffer-list"
+  "Show a tabulated list of live Codex session buffers." t)
+(autoload 'codex-ide-session-thread-list "codex-ide-session-thread-list"
+  "Show a tabulated list of stored Codex threads for the current workspace." t)
+
 (defvar codex-ide-cli-path)
 (defvar codex-ide-cli-extra-flags)
 (defvar codex-ide-model)
@@ -236,7 +241,8 @@
      :if codex-ide--in-session-buffer-p)
     ("q" "Stop current session" codex-ide-stop
      :if codex-ide--in-session-buffer-p)
-    ("l" "List session buffers" codex-ide-list-session-buffers)]
+    ("l" "List session buffers" codex-ide-session-buffer-list)
+    ("t" "List workspace threads" codex-ide-session-thread-list)]
    ["Navigation"
    ("b" "Switch to Codex buffer" codex-ide-switch-to-buffer)
     ("w" "Toggle current window" codex-ide-toggle)

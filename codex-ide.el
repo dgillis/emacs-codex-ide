@@ -24,6 +24,7 @@
 (require 'eieio)
 (require 'json)
 (require 'project)
+(require 'seq)
 (require 'subr-x)
 (require 'codex-ide-mcp-elicitation)
 (require 'codex-ide-transient)
@@ -382,6 +383,8 @@ Add this variable to `savehist-additional-variables' to persist it.")
 (define-key codex-ide-session-mode-map (kbd "C-c C-k") #'codex-ide-interrupt)
 (define-key codex-ide-session-mode-map (kbd "C-M-p") #'codex-ide-previous-prompt-line)
 (define-key codex-ide-session-mode-map (kbd "C-M-n") #'codex-ide-next-prompt-line)
+(define-key codex-ide-session-mode-map (kbd "TAB") #'forward-button)
+(define-key codex-ide-session-mode-map (kbd "<backtab>") #'backward-button)
 (define-key codex-ide-session-prompt-minor-mode-map (kbd "M-p") #'codex-ide-previous-prompt-history)
 (define-key codex-ide-session-prompt-minor-mode-map (kbd "M-n") #'codex-ide-next-prompt-history)
 
@@ -683,6 +686,14 @@ current buffer's project directory."
    (codex-ide--sessions-for-directory
     (or directory (codex-ide--get-working-directory))
     t)))
+
+(defun codex-ide--session-buffer-sessions ()
+  "Return tracked sessions with live session buffers."
+  (codex-ide--cleanup-dead-sessions)
+  (seq-filter
+   (lambda (session)
+     (buffer-live-p (codex-ide-session-buffer session)))
+   codex-ide--sessions))
 
 (defun codex-ide--set-session (&optional session)
   "Register SESSION in the global session list."
@@ -2639,7 +2650,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
-  (let* ((working-dir (codex-ide--get-working-directory))
+  (let* ((working-dir (codex-ide-session-directory session))
          (result (codex-ide--request-sync
                   session
                   "thread/list"
@@ -2650,17 +2661,22 @@ Signal an error when THREAD-READ lacks replayable transcript items."
          (data (alist-get 'data result)))
     (append data nil)))
 
+(defun codex-ide--thread-list-data (&optional session omit-thread-id)
+  "Return thread list data using SESSION.
+When OMIT-THREAD-ID is non-nil, exclude that thread from the result."
+  (seq-remove
+   (lambda (thread)
+     (equal (alist-get 'id thread) omit-thread-id))
+   (codex-ide--list-threads session)))
+
 (defun codex-ide--pick-thread (&optional session omit-thread-id)
   "Prompt to select a thread for the current working directory using SESSION.
 When OMIT-THREAD-ID is non-nil, exclude that thread from the choices."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
-  (let* ((working-dir (codex-ide--get-working-directory))
-         (threads (seq-remove
-                   (lambda (thread)
-                     (equal (alist-get 'id thread) omit-thread-id))
-                   (codex-ide--list-threads session)))
+  (let* ((working-dir (codex-ide-session-directory session))
+         (threads (codex-ide--thread-list-data session omit-thread-id))
          (choices (codex-ide--thread-choice-candidates threads))
          (completion-extra-properties
           `(:affixation-function
@@ -2843,15 +2859,49 @@ ACTION is a short past-tense label used in log messages, such as
           session))
       (codex-ide--canonical-session-for-directory directory)))
 
-(defun codex-ide--start-session (&optional mode)
-  "Start a Codex session for the current project.
-MODE can be nil or `new', `continue', or `resume'."
+(defun codex-ide--prepare-session-operations ()
+  "Ensure Codex prerequisites needed for session-backed operations."
   (unless (codex-ide--ensure-cli)
     (user-error "Codex CLI not available. Install it and ensure it is on PATH"))
   (codex-ide--cleanup-dead-sessions)
   (codex-ide--ensure-active-buffer-tracking)
   (codex-ide-mcp-bridge-prompt-to-enable)
-  (codex-ide-mcp-bridge-ensure-server)
+  (codex-ide-mcp-bridge-ensure-server))
+
+(defun codex-ide--ensure-query-session-for-thread-selection (&optional directory)
+  "Return a live query session for DIRECTORY, creating one when needed."
+  (let* ((directory (codex-ide--normalize-directory
+                     (or directory (codex-ide--get-working-directory))))
+         (session (codex-ide--query-session-for-thread-selection directory)))
+    (unless session
+      (let ((default-directory directory))
+        (setq session (codex-ide--create-process-session)))
+      (codex-ide-log-message session "Initializing background query session")
+      (codex-ide--initialize-session session))
+    session))
+
+(defun codex-ide--show-or-resume-thread (thread-id &optional directory)
+  "Show THREAD-ID in DIRECTORY, resuming it into a session when needed."
+  (let* ((directory (codex-ide--normalize-directory
+                     (or directory (codex-ide--get-working-directory))))
+         (session (codex-ide--session-for-thread-id thread-id directory)))
+    (if session
+        (progn
+          (codex-ide--show-session-buffer session)
+          session)
+      (let ((default-directory directory))
+        (setq session (codex-ide--create-process-session)))
+      (codex-ide--initialize-session session)
+      (codex-ide--resume-thread-into-session session thread-id "Resumed")
+      (codex-ide--update-header-line session)
+      (codex-ide--show-session-buffer session)
+      (codex-ide--insert-input-prompt session)
+      session)))
+
+(defun codex-ide--start-session (&optional mode)
+  "Start a Codex session for the current project.
+MODE can be nil or `new', `continue', or `resume'."
+  (codex-ide--prepare-session-operations)
   (let* ((working-dir (codex-ide--get-working-directory))
          (mode (or mode 'new))
          (query-session nil)
@@ -2869,10 +2919,10 @@ MODE can be nil or `new', `continue', or `resume'."
           (unless (eq mode 'new)
             (setq query-session (codex-ide--query-session-for-thread-selection working-dir))
             (unless query-session
-              (setq query-session (codex-ide--create-process-session)
+              (setq query-session (codex-ide--ensure-query-session-for-thread-selection
+                                   working-dir)
                     created-session query-session)
-              (codex-ide-log-message query-session "Starting session in mode %s" mode)
-              (codex-ide--initialize-session query-session))
+              (codex-ide-log-message query-session "Starting session in mode %s" mode))
             (setq thread
                   (pcase mode
                     ('continue
@@ -3588,13 +3638,11 @@ If no live session exists, prompt to start one."
 (defun codex-ide-list-session-buffers ()
   "List active Codex session buffers and switch to the selected one."
   (interactive)
-  (codex-ide--cleanup-dead-sessions)
   (let (sessions)
-    (dolist (session codex-ide--sessions)
-      (when (buffer-live-p (codex-ide-session-buffer session))
-        (push (cons (buffer-name (codex-ide-session-buffer session))
-                    session)
-              sessions)))
+    (dolist (session (codex-ide--session-buffer-sessions))
+      (push (cons (buffer-name (codex-ide-session-buffer session))
+                  session)
+            sessions))
     (if sessions
         (let* ((choice (completing-read "Switch to Codex session buffer: "
                                         sessions nil t))

@@ -1,0 +1,103 @@
+;;; codex-ide-session-thread-list.el --- List workspace Codex threads -*- lexical-binding: t; -*-
+
+;;; Commentary:
+
+;; Tabulated listing of stored Codex threads for the current workspace.
+
+;;; Code:
+
+(require 'codex-ide)
+(require 'codex-ide-session-list)
+
+(defvar-local codex-ide-session-thread-list--directory nil
+  "Workspace directory displayed by the current thread list buffer.")
+
+(define-derived-mode codex-ide-session-thread-list-mode codex-ide-session-list-mode
+  "Codex-Threads"
+  "Mode for listing stored Codex threads in one workspace.")
+
+(defun codex-ide-session-thread-list--preview-text (thread)
+  "Return a single-line preview string for THREAD."
+  (replace-regexp-in-string
+   "[\n\r]+"
+   "↵"
+   (let ((preview (codex-ide--thread-choice-preview
+                   (or (alist-get 'name thread)
+                       (alist-get 'preview thread)
+                       "Untitled"))))
+     (if (string-empty-p preview) "Untitled" preview))))
+
+(defun codex-ide-session-thread-list--thread-buffer-name (thread directory)
+  "Return the live session buffer name for THREAD in DIRECTORY, if any."
+  (when-let ((session (codex-ide--session-for-thread-id
+                       (alist-get 'id thread)
+                       directory)))
+    (buffer-name (codex-ide-session-buffer session))))
+
+(defun codex-ide-session-thread-list--thread-status (thread directory)
+  "Return the session status label for THREAD in DIRECTORY."
+  (if-let ((session (codex-ide--session-for-thread-id
+                     (alist-get 'id thread)
+                     directory)))
+      (codex-ide--status-label (codex-ide-session-status session))
+    "Stored"))
+
+(defun codex-ide-session-thread-list--entries ()
+  "Return tabulated entries for workspace threads."
+  (let* ((directory codex-ide-session-thread-list--directory)
+         (default-directory directory)
+         (session (codex-ide--ensure-query-session-for-thread-selection directory))
+         (threads (codex-ide--thread-list-data session)))
+    (mapcar
+     (lambda (thread)
+       (let ((thread-id (alist-get 'id thread)))
+         (list thread-id
+               (vector
+                (codex-ide--thread-choice-short-id thread)
+                (codex-ide-session-thread-list--preview-text thread)
+                (codex-ide-session-thread-list--thread-status thread directory)
+                (codex-ide--format-thread-updated-at
+                 (alist-get 'updatedAt thread))
+                (codex-ide--format-thread-updated-at
+                 (alist-get 'createdAt thread))
+                (or (codex-ide-session-thread-list--thread-buffer-name
+                     thread directory)
+                    "")))))
+     threads)))
+
+(defun codex-ide-session-thread-list--visit (thread-id)
+  "Visit THREAD-ID in the current thread list workspace."
+  (codex-ide--prepare-session-operations)
+  (codex-ide--show-or-resume-thread thread-id codex-ide-session-thread-list--directory))
+
+;;;###autoload
+(defun codex-ide-session-thread-list ()
+  "Show a tabulated list of stored Codex threads for the current workspace."
+  (interactive)
+  (let* ((directory (codex-ide--normalize-directory
+                     (codex-ide--get-working-directory)))
+         (default-directory directory)
+         (buffer nil))
+    (codex-ide--prepare-session-operations)
+    (setq buffer
+          (codex-ide-session-list--setup
+           (format "*Codex Threads: %s*"
+                   (file-name-nondirectory (directory-file-name directory)))
+           #'codex-ide-session-thread-list-mode
+           [("ID" 12 t)
+            ("Preview" 100 t)
+            ("Status" 12 t)
+            ("Updated" 25 t)
+            ("Created" 25 t)
+            ("Buffer" 28 t)]
+           #'codex-ide-session-thread-list--entries
+           #'codex-ide-session-thread-list--visit
+           '("Updated" . t)
+           (lambda ()
+             (setq-local default-directory directory)
+             (setq-local codex-ide-session-thread-list--directory directory))))
+    (pop-to-buffer buffer)))
+
+(provide 'codex-ide-session-thread-list)
+
+;;; codex-ide-session-thread-list.el ends here

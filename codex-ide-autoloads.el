@@ -290,6 +290,26 @@ Decode JSON PAYLOAD, dispatch a bridge tool call, and return JSON.
 
 (fn PAYLOAD)")
 (register-definition-prefixes "codex-ide-mcp-bridge" '("codex-ide-mcp-bridge--"))
+
+
+;;; Generated autoloads from codex-ide-session-buffer-list.el
+
+(autoload 'codex-ide-session-buffer-list "codex-ide-session-buffer-list" "\
+Show a tabulated list of live Codex session buffers." t)
+(register-definition-prefixes "codex-ide-session-buffer-list" '("codex-ide-session-buffer-list-"))
+
+
+;;; Generated autoloads from codex-ide-session-list.el
+
+(register-definition-prefixes "codex-ide-session-list" '("codex-ide-session-list-"))
+
+
+;;; Generated autoloads from codex-ide-session-thread-list.el
+
+(autoload 'codex-ide-session-thread-list "codex-ide-session-thread-list" "\
+Show a tabulated list of stored Codex threads for the current workspace." t)
+(register-definition-prefixes "codex-ide-session-thread-list" '("codex-ide-session-thread-list-"))
+
 
 ;;; End of scraped data
 
