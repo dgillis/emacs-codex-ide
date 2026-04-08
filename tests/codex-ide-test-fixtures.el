@@ -58,6 +58,7 @@
           (codex-ide--active-buffer-objects (make-hash-table :test 'equal))
           (codex-ide-persisted-project-state (make-hash-table :test 'equal))
           (codex-ide--session-metadata (make-hash-table :test 'eq))
+          (codex-ide-session-baseline-prompt nil)
           (codex-ide-enable-emacs-tool-bridge nil))
      (unwind-protect
          (progn ,@body)

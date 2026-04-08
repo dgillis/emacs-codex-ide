@@ -20,7 +20,6 @@
 (declare-function codex-ide-stop "codex-ide" ())
 (declare-function codex-ide-list-session-buffers "codex-ide" ())
 (declare-function codex-ide-switch-to-buffer "codex-ide" ())
-(declare-function codex-ide-send-active-buffer-context "codex-ide" ())
 (declare-function codex-ide-interrupt "codex-ide" ())
 (declare-function codex-ide-insert-newline "codex-ide" ())
 (declare-function codex-ide-toggle "codex-ide" ())
@@ -244,7 +243,6 @@
     ("W" "Toggle recent window" codex-ide-toggle-recent)]
    ["Interaction"
     ("p" "Prompt from minibuffer" codex-ide-prompt)
-    ("i" "Send active buffer context" codex-ide-send-active-buffer-context)
     ("e" "Interrupt turn" codex-ide-interrupt)
     ("n" "Insert newline" codex-ide-insert-newline)]
    ["Submenus"

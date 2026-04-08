@@ -35,6 +35,26 @@ COMMANDS = [
         },
     ),
     EmacsBridgeCommand(
+        name="get_buffer_info",
+        description="Return metadata for a named Emacs buffer.",
+        inputSchema={
+            "type": "object",
+            "properties": {"buffer": {"type": "string"}},
+            "required": ["buffer"],
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
+        name="get_buffer_text",
+        description="Return the full contents of a named Emacs buffer as a string.",
+        inputSchema={
+            "type": "object",
+            "properties": {"buffer": {"type": "string"}},
+            "required": ["buffer"],
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
         name="get_diagnostics",
         description="Return Flymake or Flycheck diagnostics for a buffer name.",
         inputSchema={

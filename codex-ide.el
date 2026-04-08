@@ -138,6 +138,20 @@
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-session-baseline-prompt "
+- You are a Codex server running inside Emacs.
+- You can use MCP tools to inspect and interact with the running Emacs session.
+- Interpret Emacs terminology as relevant context to the user's request: buffers, regions, windows, point, mark, current file, etc.
+- Do not needlessly use Emacs commands to accomplish agent tasks."
+  "Optionally baseline prompt injected into the first real prompt of a new thread.
+When set to a non-empty string, `codex-ide' prepends it once as an
+`[Emacs session context]' block on the first submitted user turn for a
+brand-new thread. Resume and continue flows do not resend it."
+  :type '(choice (const :tag "Disabled" nil)
+                 (string :tag "Prompt"))
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-buffer-name-prefix "codex"
   "Prefix used when creating Codex session buffer names."
   :type 'string
@@ -220,18 +234,6 @@
 When a log buffer grows beyond this limit, older lines are removed from the
 top of the buffer."
   :type 'integer
-  :group 'codex-ide)
-
-;;;###autoload
-(defcustom codex-ide-include-active-buffer-context 'when-changed
-  "How `codex-ide' should include Emacs active-buffer context in prompts.
-When set to `when-changed', include the active file context only when it has
-changed since the last prompt sent to that session.
-When set to `always', include the active file context on every prompt.
-When nil, never include active-buffer context automatically."
-  :type '(choice (const :tag "When changed" when-changed)
-                 (const :tag "Always" always)
-                 (const :tag "Disabled" nil))
   :group 'codex-ide)
 
 ;;;###autoload
@@ -351,10 +353,6 @@ Add this variable to `savehist-additional-variables' to persist it.")
     :initarg :prompt-history-draft
     :initform nil
     :accessor codex-ide-session-prompt-history-draft)
-   (last-sent-buffer-context
-    :initarg :last-sent-buffer-context
-    :initform nil
-    :accessor codex-ide-session-last-sent-buffer-context)
    (interrupt-requested
     :initarg :interrupt-requested
     :initform nil
@@ -382,7 +380,6 @@ Add this variable to `savehist-additional-variables' to persist it.")
 (define-key codex-ide-session-mode-map (kbd "C-c C-c") #'codex-ide-interrupt)
 (define-key codex-ide-session-mode-map (kbd "C-c RET") #'codex-ide-submit)
 (define-key codex-ide-session-mode-map (kbd "C-c C-k") #'codex-ide-interrupt)
-(define-key codex-ide-session-mode-map (kbd "C-c C-o") #'codex-ide-send-active-buffer-context)
 (define-key codex-ide-session-mode-map (kbd "C-M-p") #'codex-ide-previous-prompt-line)
 (define-key codex-ide-session-mode-map (kbd "C-M-n") #'codex-ide-next-prompt-line)
 (define-key codex-ide-session-prompt-minor-mode-map (kbd "M-p") #'codex-ide-previous-prompt-history)
@@ -1524,18 +1521,34 @@ The return value contains 1-based line numbers and 0-based columns."
       (append context `((selection . ,selection)))
     context))
 
+(defconst codex-ide--session-context-open-tag "[Emacs session context]")
+(defconst codex-ide--session-context-close-tag "[/Emacs session context]")
+(defconst codex-ide--prompt-context-open-tag "[Emacs prompt context]")
+(defconst codex-ide--prompt-context-close-tag "[/Emacs prompt context]")
+
+(defun codex-ide--format-session-context ()
+  "Format the one-time session baseline prompt block."
+  (when-let ((prompt (and (stringp codex-ide-session-baseline-prompt)
+                          (string-trim codex-ide-session-baseline-prompt))))
+    (unless (string-empty-p prompt)
+      (format (concat "%s\n"
+                      "Take the following into account in this prompt and all following ones:\n"
+                      "%s\n"
+                      "%s\n")
+              codex-ide--session-context-open-tag
+              prompt
+              codex-ide--session-context-close-tag))))
+
 (defun codex-ide--format-buffer-context (context)
   "Format CONTEXT for insertion into a Codex prompt."
   (let ((selection (alist-get 'selection context)))
-    (format (concat "[Emacs context]\n"
-                    "You are Codex running inside Emacs.\n"
-                    "Prefer Emacs-aware behavior and treat the active file/buffer context below as authoritative unless I say otherwise.\n"
+    (format (concat "%s\n"
                     "Last file/buffer focused in Emacs: %s\n"
                     "Buffer: %s\n"
                     "Cursor: line %s, column %s\n"
                     "%s"
-                    "Treat references like \"this file\", \"this buffer\", or \"the current file\" as referring to this buffer unless I say otherwise.\n"
-                    "[/Emacs context]\n")
+                    "%s\n")
+            codex-ide--prompt-context-open-tag
             (alist-get 'display-file context)
             (alist-get 'buffer-name context)
             (alist-get 'line context)
@@ -1546,7 +1559,8 @@ The return value contains 1-based line numbers and 0-based columns."
                         (alist-get 'start-column selection)
                         (alist-get 'end-line selection)
                         (alist-get 'end-column selection))
-              ""))))
+              "")
+            codex-ide--prompt-context-close-tag)))
 
 (defun codex-ide--format-buffer-context-summary (context)
   "Return a compact transcript summary line for CONTEXT."
@@ -2164,21 +2178,8 @@ The result is an alist with `formatted' and `summary' entries."
               (codex-ide--format-buffer-context context-with-selection))
              (context-summary
               (codex-ide--format-buffer-context-summary context-with-selection)))
-        (pcase codex-ide-include-active-buffer-context
-          ('always
-           (when session
-             (setf (codex-ide-session-last-sent-buffer-context session) context))
-           `((formatted . ,formatted-context)
-             (summary . ,context-summary)))
-          ('when-changed
-           (unless (equal context
-                          (and session
-                               (codex-ide-session-last-sent-buffer-context session)))
-             (when session
-               (setf (codex-ide-session-last-sent-buffer-context session) context))
-             `((formatted . ,formatted-context)
-               (summary . ,context-summary))))
-          (_ nil))))))
+        `((formatted . ,formatted-context)
+          (summary . ,context-summary))))))
 
 (defun codex-ide--get-buffer-context-for-prompt ()
   "Return the current buffer context string for the current project, or nil."
@@ -2415,13 +2416,38 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
       (unless (string-empty-p single-line)
         (truncate-string-to-width single-line 120 nil nil t)))))
 
+(defun codex-ide--strip-leading-context-block (text open-tag close-tag)
+  "Remove a leading context block delimited by OPEN-TAG and CLOSE-TAG from TEXT."
+  (if (and (stringp text)
+           (string-prefix-p open-tag text)
+           (string-match (regexp-quote close-tag) text))
+      (string-trim-left (substring text (match-end 0)))
+    text))
+
 (defun codex-ide--strip-emacs-context-prefix (text)
-  "Remove any leading `[Emacs context]` block from TEXT."
-  (let ((context-end "[/Emacs context]"))
-    (if (and (stringp text)
-             (string-match (regexp-quote context-end) text))
-        (string-trim (substring text (match-end 0)))
-      text)))
+  "Remove any leading Emacs session or prompt context block from TEXT."
+  (let ((stripped text)
+        (changed t))
+    (while changed
+      (setq changed nil)
+      (dolist (tags `((,codex-ide--session-context-open-tag . ,codex-ide--session-context-close-tag)
+                      (,codex-ide--prompt-context-open-tag . ,codex-ide--prompt-context-close-tag)
+                      ("[Emacs context]" . "[/Emacs context]")))
+        (let ((next (codex-ide--strip-leading-context-block
+                     stripped
+                     (car tags)
+                     (cdr tags))))
+          (unless (equal next stripped)
+            (setq stripped next
+                  changed t)))))
+    stripped))
+
+(defun codex-ide--leading-emacs-context-prefix-p (text)
+  "Return non-nil when TEXT begins with a known Emacs context prefix marker."
+  (and (stringp text)
+       (or (string-prefix-p codex-ide--session-context-open-tag text)
+           (string-prefix-p codex-ide--prompt-context-open-tag text)
+           (string-prefix-p "[Emacs context]" text))))
 
 (defun codex-ide--thread-read-display-user-text (text)
   "Normalize stored user TEXT for transcript display."
@@ -2563,7 +2589,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
          (stripped (codex-ide--strip-emacs-context-prefix text)))
     (string-trim
      (if (and (stringp text)
-              (string-prefix-p "[Emacs context]" text)
+              (codex-ide--leading-emacs-context-prefix-p text)
               (equal stripped text))
          ""
        stripped))))
@@ -2681,6 +2707,7 @@ ACTION is a short past-tense label used in log messages, such as
      (with-current-buffer (codex-ide-session-buffer session)
        (codex-ide--thread-resume-params thread-id)))
     (setf (codex-ide-session-thread-id session) thread-id)
+    (codex-ide--session-metadata-put session :session-context-sent t)
     (codex-ide-log-message session "%s thread %s" action thread-id)
     (when thread-read
       (codex-ide--restore-thread-read-transcript session thread-read)))
@@ -2879,6 +2906,7 @@ MODE can be nil or `new', `continue', or `resume'."
                                 (codex-ide--thread-start-params)))))
                  (setf (codex-ide-session-thread-id session)
                        (codex-ide--extract-thread-id result))
+                 (codex-ide--session-metadata-put session :session-context-sent nil)
                  (codex-ide-log-message
                   session
                   "Started new thread %s"
@@ -2892,7 +2920,8 @@ MODE can be nil or `new', `continue', or `resume'."
             (codex-ide--update-header-line session)
             (codex-ide--show-session-buffer session)
             (codex-ide--track-active-buffer)
-            (codex-ide--insert-input-prompt session)
+            (unless (codex-ide-session-output-prefix-inserted session)
+              (codex-ide--insert-input-prompt session))
             (message "Codex started in %s"
                      (file-name-nondirectory (directory-file-name working-dir)))
             session))
@@ -3180,13 +3209,13 @@ CHOICES is an alist of labels to returned values."
        (let ((item-id (alist-get 'itemId params))
              (delta (or (alist-get 'delta params) "")))
          (let ((codex-ide--current-agent-item-type "agentMessage"))
-           (codex-ide--ensure-agent-message-prefix session item-id)
            (unless (string-empty-p delta)
              (codex-ide-log-message
               session
               "Agent delta for item %s (%d chars)"
               item-id
               (length delta)))
+           (codex-ide--ensure-agent-message-prefix session item-id)
            (codex-ide--append-agent-text buffer delta)
            (when-let ((start (codex-ide-session-current-message-start-marker session)))
              (with-current-buffer buffer
@@ -3237,15 +3266,15 @@ CHOICES is an alist of labels to returned values."
          (codex-ide--render-item-completion session item)))
       ("turn/completed"
        (let ((interrupted (codex-ide-session-interrupt-requested session)))
-       (codex-ide-log-message
-        session
-        "Turn completed: %s"
-        (codex-ide-session-current-turn-id session))
-       (when interrupted
-         (codex-ide-log-message session "Turn completed after interrupt request"))
-       (codex-ide--finish-turn
-        session
-        (when interrupted "[Agent interrupted]"))))
+         (codex-ide-log-message
+          session
+          "Turn completed: %s"
+          (codex-ide-session-current-turn-id session))
+         (when interrupted
+           (codex-ide-log-message session "Turn completed after interrupt request"))
+         (codex-ide--finish-turn
+          session
+          (when interrupted "[Agent interrupted]"))))
       ("error"
        (let ((codex-ide--current-agent-item-type "error"))
          (codex-ide-log-message session "Error notification: %S" params)
@@ -3330,8 +3359,14 @@ CHOICES is an alist of labels to returned values."
   "Build prompt payload metadata for PROMPT in the current working directory."
   (let* ((context-payload (codex-ide--context-payload-for-prompt))
          (context-prefix (alist-get 'formatted context-payload))
-         (full-prompt (string-join (delq nil (list context-prefix prompt)) "\n\n")))
+         (session (codex-ide--get-default-session-for-current-buffer))
+         (session-prefix (unless (codex-ide--session-metadata-get session :session-context-sent)
+                           (codex-ide--format-session-context)))
+         (prompt-prefix (unless (codex-ide--leading-emacs-context-prefix-p prompt)
+                          context-prefix))
+         (full-prompt (string-join (delq nil (list session-prefix prompt-prefix prompt)) "\n\n")))
     `((context-summary . ,(alist-get 'summary context-payload))
+      (included-session-context . ,(and session-prefix t))
       (input . [((type . "text")
                  (text . ,full-prompt))]))))
 
@@ -3384,8 +3419,8 @@ If no live session exists, prompt to start one."
            session
            "thread/unsubscribe"
            `((threadId . ,current-thread-id)))))
-      (setf (codex-ide-session-thread-id session) nil
-            (codex-ide-session-last-sent-buffer-context session) nil)
+      (setf (codex-ide-session-thread-id session) nil)
+      (codex-ide--session-metadata-put session :session-context-sent nil)
       (codex-ide--reset-session-buffer session)
       (let ((result (codex-ide--request-sync
                      session
@@ -3394,6 +3429,7 @@ If no live session exists, prompt to start one."
                        (codex-ide--thread-start-params)))))
         (setf (codex-ide-session-thread-id session)
               (codex-ide--extract-thread-id result))
+        (codex-ide--session-metadata-put session :session-context-sent nil)
         (codex-ide-log-message
          session
          "Started replacement thread %s"
@@ -3449,8 +3485,7 @@ If no live session exists, prompt to start one."
                session
                "thread/unsubscribe"
                `((threadId . ,current-thread-id)))))
-          (setf (codex-ide-session-thread-id session) nil
-                (codex-ide-session-last-sent-buffer-context session) nil)
+          (setf (codex-ide-session-thread-id session) nil)
           (codex-ide--reset-session-buffer session)
           (codex-ide--resume-thread-into-session session thread-id "Resumed")
           (codex-ide--update-header-line session)
@@ -3673,11 +3708,14 @@ If no live session exists for the current buffer, prompt to start one first."
     (codex-ide--begin-turn-display session (alist-get 'context-summary payload))
     (redisplay)
     (condition-case err
-        (codex-ide--request-sync
-         session
-         "turn/start"
-         `((threadId . ,thread-id)
-           (input . ,(alist-get 'input payload))))
+        (progn
+          (codex-ide--request-sync
+           session
+           "turn/start"
+           `((threadId . ,thread-id)
+             (input . ,(alist-get 'input payload))))
+          (when (alist-get 'included-session-context payload)
+            (codex-ide--session-metadata-put session :session-context-sent t)))
       (error
        (codex-ide-log-message session "Prompt submission failed: %s" (error-message-string err))
        (codex-ide--reopen-input-after-submit-error session prompt-to-send err)
@@ -3688,34 +3726,6 @@ If no live session exists for the current buffer, prompt to start one first."
   "Submit the current in-buffer prompt to Codex."
   (interactive)
   (codex-ide--submit-prompt))
-
-;;;###autoload
-(defun codex-ide-send-active-buffer-context ()
-  "Send the currently tracked Emacs buffer context to the Codex session."
-  (interactive)
-  (let* ((session (codex-ide--session-for-current-project))
-         (working-dir (codex-ide-session-directory session))
-         (context (or (codex-ide--make-buffer-context)
-                      (gethash working-dir codex-ide--active-buffer-contexts))))
-    (cond
-     ((not context)
-      (user-error "Current buffer is not a tracked project file"))
-     ((codex-ide-session-current-turn-id session)
-      (user-error "A Codex turn is already running"))
-     (t
-      (setf (codex-ide-session-last-sent-buffer-context session) context)
-      (codex-ide-log-message
-       session
-       "Sending active buffer context for %s"
-       (alist-get 'display-file context))
-      (codex-ide--submit-prompt
-       (codex-ide--format-buffer-context
-        (codex-ide--context-with-selected-region
-         context
-         (or (and (not (codex-ide--session-buffer-p (current-buffer)))
-                  (current-buffer))
-             (codex-ide--get-active-buffer-object)))))
-      (message "Sent active buffer context to Codex")))))
 
 ;;;###autoload
 (defun codex-ide-toggle ()

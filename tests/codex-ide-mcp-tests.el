@@ -166,12 +166,14 @@
               (let ((tools (alist-get "tools"
                                       (alist-get "result" (nth 1 responses) nil nil #'equal)
                                       nil nil #'equal)))
-                (should (= (length tools) 7))
+                (should (= (length tools) 9))
                 (should
                  (equal (mapcar (lambda (tool)
                                   (alist-get "name" tool nil nil #'equal))
                                 tools)
                         '("get_all_open_file_buffers"
+                          "get_buffer_info"
+                          "get_buffer_text"
                           "get_diagnostics"
                           "get_window_list"
                           "ensure_file_buffer_open"

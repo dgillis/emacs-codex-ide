@@ -99,6 +99,7 @@ one of its tools."
 (defconst codex-ide-mcp-bridge--tool-names
   '("get_all_open_file_buffers"
     "get_buffer_info"
+    "get_buffer_text"
     "get_diagnostics"
     "get_window_list"
     "ensure_file_buffer_open"
@@ -537,6 +538,17 @@ Errors from `server-running-p' are treated as nil."
     (unless buffer
       (error "Unknown buffer: %s" (or buffer-name "nil")))
     (codex-ide-mcp-bridge--buffer-info buffer)))
+
+(defun codex-ide-mcp-bridge--tool-call--get_buffer_text (params)
+  "Handle a `get_buffer_text' bridge request with PARAMS."
+  (let* ((buffer-name (alist-get 'buffer params))
+         (buffer (and (stringp buffer-name)
+                      (get-buffer buffer-name))))
+    (unless buffer
+      (error "Unknown buffer: %s" (or buffer-name "nil")))
+    (with-current-buffer buffer
+      `((buffer . ,(buffer-name buffer))
+        (text . ,(buffer-substring-no-properties (point-min) (point-max)))))))
 
 (defun codex-ide-mcp-bridge--tool-call--get_diagnostics (params)
   "Handle a `get_diagnostics' bridge request with PARAMS."

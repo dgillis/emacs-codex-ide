@@ -24,6 +24,12 @@ Additional flags appended to the `codex app-server` command.")
 (defvar codex-ide-model nil "\
 Optional model name for new or resumed threads.")
 (custom-autoload 'codex-ide-model "codex-ide" t)
+(defvar codex-ide-session-baseline-prompt "\n- You are a Codex server running inside Emacs.\n- You can use MCP tools to inspect and interact with the running Emacs session.\n- Interpret Emacs terminology as relevant context to the user's request: buffers, regions, windows, point, mark, current file, etc.\n- Do not needlessly use Emacs commands to accomplish agent tasks." "\
+Optionally baseline prompt injected into the first real prompt of a new thread.
+When set to a non-empty string, `codex-ide' prepends it once as an
+`[Emacs session context]' block on the first submitted user turn for a
+brand-new thread. Resume and continue flows do not resend it.")
+(custom-autoload 'codex-ide-session-baseline-prompt "codex-ide" t)
 (defvar codex-ide-buffer-name-prefix "codex" "\
 Prefix used when creating Codex session buffer names.")
 (custom-autoload 'codex-ide-buffer-name-prefix "codex-ide" t)
@@ -63,13 +69,6 @@ Maximum number of lines to keep in each Codex log buffer.
 When a log buffer grows beyond this limit, older lines are removed from the
 top of the buffer.")
 (custom-autoload 'codex-ide-log-max-lines "codex-ide" t)
-(defvar codex-ide-include-active-buffer-context 'when-changed "\
-How `codex-ide' should include Emacs active-buffer context in prompts.
-When set to `when-changed', include the active file context only when it has
-changed since the last prompt sent to that session.
-When set to `always', include the active file context on every prompt.
-When nil, never include active-buffer context automatically.")
-(custom-autoload 'codex-ide-include-active-buffer-context "codex-ide" t)
 (defvar codex-ide-resume-summary-turn-limit 100 "\
 How many recent turns to summarize when resuming a stored thread.")
 (custom-autoload 'codex-ide-resume-summary-turn-limit "codex-ide" t)
@@ -114,8 +113,6 @@ Jump to the previous user prompt line in the session buffer." t)
 Jump to the next user prompt line in the session buffer." t)
 (autoload 'codex-ide-submit "codex-ide" "\
 Submit the current in-buffer prompt to Codex." t)
-(autoload 'codex-ide-send-active-buffer-context "codex-ide" "\
-Send the currently tracked Emacs buffer context to the Codex session." t)
 (autoload 'codex-ide-toggle "codex-ide" "\
 Toggle visibility of the Codex window for the current project." t)
 (autoload 'codex-ide-toggle-recent "codex-ide" "\

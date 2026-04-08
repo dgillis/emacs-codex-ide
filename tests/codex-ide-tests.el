@@ -151,6 +151,51 @@
               (forward-line 0)
               (should (looking-at-p "> ")))))))))
 
+(ert-deftest codex-ide-first-submit-injects-session-context-once ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (file-path (codex-ide-test--make-project-file
+                     project-dir "src/example.el" "(message \"hello\")\n"))
+         (requests '()))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((codex-ide-session-baseline-prompt "Project background instructions")
+              (session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-test-2")
+          (with-current-buffer (find-file-noselect file-path)
+            (setq-local default-directory (file-name-as-directory project-dir))
+            (goto-char (point-min))
+            (forward-char 3)
+            (let ((context (codex-ide--make-buffer-context)))
+              (puthash (alist-get 'project-dir context)
+                       context
+                       codex-ide--active-buffer-contexts)))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "Explain this")
+            (cl-letf (((symbol-function 'codex-ide--request-sync)
+                       (lambda (_session method params)
+                         (push (cons method params) requests)
+                         nil)))
+              (codex-ide--submit-prompt)
+              (codex-ide--finish-turn session)
+              (codex-ide--replace-current-input session "Explain again")
+              (codex-ide--submit-prompt)))
+          (let* ((calls (seq-filter (lambda (entry) (equal (car entry) "turn/start"))
+                                    (nreverse requests)))
+                 (first-text (alist-get 'text (aref (alist-get 'input (cdr (nth 0 calls))) 0)))
+                 (second-text (alist-get 'text (aref (alist-get 'input (cdr (nth 1 calls))) 0))))
+            (should (string-match-p "\\[Emacs session context\\]" first-text))
+            (should (string-match-p "Project background instructions" first-text))
+            (should (string-match-p "\\[Emacs prompt context\\]" first-text))
+            (should (string-match-p "Explain this" first-text))
+            (should-not (string-match-p "\\[Emacs session context\\]" second-text))
+            (should (string-match-p "\\[Emacs prompt context\\]" second-text))
+            (should (string-match-p "Explain again" second-text))
+            (should (codex-ide--session-metadata-get session :session-context-sent))))))))
+
+(ert-deftest codex-ide-session-baseline-prompt-ignores-empty-strings ()
+  (let ((codex-ide-session-baseline-prompt "   "))
+    (should-not (codex-ide--format-session-context))))
+
 (ert-deftest codex-ide-thread-choice-candidates-disambiguate-duplicate-previews ()
   (let* ((first-thread '((id . "thread-12345678")
                          (preview . "Investigate failure")))
@@ -385,13 +430,13 @@
             (should (looking-at-p "> h"))
             (should (string= (codex-ide--current-input session) "h"))))))))
 
-(ert-deftest codex-ide-compose-turn-input-includes-context-only-on-first-send ()
+(ert-deftest codex-ide-compose-turn-input-includes-context-on-every-send ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-path (codex-ide-test--make-project-file
                      project-dir "src/example.el" "(message \"hello\")\n")))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
-        (let ((codex-ide-include-active-buffer-context 'when-changed)
+        (let ((codex-ide-session-baseline-prompt "Session instructions")
               (session (codex-ide--create-process-session)))
           (with-current-buffer (find-file-noselect file-path)
             (setq-local default-directory (file-name-as-directory project-dir))
@@ -404,17 +449,22 @@
                        codex-ide--active-buffer-contexts)
               (let ((codex-ide--session session))
                 (let* ((first-item (aref (codex-ide--compose-turn-input "Explain this") 0))
+                       (_ (codex-ide--session-metadata-put session :session-context-sent t))
                        (second-item (aref (codex-ide--compose-turn-input "Explain again") 0))
                        (first-text (alist-get 'text first-item))
                        (second-text (alist-get 'text second-item)))
-                  (should (string-match-p "\\[Emacs context\\]" first-text))
-                  (should (string-match-p "\\[/Emacs context\\]" first-text))
                   (should (string-match-p "Last file/buffer focused in Emacs: .*src/example\\.el"
                                           first-text))
-                  (should-not (string-match-p "\\[Emacs context\\]" second-text))
-                  (should (string= second-text "Explain again"))
-                  (should (equal (codex-ide-session-last-sent-buffer-context session)
-                                 context)))))))))))
+                  (should-not (string-match-p "\\[Emacs session context\\]" second-text))
+                  (should (string-match-p "\\[Emacs session context\\]" first-text))
+                  (should (string-match-p "\\[/Emacs session context\\]" first-text))
+                  (should (string-match-p "\\[Emacs prompt context\\]" first-text))
+                  (should (string-match-p "\\[/Emacs prompt context\\]" first-text))
+                  (should-not (string-match-p "\\[Emacs session context\\]" second-text))
+                  (should (string-match-p "\\[Emacs prompt context\\]" second-text))
+                  (should (string-match-p "Last file/buffer focused in Emacs: .*src/example\\.el"
+                                          second-text))
+                  (should (string-match-p "Explain again" second-text)))))))))))
 
 (ert-deftest codex-ide-compose-turn-input-includes-selected-region-when-active ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
@@ -422,8 +472,7 @@
                      project-dir "src/example.el" "(message \"hello\")\n"))
          (prompt-text nil))
     (codex-ide-test-with-fixture project-dir
-      (let ((codex-ide-include-active-buffer-context 'always)
-            (transient-mark-mode t))
+      (let ((transient-mark-mode t))
         (with-current-buffer (find-file-noselect file-path)
           (setq-local default-directory (file-name-as-directory project-dir))
           (goto-char (point-min))
@@ -438,14 +487,38 @@
         (should (string-match-p "Selected region: line 1, column 1 to line 1, column 8"
                                 prompt-text))))))
 
+(ert-deftest codex-ide-compose-turn-input-does-not-duplicate-prompt-context-block ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (file-path (codex-ide-test--make-project-file
+                     project-dir "src/example.el" "(message \"hello\")\n")))
+    (codex-ide-test-with-fixture project-dir
+      (let ((codex-ide-session-baseline-prompt "Session instructions")
+            (session (codex-ide--create-process-session)))
+        (with-current-buffer (find-file-noselect file-path)
+          (setq-local default-directory (file-name-as-directory project-dir))
+          (goto-char (point-min))
+          (let ((context (codex-ide--make-buffer-context)))
+            (puthash (alist-get 'project-dir context)
+                     context
+                     codex-ide--active-buffer-contexts)
+            (let* ((prompt (codex-ide--format-buffer-context context))
+                   (text (alist-get 'text
+                                    (aref (let ((codex-ide--session session))
+                                            (codex-ide--compose-turn-input prompt))
+                                          0))))
+              (with-temp-buffer
+                (insert text)
+                (goto-char (point-min))
+                (should (= 1 (how-many "\\[Emacs prompt context\\]" (point-min) (point-max)))))
+              (should (string-match-p "\\[Emacs session context\\]" text)))))))))
+
 (ert-deftest codex-ide-prompt-uses-origin-buffer-context-for-non-file-buffers ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (other-dir (codex-ide-test--make-temp-project))
          (submitted nil))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
-        (let ((codex-ide-include-active-buffer-context 'always)
-              (transient-mark-mode t)
+        (let ((transient-mark-mode t)
               (session (codex-ide--create-process-session)))
           (setf (codex-ide-session-thread-id session) "thread-test-origin")
           (with-current-buffer (get-buffer-create "*codex origin*")
@@ -470,8 +543,8 @@
               (codex-ide-prompt)))
           (let* ((input (alist-get 'input submitted))
                  (text (alist-get 'text (aref input 0))))
-            (should (string-match-p "\\[Emacs context\\]" text))
-            (should (string-match-p "\\[/Emacs context\\]" text))
+            (should (string-match-p "\\[Emacs prompt context\\]" text))
+            (should (string-match-p "\\[/Emacs prompt context\\]" text))
             (should (string-match-p
                      "Last file/buffer focused in Emacs: \\[buffer\\] \\*codex origin\\*"
                      text))
@@ -487,8 +560,7 @@
          (submitted nil))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
-        (let ((codex-ide-include-active-buffer-context 'always)
-              (session (codex-ide--create-process-session)))
+        (let ((session (codex-ide--create-process-session)))
           (setf (codex-ide-session-thread-id session) "thread-test-context-line")
           (with-current-buffer (find-file-noselect file-path)
             (setq-local default-directory (file-name-as-directory project-dir))
@@ -510,9 +582,9 @@
                 (should (string-match-p
                          "\n> Explain this\nContext: file=.*src/example\\.el\" buffer=\"example\\.el\" line=1 column=3"
                          buffer-text))
-                (should (string-match-p "\\[Emacs context\\]"
+                (should (string-match-p "\\[Emacs prompt context\\]"
                                         (alist-get 'text (aref input 0))))
-                (should (string-match-p "\\[/Emacs context\\]"
+                (should (string-match-p "\\[/Emacs prompt context\\]"
                                         (alist-get 'text (aref input 0))))))))))))
 
 (ert-deftest codex-ide-process-filter-handles-responses-notifications-and-partials ()
@@ -683,17 +755,20 @@
   (should
    (equal
     (codex-ide--thread-choice-preview
-     (concat "[Emacs context]\n"
+     (concat "[Emacs session context]\n"
+             "Use Emacs-aware behavior.\n"
+             "[/Emacs session context]\n\n"
+             "[Emacs prompt context]\n"
              "Buffer: example.el\n"
-             "[/Emacs context]\n\n  Explain the failure"))
+             "[/Emacs prompt context]\n\n  Explain the failure"))
     "Explain the failure")))
 
 (ert-deftest codex-ide-thread-choice-preview-hides-truncated-emacs-context-prefix ()
   (should
    (equal
     (codex-ide--thread-choice-preview
-     (concat "[Emacs context]\n"
-             "You are Codex running inside Emacs.\n"
+     (concat "[Emacs session context]\n"
+             "Take the following into account.\n"
              "Prefer Emacs-aware behavior"))
     "")))
 
@@ -701,10 +776,13 @@
   (should
    (equal
     (codex-ide--thread-read-display-user-text
-     (concat "[Emacs context]\n"
+     (concat "[Emacs session context]\n"
+             "Use Emacs-aware behavior.\n"
+             "[/Emacs session context]\n\n"
+             "[Emacs prompt context]\n"
              "Buffer: example.el\n"
              "Cursor: line 10, column 2\n"
-             "[/Emacs context]\n\n"
+             "[/Emacs prompt context]\n\n"
              "Explain the failure"))
     "Explain the failure")))
 
@@ -712,9 +790,9 @@
   (should
    (equal
     (codex-ide--thread-read-display-user-text
-     (concat "[Emacs context]\n"
+     (concat "[Emacs prompt context]\n"
              "Buffer: example.el\n"
-             "[/Emacs context]\n\n"
+             "[/Emacs prompt context]\n\n"
              "First line\n"
              "Second line\n"
              "Third line"))
@@ -1180,62 +1258,29 @@
             (should entry)
             (should
              (equal entry
-                    (codex-ide-mcp-bridge--tool-call--get_buffer_info
+                     (codex-ide-mcp-bridge--tool-call--get_buffer_info
                      `((buffer . ,(buffer-name buffer))))))))
       (kill-buffer buffer))))
 
-(ert-deftest codex-ide-send-active-buffer-context-submits-formatted-context ()
-  (let* ((project-dir (codex-ide-test--make-temp-project))
-         (file-path (codex-ide-test--make-project-file
-                     project-dir "lib/example.el" "(+ 1 2)\n"))
-         (submitted nil))
-    (codex-ide-test-with-fixture project-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session (codex-ide--create-process-session)))
-          (setf (codex-ide-session-thread-id session) "thread-test-2")
-          (with-current-buffer (find-file-noselect file-path)
-            (setq-local default-directory (file-name-as-directory project-dir))
-            (goto-char (point-min))
-            (forward-char 2)
-            (let ((context (codex-ide--make-buffer-context)))
-              (puthash (alist-get 'project-dir context)
-                       context
-                       codex-ide--active-buffer-contexts)
-              (cl-letf (((symbol-function 'codex-ide--submit-prompt)
-                         (lambda (prompt)
-                           (setq submitted prompt))))
-                (codex-ide-send-active-buffer-context)
-                (should (string-match-p "\\[Emacs context\\]" submitted))
-                (should (string-match-p "\\[/Emacs context\\]" submitted))
-                (should (string-match-p "Last file/buffer focused in Emacs: .*lib/example\\.el"
-                                        submitted))
-                (should (string-match-p "Buffer: example.el" submitted))))))))))
+(ert-deftest codex-ide-mcp-bridge-get-buffer-text-returns-full-buffer-contents ()
+  (let ((buffer (generate-new-buffer " *codex-ide-mcp-bridge-text*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (insert "alpha\nbeta\n")
+          (should
+           (equal
+            (codex-ide-mcp-bridge--tool-call--get_buffer_text
+             `((buffer . ,(buffer-name buffer))))
+            `((buffer . ,(buffer-name buffer))
+              (text . "alpha\nbeta\n")))))
+      (kill-buffer buffer))))
 
-(ert-deftest codex-ide-send-active-buffer-context-includes-selected-region ()
-  (let* ((project-dir (codex-ide-test--make-temp-project))
-         (file-path (codex-ide-test--make-project-file
-                     project-dir "lib/example.el" "(+ 1 2)\n"))
-         (submitted nil))
-    (codex-ide-test-with-fixture project-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session (codex-ide--create-process-session))
-              (transient-mark-mode t))
-          (setf (codex-ide-session-thread-id session) "thread-test-3")
-          (with-current-buffer (find-file-noselect file-path)
-            (setq-local default-directory (file-name-as-directory project-dir))
-            (goto-char (point-min))
-            (forward-char 1)
-            (push-mark (point) t t)
-            (forward-char 4)
-            (activate-mark)
-            (codex-ide--track-active-buffer (current-buffer)))
-          (with-current-buffer (codex-ide-session-buffer session)
-            (cl-letf (((symbol-function 'codex-ide--submit-prompt)
-                       (lambda (prompt)
-                         (setq submitted prompt))))
-              (codex-ide-send-active-buffer-context)))
-          (should (string-match-p "Selected region: line 1, column 1 to line 1, column 5"
-                                  submitted)))))))
+(ert-deftest codex-ide-mcp-server-schema-includes-buffer-info-and-text-tools ()
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name "bin/codex-ide-mcp-server.py"
+                                            default-directory))
+    (should (re-search-forward "name=\"get_buffer_info\"" nil t))
+    (should (re-search-forward "name=\"get_buffer_text\"" nil t))))
 
 (ert-deftest codex-ide-stop-errors-outside-session-buffer ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -1264,8 +1309,7 @@
 (ert-deftest codex-ide-context-payload-uses-explicit-non-file-origin-buffer ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
-      (let ((codex-ide-include-active-buffer-context 'always)
-            (origin-buffer (generate-new-buffer " *codex-ide-origin*")))
+      (let ((origin-buffer (generate-new-buffer " *codex-ide-origin*")))
         (unwind-protect
             (with-current-buffer origin-buffer
               (setq-local default-directory (file-name-as-directory project-dir))
