@@ -487,6 +487,18 @@ When SUFFIX is nil, return BUFFER-NAME unchanged."
       'codex-ide-status-error-face)
      (t 'codex-ide-status-busy-face))))
 
+(defun codex-ide--normalize-session-status (status)
+  "Return a normalized session STATUS string, or nil when unknown."
+  (let ((raw
+         (cond
+          ((stringp status) status)
+          ((listp status) (alist-get 'type status))
+          (t nil))))
+    (when (stringp raw)
+      (let ((trimmed (string-trim raw)))
+        (unless (string-empty-p trimmed)
+          trimmed)))))
+
 (defun codex-ide--mode-line-status (&optional session)
   "Return the current modeline status segment for SESSION."
   (setq session (or session (and (boundp 'codex-ide--session) codex-ide--session)))
@@ -2767,6 +2779,32 @@ ACTION is a short past-tense label used in log messages, such as
   (codex-ide--display-buffer-in-side-window (codex-ide-session-buffer session))
   session)
 
+(defun codex-ide--reset-session-buffer (session)
+  "Reset SESSION's transcript buffer to an empty session header."
+  (let ((buffer (codex-ide-session-buffer session))
+        (working-dir (codex-ide-session-directory session)))
+    (with-current-buffer buffer
+      (setq-local default-directory working-dir)
+      (setq-local codex-ide--session session)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "Codex session for %s\n\n"
+                        (abbreviate-file-name working-dir)))
+        (codex-ide--freeze-region (point-min) (point-max)))))
+  (setf (codex-ide-session-current-turn-id session) nil
+        (codex-ide-session-current-message-item-id session) nil
+        (codex-ide-session-current-message-prefix-inserted session) nil
+        (codex-ide-session-current-message-start-marker session) nil
+        (codex-ide-session-output-prefix-inserted session) nil
+        (codex-ide-session-item-states session) (make-hash-table :test 'equal)
+        (codex-ide-session-input-overlay session) nil
+        (codex-ide-session-input-start-marker session) nil
+        (codex-ide-session-input-prompt-start-marker session) nil
+        (codex-ide-session-prompt-history-index session) nil
+        (codex-ide-session-prompt-history-draft session) nil
+        (codex-ide-session-interrupt-requested session) nil
+        (codex-ide-session-status session) "idle"))
+
 (defun codex-ide--query-session-for-thread-selection (&optional directory)
   "Return a live session suitable for thread selection in DIRECTORY."
   (or (let ((session (codex-ide--session-for-current-buffer)))
@@ -3087,12 +3125,10 @@ CHOICES is an alist of labels to returned values."
        (codex-ide--update-header-line session))
       ("thread/status/changed"
        (let* ((thread (alist-get 'thread params))
-              (status (alist-get 'status thread)))
-         (setf (codex-ide-session-status session)
-               (cond
-                ((stringp status) status)
-                ((alist-get 'type status))
-                (t (format "%S" status)))))
+              (status (alist-get 'status thread))
+              (normalized-status (codex-ide--normalize-session-status status)))
+         (when normalized-status
+           (setf (codex-ide-session-status session) normalized-status)))
        (codex-ide-log-message
         session
         "Thread status changed to %s"
@@ -3335,6 +3371,53 @@ If no live session exists, prompt to start one."
     (quit
      (message "Codex resume canceled")
      nil)))
+
+;;;###autoload
+(defun codex-ide-resume-replace-existing ()
+  "Resume a different Codex thread into the current session buffer."
+  (interactive)
+  (let ((session (and (derived-mode-p 'codex-ide-session-mode)
+                      (codex-ide--session-for-current-buffer))))
+    (unless session
+      (user-error "Resume (replace existing) is only available in a Codex session buffer"))
+    (condition-case nil
+        (let* ((working-dir (codex-ide-session-directory session))
+               (current-thread-id (codex-ide-session-thread-id session))
+               (thread (codex-ide--pick-thread session current-thread-id))
+               (thread-id (alist-get 'id thread))
+               (other-session (codex-ide--session-for-thread-id thread-id working-dir)))
+          (when (codex-ide-session-current-turn-id session)
+            (user-error "A Codex turn is already running"))
+          (when (and other-session
+                     (not (eq other-session session)))
+            (let ((other-buffer (codex-ide-session-buffer other-session)))
+              (codex-ide--teardown-session other-session t)
+              (when (buffer-live-p other-buffer)
+                (let ((kill-buffer-query-functions nil))
+                  (kill-buffer other-buffer)))))
+          (when current-thread-id
+            (codex-ide-log-message
+             session
+             "Unsubscribing thread %s before resume-replace"
+             current-thread-id)
+            (ignore-errors
+              (codex-ide--request-sync
+               session
+               "thread/unsubscribe"
+               `((threadId . ,current-thread-id)))))
+          (setf (codex-ide-session-thread-id session) nil
+                (codex-ide-session-last-sent-buffer-context session) nil)
+          (codex-ide--reset-session-buffer session)
+          (codex-ide--resume-thread-into-session session thread-id "Resumed")
+          (codex-ide--update-header-line session)
+          (codex-ide--show-session-buffer session)
+          (codex-ide--insert-input-prompt session)
+          (message "Codex resumed in %s"
+                   (file-name-nondirectory (directory-file-name working-dir)))
+          session)
+      (quit
+       (message "Codex resume canceled")
+       nil))))
 
 ;;;###autoload
 (defun codex-ide-continue ()

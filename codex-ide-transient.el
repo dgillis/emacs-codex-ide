@@ -13,6 +13,7 @@
 (declare-function codex-ide-mcp-bridge-disable "codex-ide-mcp-bridge" ())
 (declare-function codex-ide "codex-ide" ())
 (declare-function codex-ide-resume "codex-ide" ())
+(declare-function codex-ide-resume-replace-existing "codex-ide" ())
 (declare-function codex-ide-continue "codex-ide" ())
 (declare-function codex-ide-prompt "codex-ide" ())
 (declare-function codex-ide-stop "codex-ide" ())
@@ -41,6 +42,10 @@
 (defvar codex-ide-window-height)
 (defvar codex-ide-enable-emacs-tool-bridge)
 (defvar codex-ide-emacs-bridge-require-approval)
+
+(defun codex-ide--in-session-buffer-p ()
+  "Return non-nil when the current buffer is a Codex session buffer."
+  (derived-mode-p 'codex-ide-session-mode))
 
 (defun codex-ide--has-active-session-p ()
   "Return non-nil if the current project has an active Codex session."
@@ -220,7 +225,10 @@
     ("s" codex-ide--start-from-menu :description codex-ide--start-description)
     ("c" codex-ide--continue-from-menu :description codex-ide--continue-description)
     ("r" codex-ide--resume-from-menu :description codex-ide--resume-description)
-    ("q" "Stop current session" codex-ide-stop)
+    ("R" "Resume (replace existing)" codex-ide-resume-replace-existing
+     :if codex-ide--in-session-buffer-p)
+    ("q" "Stop current session" codex-ide-stop
+     :if codex-ide--in-session-buffer-p)
     ("l" "List session buffers" codex-ide-list-session-buffers)]
    ["Navigation"
    ("b" "Switch to Codex buffer" codex-ide-switch-to-buffer)

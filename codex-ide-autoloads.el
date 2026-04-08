@@ -85,6 +85,8 @@ Major mode for Codex IDE log buffers.
 Start Codex for the current project or directory." t)
 (autoload 'codex-ide-resume "codex-ide" "\
 Resume a Codex session using an Emacs picker." t)
+(autoload 'codex-ide-resume-replace-existing "codex-ide" "\
+Resume a different Codex thread into the current session buffer." t)
 (autoload 'codex-ide-continue "codex-ide" "\
 Resume the most recent Codex session for the current directory." t)
 (autoload 'codex-ide-check-status "codex-ide" "\

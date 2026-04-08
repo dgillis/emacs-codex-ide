@@ -267,6 +267,13 @@
       (should (eq (codex-ide--resume-from-menu) 'resumed))
       (should called))))
 
+(ert-deftest codex-ide-resume-replace-existing-errors-outside-session-buffer ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (with-temp-buffer
+        (setq-local default-directory (file-name-as-directory project-dir))
+        (should-error (codex-ide-resume-replace-existing) :type 'user-error)))))
+
 (ert-deftest codex-ide-start-from-menu-starts-when-no-session-exists ()
   (let ((started nil))
     (cl-letf (((symbol-function 'codex-ide)
@@ -514,6 +521,20 @@
           (should (equal response-result '((ok . t))))
           (should (null response-error))
           (should (string= (codex-ide-session-status session) "running")))))))
+
+(ert-deftest codex-ide-thread-status-null-does-not-overwrite-running-state ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-status session) "running")
+          (codex-ide--handle-notification
+           session
+           '((method . "thread/status/changed")
+             (params . ((thread . ((status . nil)))))))
+          (should (string= (codex-ide-session-status session) "running"))
+          (should (string-match-p "Codex:Running"
+                                  (codex-ide--mode-line-status session))))))))
 
 (ert-deftest codex-ide-trace-back-to-log-jumps-to-originating-notification-line ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -979,6 +1000,60 @@
                 (should (equal requests '()))
                 (should (process-live-p (codex-ide-session-process current-session)))
                 (should (process-live-p (codex-ide-session-process reused-session)))))))))))
+
+(ert-deftest codex-ide-resume-replace-existing-reuses-current-buffer ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (selected-thread '((id . "thread-reused")
+                           (preview . "Existing thread")))
+        (displayed nil)
+        (requests '())
+        (thread-read
+         '((thread . ((id . "thread-reused")))
+           (turns . (((id . "turn-1")
+                      (items . (((type . "userMessage")
+                                 (content . (((type . "text")
+                                              (text . "Switch threads")))))
+                                ((type . "agentMessage")
+                                 (id . "item-1")
+                                 (text . "Switched."))))))))))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--display-buffer-in-side-window)
+                   (lambda (buffer)
+                     (setq displayed buffer)
+                     (selected-window)))
+                  ((symbol-function 'codex-ide--pick-thread)
+                   (lambda (&optional _session omit-thread-id)
+                     (should (equal omit-thread-id "thread-current"))
+                     selected-thread))
+                  ((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method _params)
+                     (push method requests)
+                     (pcase method
+                       ("thread/unsubscribe" '((ok . t)))
+                       ("thread/read" thread-read)
+                       ("thread/resume" '((ok . t)))
+                       (_ (ert-fail (format "Unexpected method %s" method)))))))
+          (let ((current-session (codex-ide--create-process-session))
+                (other-session (codex-ide--create-process-session)))
+            (setf (codex-ide-session-thread-id current-session) "thread-current"
+                  (codex-ide-session-thread-id other-session) "thread-reused")
+            (with-current-buffer (codex-ide-session-buffer current-session)
+              (insert "old transcript")
+              (let ((result (codex-ide-resume-replace-existing)))
+                (should (eq result current-session))
+                (should (eq displayed (codex-ide-session-buffer current-session)))
+                (should (string= (codex-ide-session-thread-id current-session)
+                                 "thread-reused"))
+                (should (equal (nreverse requests)
+                               '("thread/unsubscribe" "thread/read" "thread/resume")))
+                (should-not (memq other-session codex-ide--sessions))
+                (should-not (buffer-live-p (codex-ide-session-buffer other-session)))
+                (should (string-match-p "^> Switch threads"
+                                        (buffer-string)))
+                (goto-char (point-max))
+                (forward-line 0)
+                (should (looking-at-p "> "))))))))))
 
 (ert-deftest codex-ide-start-session-continue-reuses-existing-session-for-latest-thread ()
   (let ((project-dir (codex-ide-test--make-temp-project))
