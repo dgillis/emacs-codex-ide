@@ -1650,6 +1650,26 @@
       (should (= (get-text-property pos 'codex-ide-column) 2))
       (should (equal (get-text-property pos 'display) "foo.el")))))
 
+(ert-deftest codex-ide-parse-file-link-target-normalizes-escaped-slashes ()
+  (should
+   (equal (codex-ide--parse-file-link-target "\\/tmp\\/foo.el#L3C2")
+          '("/tmp/foo.el" 3 2))))
+
+(ert-deftest codex-ide-render-markdown-region-renders-file-links-with-escaped-slashes ()
+  (with-temp-buffer
+    (insert "See [`foo.el`](\\/tmp\\/foo.el#L3C2)\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (goto-char (point-min))
+    (search-forward "foo.el")
+    (let ((pos (1- (point))))
+      (should (button-at pos))
+      (should (eq (get-text-property pos 'face) 'link))
+      (should (eq (get-text-property pos 'action) #'codex-ide--open-file-link))
+      (should (equal (get-text-property pos 'codex-ide-path) "/tmp/foo.el"))
+      (should (= (get-text-property pos 'codex-ide-line) 3))
+      (should (= (get-text-property pos 'codex-ide-column) 2))
+      (should (equal (get-text-property pos 'display) "foo.el")))))
+
 (ert-deftest codex-ide-render-markdown-region-renders-inline-code ()
   (with-temp-buffer
     (insert "prefix `code` suffix")

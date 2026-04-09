@@ -980,20 +980,22 @@ inserted text."
 
 (defun codex-ide--parse-file-link-target (target)
   "Parse markdown file TARGET into (PATH LINE COLUMN), or nil."
-  (cond
-   ((string-match "\\`\\(/[^#\n]+\\)#L\\([0-9]+\\)\\(?:C\\([0-9]+\\)\\)?\\'" target)
-    (list (match-string 1 target)
-          (string-to-number (match-string 2 target))
-          (when-let ((column (match-string 3 target)))
-            (string-to-number column))))
-   ((string-match "\\`\\(/[^:\n]+\\):\\([0-9]+\\)\\(?::\\([0-9]+\\)\\)?\\'" target)
-    (list (match-string 1 target)
-          (string-to-number (match-string 2 target))
-          (when-let ((column (match-string 3 target)))
-            (string-to-number column))))
-   ((string-prefix-p "/" target)
-    (list target nil nil))
-   (t nil)))
+  (let ((normalized
+         (replace-regexp-in-string "\\\\/" "/" target t t)))
+    (cond
+     ((string-match "\\`\\(/[^#\n]+\\)#L\\([0-9]+\\)\\(?:C\\([0-9]+\\)\\)?\\'" normalized)
+      (list (match-string 1 normalized)
+            (string-to-number (match-string 2 normalized))
+            (when-let ((column (match-string 3 normalized)))
+              (string-to-number column))))
+     ((string-match "\\`\\(/[^:\n]+\\):\\([0-9]+\\)\\(?::\\([0-9]+\\)\\)?\\'" normalized)
+      (list (match-string 1 normalized)
+            (string-to-number (match-string 2 normalized))
+            (when-let ((column (match-string 3 normalized)))
+              (string-to-number column))))
+     ((string-prefix-p "/" normalized)
+      (list normalized nil nil))
+     (t nil))))
 
 (defun codex-ide--open-file-link (_button)
   "Open the file link described by text properties at point."
@@ -1147,7 +1149,7 @@ inserted text."
       (goto-char start)
       (codex-ide--render-fenced-code-blocks start end)
       (goto-char start)
-      (while (re-search-forward "\\(\\[\\([^]\n]+\\)\\](\\(/[^)\n]+\\))\\)" end t)
+      (while (re-search-forward "\\(\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))\\)" end t)
         (unless (or (get-text-property (match-beginning 1) 'codex-ide-markdown)
                     (get-text-property (1- (match-end 1)) 'codex-ide-markdown))
           (let* ((match-start (match-beginning 1))
