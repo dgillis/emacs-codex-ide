@@ -77,7 +77,9 @@
   (let ((id (tabulated-list-get-id)))
     (unless id
       (user-error "No list entry at point"))
-    (funcall codex-ide-session-list--visit-function id)))
+    (let ((codex-ide-display-buffer-options '(:reuse-buffer-window
+                                              :reuse-mode-window)))
+      (funcall codex-ide-session-list--visit-function id))))
 
 (defun codex-ide-session-list--setup
     (buffer-name mode format entries-function visit-function

@@ -32,10 +32,6 @@
 (defvar codex-ide-sandbox-mode)
 (defvar codex-ide-personality)
 (defvar codex-ide-focus-on-open)
-(defvar codex-ide-use-side-window)
-(defvar codex-ide-window-side)
-(defvar codex-ide-window-width)
-(defvar codex-ide-window-height)
 (defvar codex-ide-enable-emacs-tool-bridge)
 (defvar codex-ide-emacs-bridge-require-approval)
 
@@ -110,41 +106,11 @@
                (format "set to %s" codex-ide-model)
              "cleared")))
 
-(transient-define-suffix codex-ide--set-window-side (side)
-  "Set `codex-ide-window-side' to SIDE."
-  :description "Set window side"
-  (interactive (list (intern (completing-read "Window side: "
-                                              '("left" "right" "top" "bottom")
-                                              nil t nil nil
-                                              (symbol-name codex-ide-window-side)))))
-  (setq codex-ide-window-side side)
-  (message "Codex window side set to %s" side))
-
-(transient-define-suffix codex-ide--set-window-width (width)
-  "Set `codex-ide-window-width' to WIDTH."
-  :description "Set window width"
-  (interactive (list (read-number "Window width: " codex-ide-window-width)))
-  (setq codex-ide-window-width width)
-  (message "Codex window width set to %d" width))
-
-(transient-define-suffix codex-ide--set-window-height (height)
-  "Set `codex-ide-window-height' to HEIGHT."
-  :description "Set window height"
-  (interactive (list (read-number "Window height: " codex-ide-window-height)))
-  (setq codex-ide-window-height height)
-  (message "Codex window height set to %d" height))
-
 (transient-define-suffix codex-ide--toggle-focus-on-open ()
   "Toggle `codex-ide-focus-on-open'."
   (interactive)
   (setq codex-ide-focus-on-open (not codex-ide-focus-on-open))
   (message "Focus on open %s" (if codex-ide-focus-on-open "enabled" "disabled")))
-
-(transient-define-suffix codex-ide--toggle-use-side-window ()
-  "Toggle `codex-ide-use-side-window'."
-  (interactive)
-  (setq codex-ide-use-side-window (not codex-ide-use-side-window))
-  (message "Use side window %s" (if codex-ide-use-side-window "enabled" "disabled")))
 
 (transient-define-suffix codex-ide--toggle-emacs-tool-bridge ()
   "Toggle `codex-ide-enable-emacs-tool-bridge'."
@@ -175,10 +141,6 @@
   (customize-save-variable 'codex-ide-sandbox-mode codex-ide-sandbox-mode)
   (customize-save-variable 'codex-ide-personality codex-ide-personality)
   (customize-save-variable 'codex-ide-focus-on-open codex-ide-focus-on-open)
-  (customize-save-variable 'codex-ide-use-side-window codex-ide-use-side-window)
-  (customize-save-variable 'codex-ide-window-side codex-ide-window-side)
-  (customize-save-variable 'codex-ide-window-width codex-ide-window-width)
-  (customize-save-variable 'codex-ide-window-height codex-ide-window-height)
   (customize-save-variable 'codex-ide-enable-emacs-tool-bridge
                            codex-ide-enable-emacs-tool-bridge)
   (customize-save-variable 'codex-ide-emacs-bridge-require-approval
@@ -212,17 +174,10 @@
     ("p" "Set CLI path" codex-ide--set-cli-path)
     ("m" "Set model" codex-ide--set-model)
     ("x" "Set extra flags" codex-ide--set-cli-extra-flags)
-    ("a" "Set approval policy" codex-ide--set-approval-policy)
-    ("P" "Set personality" codex-ide--set-personality)
-    ("S" "Set sandbox mode" codex-ide--set-sandbox-mode)]
+   ("a" "Set approval policy" codex-ide--set-approval-policy)
+   ("P" "Set personality" codex-ide--set-personality)
+   ("S" "Set sandbox mode" codex-ide--set-sandbox-mode)]
    ["Window"
-    ("u" "Toggle side window" codex-ide--toggle-use-side-window
-     :description (lambda ()
-                     (format "Use side window (%s)"
-                             (if codex-ide-use-side-window "ON" "OFF"))))
-    ("s" "Set window side" codex-ide--set-window-side)
-    ("w" "Set window width" codex-ide--set-window-width)
-    ("h" "Set window height" codex-ide--set-window-height)
     ("f" "Toggle focus on open" codex-ide--toggle-focus-on-open
      :description (lambda ()
                      (format "Focus on open (%s)"

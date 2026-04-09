@@ -175,12 +175,9 @@ change the prefix with =codex-ide-buffer-name-prefix=.
 
 ** Window Management
 
-Codex IDE can either reuse regular windows or display buffers in a dedicated
-side window.
-
-By default, =codex-ide-use-side-window= is nil, which keeps display behavior
-closer to normal Emacs buffer switching. If you enable side windows, placement
-and dimensions are configurable.
+Codex IDE reuses normal Emacs buffer display behavior when showing session
+buffers. Set =codex-ide-focus-on-open= to control whether the selected window
+switches to the displayed Codex buffer.
 
 ** Active Buffer Context
 
@@ -235,10 +232,6 @@ unrestricted Elisp evaluation to Codex.
 | ~codex-ide-cli-extra-flags~ | Extra flags appended to =codex app-server= | ~""~ |
 | ~codex-ide-model~ | Optional model name for new or resumed threads | ~nil~ |
 | ~codex-ide-buffer-name-prefix~ | Prefix used in session and log buffer names | ~"codex"~ |
-| ~codex-ide-use-side-window~ | Display Codex buffers in a side window | ~nil~ |
-| ~codex-ide-window-side~ | Side for side-window placement | ~'right~ |
-| ~codex-ide-window-width~ | Side-window width for left/right placement | ~90~ |
-| ~codex-ide-window-height~ | Side-window height for top/bottom placement | ~20~ |
 | ~codex-ide-focus-on-open~ | Focus the Codex window after displaying it | ~t~ |
 | ~codex-ide-approval-policy~ | Approval policy for new or resumed threads | ~"on-request"~ |
 | ~codex-ide-sandbox-mode~ | Sandbox mode for new or resumed threads | ~"workspace-write"~ |
@@ -258,29 +251,13 @@ unrestricted Elisp evaluation to Codex.
 | ~codex-ide-emacs-bridge-startup-timeout~ | MCP bridge startup timeout in seconds | ~10~ |
 | ~codex-ide-emacs-bridge-tool-timeout~ | MCP tool call timeout in seconds | ~60~ |
 
-** Side Window Configuration
+** Window Display
 
-To use side windows and customize placement:
+Codex IDE uses normal =display-buffer= behavior. To keep focus in the current
+window when opening Codex:
 
 #+begin_src emacs-lisp
-;; Show Codex in a side window on the right
-(setq codex-ide-use-side-window t
-      codex-ide-window-side 'right
-      codex-ide-window-width 100)
-
-;; Or place it at the bottom with a custom height
-(setq codex-ide-use-side-window t
-      codex-ide-window-side 'bottom
-      codex-ide-window-height 24)
-
-;; Keep focus in the current window when opening Codex
 (setq codex-ide-focus-on-open nil)
-#+end_src
-
-If you prefer ordinary buffer display behavior:
-
-#+begin_src emacs-lisp
-(setq codex-ide-use-side-window nil)
 #+end_src
 
 ** Session Defaults

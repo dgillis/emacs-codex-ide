@@ -33,21 +33,14 @@ brand-new thread. Resume and continue flows do not resend it.")
 (defvar codex-ide-buffer-name-prefix "codex" "\
 Prefix used when creating Codex session buffer names.")
 (custom-autoload 'codex-ide-buffer-name-prefix "codex-ide" t)
-(defvar codex-ide-use-side-window nil "\
-Whether to display Codex buffers in a side window.")
-(custom-autoload 'codex-ide-use-side-window "codex-ide" t)
-(defvar codex-ide-window-side 'right "\
-Side of the frame where Codex should be displayed.")
-(custom-autoload 'codex-ide-window-side "codex-ide" t)
-(defvar codex-ide-window-width 90 "\
-Width of the Codex side window when using left or right placement.")
-(custom-autoload 'codex-ide-window-width "codex-ide" t)
-(defvar codex-ide-window-height 20 "\
-Height of the Codex side window when using top or bottom placement.")
-(custom-autoload 'codex-ide-window-height "codex-ide" t)
 (defvar codex-ide-focus-on-open t "\
 Whether to focus the Codex window after showing it.")
 (custom-autoload 'codex-ide-focus-on-open "codex-ide" t)
+(defconst codex-ide-display-buffer-options nil "\
+Ordered display policy keys for `codex-ide-display-buffer'.
+
+Supported keys are `:reuse-buffer-window', `:reuse-mode-window',
+`:other-window', and `:new-window'.")
 (defvar codex-ide-session-enable-visual-line-mode t "\
 Whether Codex session buffers should enable `visual-line-mode' by default.")
 (custom-autoload 'codex-ide-session-enable-visual-line-mode "codex-ide" t)

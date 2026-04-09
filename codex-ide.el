@@ -159,37 +159,17 @@ brand-new thread. Resume and continue flows do not resend it."
   :group 'codex-ide)
 
 ;;;###autoload
-(defcustom codex-ide-use-side-window nil
-  "Whether to display Codex buffers in a side window."
-  :type 'boolean
-  :group 'codex-ide)
-
-;;;###autoload
-(defcustom codex-ide-window-side 'right
-  "Side of the frame where Codex should be displayed."
-  :type '(choice (const :tag "Left" left)
-                 (const :tag "Right" right)
-                 (const :tag "Top" top)
-                 (const :tag "Bottom" bottom))
-  :group 'codex-ide)
-
-;;;###autoload
-(defcustom codex-ide-window-width 90
-  "Width of the Codex side window when using left or right placement."
-  :type 'integer
-  :group 'codex-ide)
-
-;;;###autoload
-(defcustom codex-ide-window-height 20
-  "Height of the Codex side window when using top or bottom placement."
-  :type 'integer
-  :group 'codex-ide)
-
-;;;###autoload
 (defcustom codex-ide-focus-on-open t
   "Whether to focus the Codex window after showing it."
   :type 'boolean
   :group 'codex-ide)
+
+;;;###autoload
+(defconst codex-ide-display-buffer-options nil
+  "Ordered display policy keys for `codex-ide-display-buffer'.
+
+Supported keys are `:reuse-buffer-window', `:reuse-mode-window',
+`:other-window', and `:new-window'.")
 
 ;;;###autoload
 (defcustom codex-ide-session-enable-visual-line-mode t
@@ -838,54 +818,37 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
           (when (not (string-empty-p codex-ide-cli-extra-flags))
             (split-string-shell-command codex-ide-cli-extra-flags))))
 
-(defun codex-ide--display-buffer-in-side-window (buffer)
-  "Display BUFFER according to Codex window customizations."
+(defun codex-ide-display-buffer (buffer)
+  "Display BUFFER according to Codex window selection preferences."
   (codex-ide--remember-buffer-context-before-switch)
-  (let ((window
-         (if codex-ide-use-side-window
-             (let* ((side codex-ide-window-side)
-                    (window-parameters '((no-delete-other-windows . t)))
-                    (display-buffer-alist
-                     `((,(regexp-quote (buffer-name buffer))
-                        (display-buffer-in-side-window)
-                        (side . ,side)
-                        (slot . 0)
-                        ,@(when (memq side '(left right))
-                            `((window-width . ,codex-ide-window-width)))
-                        ,@(when (memq side '(top bottom))
-                            `((window-height . ,codex-ide-window-height)))
-                        (window-parameters . ,window-parameters)))))
-               (display-buffer buffer))
-           (display-buffer buffer))))
-    (when (and window codex-ide-focus-on-open)
-      (select-window window))
-    (when (and window
-               codex-ide-use-side-window
-               (memq codex-ide-window-side '(top bottom)))
-      (set-window-text-height window codex-ide-window-height)
-      (set-window-dedicated-p window t))
+  (let* ((selected-window (selected-window))
+         (windows (window-list nil 'no-minibuf selected-window))
+         (config codex-ide-display-buffer-options)
+         (window
+          (or (and (memq :reuse-buffer-window config)
+                   (get-buffer-window buffer 0))
+              (and (memq :reuse-mode-window config)
+                   (seq-find
+                    (lambda (candidate)
+                      (codex-ide--session-buffer-p (window-buffer candidate)))
+                    windows))
+              (and (memq :other-window config)
+                   (seq-find (lambda (candidate)
+                               (not (eq candidate selected-window)))
+                             windows))
+              (and (memq :new-window config)
+                   (split-window-sensibly selected-window))
+              selected-window)))
+    (when window
+      (let ((was-dedicated (window-dedicated-p window)))
+        (when was-dedicated
+          (set-window-dedicated-p window nil))
+        (set-window-buffer window buffer)
+        (when was-dedicated
+          (set-window-dedicated-p window was-dedicated))
+        (when codex-ide-focus-on-open
+          (select-window window))))
     window))
-
-(defun codex-ide--display-buffer-in-codex-window (buffer)
-  "Show BUFFER in an existing Codex window when possible.
-Prefer a window already displaying BUFFER.  Otherwise reuse any visible Codex
-window by switching it to BUFFER.  Fall back to creating a new Codex window."
-  (or (get-buffer-window buffer)
-      (when-let ((window
-                  (seq-find
-                   (lambda (candidate)
-                     (codex-ide--session-buffer-p (window-buffer candidate)))
-                   (window-list nil 'no-minibuf))))
-        (let ((was-dedicated (window-dedicated-p window)))
-          (when was-dedicated
-            (set-window-dedicated-p window nil))
-          (set-window-buffer window buffer)
-          (when was-dedicated
-            (set-window-dedicated-p window was-dedicated))
-          (when codex-ide-focus-on-open
-            (select-window window))
-          window))
-      (codex-ide--display-buffer-in-side-window buffer)))
 
 (defun codex-ide--make-region-writable (start end)
   "Make the region from START to END writable."
@@ -3084,7 +3047,7 @@ ACTION is a short past-tense label used in log messages, such as
 
 (defun codex-ide--show-session-buffer (session)
   "Display SESSION's buffer and return SESSION."
-  (codex-ide--display-buffer-in-side-window (codex-ide-session-buffer session))
+  (codex-ide-display-buffer (codex-ide-session-buffer session))
   (codex-ide--ensure-input-prompt session)
   session)
 
@@ -3843,8 +3806,10 @@ If no live session exists, prompt to start one."
   "Show the Codex buffer for the current project."
   (interactive)
   (let* ((session (codex-ide--ensure-session-for-current-project))
-         (window (codex-ide--display-buffer-in-codex-window
-                  (codex-ide-session-buffer session))))
+         (window (let ((codex-ide-display-buffer-options
+                        '(:reuse-buffer-window :reuse-mode-window :new-window)))
+                   (codex-ide-display-buffer
+                    (codex-ide-session-buffer session)))))
     (when window
       (select-window window))
     (codex-ide--ensure-input-prompt session)
@@ -3909,7 +3874,9 @@ If no live session exists for the current buffer, prompt to start one first."
                    "Codex prompt (RET inserts newline, C-j to submit): ")))
       (unless (string-empty-p prompt)
         (let* ((buffer (codex-ide-session-buffer session))
-               (window (codex-ide--display-buffer-in-codex-window buffer)))
+               (window (let ((codex-ide-display-buffer-options
+                              '(:reuse-buffer-window :reuse-mode-window :new-window)))
+                         (codex-ide-display-buffer buffer))))
           (with-selected-window window
             (with-current-buffer buffer
               (if (codex-ide-session-input-overlay session)
