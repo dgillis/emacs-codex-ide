@@ -528,14 +528,6 @@ When SUFFIX is nil, return BUFFER-NAME unchanged."
         (setf (codex-ide-session-log-buffer session) buffer)
         buffer)))
 
-(defun codex-ide--kill-session-log-buffer (session)
-  "Kill SESSION's log buffer, if it exists."
-  (when-let ((buffer (codex-ide-session-log-buffer session)))
-    (setf (codex-ide-session-log-buffer session) nil)
-    (when (buffer-live-p buffer)
-      (let ((kill-buffer-query-functions nil))
-        (kill-buffer buffer)))))
-
 (defun codex-ide--stderr-filter (process chunk)
   "Append stderr CHUNK from PROCESS to the owning session log."
   (when-let ((session (process-get process 'codex-session)))
@@ -1209,29 +1201,6 @@ FORMAT-STRING and ARGS are passed to `format'."
         (when moving
           (goto-char (point-max)))
         (copy-marker start)))))
-
-(defun codex-ide--trace-back-to-log ()
-  "Jump to the log line associated with the transcript text at point."
-  (interactive)
-  (let ((marker (get-text-property (point) codex-ide-log-marker-property)))
-    (unless (markerp marker)
-      (user-error "No log trace available at point"))
-    (unless (buffer-live-p (marker-buffer marker))
-      (user-error "The originating log buffer is no longer available"))
-    (pop-to-buffer (marker-buffer marker))
-    (goto-char marker)
-    (beginning-of-line)))
-
-(defun codex-ide--item-type-at-point ()
-  "Return the agent item type property at point.
-When called interactively, echo the item type in the minibuffer."
-  (interactive)
-  (let ((item-type (get-text-property (point) codex-ide-agent-item-type-property)))
-    (when (called-interactively-p 'interactive)
-      (if item-type
-          (message "%s" item-type)
-        (user-error "No agent item type at point")))
-    item-type))
 
 (defun codex-ide--freeze-region (start end)
   "Make the region from START to END read-only."
@@ -2397,10 +2366,6 @@ The result is an alist with `formatted' and `summary' entries."
         `((formatted . ,formatted-context)
           (summary . ,context-summary))))))
 
-(defun codex-ide--get-buffer-context-for-prompt ()
-  "Return the current buffer context string for the current project, or nil."
-  (alist-get 'formatted (codex-ide--context-payload-for-prompt)))
-
 (defun codex-ide--next-request-id (&optional session)
   "Return the next request id for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
@@ -2577,63 +2542,6 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
      ((member (alist-get 'author item) '("assistant" assistant))
       'assistant)
      (t nil))))
-
-(defun codex-ide--thread-read--collect-item-texts (items &optional kind)
-  "Collect readable texts from ITEMS, optionally filtered by KIND."
-  (let ((sequence (cond
-                   ((vectorp items) (append items nil))
-                   ((listp items) items)
-                   (t nil)))
-        texts)
-    (dolist (item sequence (nreverse texts))
-      (when (and (listp item)
-                 (or (null kind)
-                     (eq (codex-ide--thread-read--item-kind item) kind)))
-        (let ((text (codex-ide--thread-read--message-text item)))
-          (when (and (stringp text)
-                     (not (string-empty-p (string-trim text))))
-            (push text texts)))))))
-
-(defun codex-ide--thread-read-user-text (turn)
-  "Return a compact user prompt text for TURN, if available."
-  (or (let ((text (alist-get 'userMessage turn)))
-        (when (stringp text) text))
-      (let ((text (alist-get 'prompt turn)))
-        (when (stringp text) text))
-      (let ((texts (codex-ide--thread-read--collect-item-texts (alist-get 'input turn))))
-        (when texts
-          (string-join texts "\n")))
-      (let ((texts (codex-ide--thread-read--collect-item-texts
-                    (alist-get 'messages turn) 'user)))
-        (when texts
-          (car (last texts))))
-      (let ((texts (codex-ide--thread-read--collect-item-texts
-                    (alist-get 'items turn) 'user)))
-        (when texts
-          (car (last texts))))))
-
-(defun codex-ide--thread-read-agent-text (turn)
-  "Return a compact agent summary text for TURN, if available."
-  (or (let ((text (alist-get 'assistantMessage turn)))
-        (when (stringp text) text))
-      (let ((text (alist-get 'summary turn)))
-        (when (stringp text) text))
-      (let ((texts (codex-ide--thread-read--collect-item-texts
-                    (alist-get 'messages turn) 'assistant)))
-        (when texts
-          (car (last texts))))
-      (let ((texts (codex-ide--thread-read--collect-item-texts
-                    (alist-get 'items turn) 'assistant)))
-        (when texts
-          (car (last texts))))))
-
-(defun codex-ide--thread-read-format-snippet (text)
-  "Format TEXT as a compact single-line snippet."
-  (when (stringp text)
-    (let* ((trimmed (string-trim text))
-           (single-line (replace-regexp-in-string "[ \t\n\r]+" " " trimmed)))
-      (unless (string-empty-p single-line)
-        (truncate-string-to-width single-line 120 nil nil t)))))
 
 (defun codex-ide--strip-leading-context-block (text open-tag close-tag)
   "Remove a leading context block delimited by OPEN-TAG and CLOSE-TAG from TEXT."
@@ -3816,22 +3724,6 @@ If no live session exists, prompt to start one."
     session))
 
 ;;;###autoload
-(defun codex-ide-list-session-buffers ()
-  "List active Codex session buffers and switch to the selected one."
-  (interactive)
-  (let (sessions)
-    (dolist (session (codex-ide--session-buffer-sessions))
-      (push (cons (buffer-name (codex-ide-session-buffer session))
-                  session)
-            sessions))
-    (if sessions
-        (let* ((choice (completing-read "Switch to Codex session buffer: "
-                                        sessions nil t))
-               (session (alist-get choice sessions nil nil #'string=)))
-          (codex-ide--show-session-buffer session))
-      (message "No active Codex session buffers"))))
-
-;;;###autoload
 (defun codex-ide-interrupt ()
   "Interrupt the active Codex turn for the current project."
   (interactive)
@@ -3855,13 +3747,6 @@ If no live session exists, prompt to start one."
              (signal (car err) (cdr err))))
           (message "Sent interrupt to Codex"))
       (user-error "No active Codex turn to interrupt"))))
-
-(defun codex-ide-insert-newline ()
-  "Open a prompt in the minibuffer that supports literal newlines."
-  (interactive)
-  (let ((prompt (read-from-minibuffer "Codex prompt (RET inserts newline, C-j to submit): ")))
-    (unless (string-empty-p prompt)
-      (codex-ide--submit-prompt prompt))))
 
 ;;;###autoload
 (defun codex-ide-prompt ()

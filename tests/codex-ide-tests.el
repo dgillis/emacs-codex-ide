@@ -1015,9 +1015,8 @@
       (will-retry . nil)
       (turn-id . "turn-1")))))
 
-(ert-deftest codex-ide-trace-back-to-log-jumps-to-originating-notification-line ()
-  (let ((project-dir (codex-ide-test--make-temp-project))
-        (shown-buffer nil))
+(ert-deftest codex-ide-agent-text-carries-log-marker-property ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
         (let* ((session (codex-ide--create-process-session))
@@ -1037,15 +1036,7 @@
                           (format "[%s"
                                   (format-time-string "%Y-")))))
                 (should (search-forward "Processing incoming notification line:" nil t))
-                (should (search-forward line nil t))))
-            (cl-letf (((symbol-function 'pop-to-buffer)
-                       (lambda (buffer &rest _)
-                         (setq shown-buffer buffer)
-                         (set-buffer buffer)
-                         (selected-window))))
-              (codex-ide--trace-back-to-log)
-              (should (eq shown-buffer (codex-ide-session-log-buffer session)))
-              (should (looking-at-p ".*Processing incoming notification line:")))))))))
+                (should (search-forward line nil t)))))))))
 
 (ert-deftest codex-ide-agent-text-carries-item-type-property ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -1096,33 +1087,6 @@
                             (1- (point))
                             codex-ide-agent-item-type-property)
                            "agentMessage"))))))))
-
-(ert-deftest codex-ide-item-type-at-point-returns-and-reports-item-type ()
-  (let ((project-dir (codex-ide-test--make-temp-project))
-        (reported nil))
-    (codex-ide-test-with-fixture project-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session (codex-ide--create-process-session)))
-          (codex-ide--handle-notification
-           session
-           '((method . "turn/started")
-             (params . ((turn . ((id . "turn-1")))))))
-          (codex-ide--handle-notification
-           session
-           '((method . "item/reasoning/summaryTextDelta")
-             (params . ((delta . "Reasoning summary")))))
-          (with-current-buffer (codex-ide-session-buffer session)
-            (goto-char (point-min))
-            (search-forward "Reasoning summary")
-            (backward-char)
-            (should (equal (codex-ide--item-type-at-point) "reasoning"))
-            (cl-letf (((symbol-function 'called-interactively-p)
-                       (lambda (&rest _) t))
-                      ((symbol-function 'message)
-                       (lambda (format-string &rest args)
-                         (setq reported (apply #'format format-string args)))))
-              (codex-ide--item-type-at-point))
-            (should (equal reported "reasoning"))))))))
 
 (ert-deftest codex-ide-mcp-bridge-json-tool-call-returns-json-response ()
   (cl-letf (((symbol-function 'codex-ide-mcp-bridge--json-tool-call)
@@ -1959,7 +1923,7 @@
               (should (string-match-p "(autoload 'codex-ide-menu " contents))
               (should (string-match-p "(autoload 'codex-ide-mcp-bridge-enable "
                                       contents)))))
-      (delete-directory temp-dir t))))
+      (delete-directory temp-dir t)))))
 
 (provide 'codex-ide-tests)
 
