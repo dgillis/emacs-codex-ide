@@ -24,6 +24,10 @@ Design expectations:
 - Do not add new external package dependencies.
 - When touching architecture, preserve the model that Codex runs as an Emacs-native agent UI with optional bridge access back into the live editor.
 
+Coding conventions:
+
+- When defining key maps, place the `define-key` calls at the top-level of the package so they will take effect when reloading files.
+
 ## Development Rules
 
 - This project should be compatible with stock Emacs without requiring external packages.

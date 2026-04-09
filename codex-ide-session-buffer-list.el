@@ -13,12 +13,17 @@
   "Sessions shown in the current Codex session buffer list.")
 
 (defvar codex-ide-session-buffer-list-mode-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map codex-ide-session-list-mode-map)
-    (define-key map (kbd "D") #'codex-ide-session-buffer-list-delete-buffer)
-    (define-key map (kbd "l") #'codex-ide-session-buffer-list-redisplay)
-    map)
+  (make-sparse-keymap)
   "Keymap for `codex-ide-session-buffer-list-mode'.")
+
+(set-keymap-parent codex-ide-session-buffer-list-mode-map
+                   codex-ide-session-list-mode-map)
+(define-key codex-ide-session-buffer-list-mode-map
+            (kbd "D")
+            #'codex-ide-session-buffer-list-delete-buffer)
+(define-key codex-ide-session-buffer-list-mode-map
+            (kbd "l")
+            #'codex-ide-session-buffer-list-redisplay)
 
 (define-derived-mode codex-ide-session-buffer-list-mode codex-ide-session-list-mode
   "Codex-Buffers"

@@ -3851,6 +3851,8 @@ If no live session exists for the current buffer, prompt to start one first."
      (t
       (user-error "No recent Codex session to toggle")))))
 
+(require 'codex-ide-delete-session-thread)
+
 (provide 'codex-ide)
 
 ;;; codex-ide.el ends here

@@ -50,11 +50,11 @@
   "Function called with the current row id when visiting an entry.")
 
 (defvar codex-ide-session-list-mode-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map tabulated-list-mode-map)
-    (define-key map (kbd "RET") #'codex-ide-session-list-visit)
-    map)
+  (make-sparse-keymap)
   "Keymap for `codex-ide-session-list-mode'.")
+
+(set-keymap-parent codex-ide-session-list-mode-map tabulated-list-mode-map)
+(define-key codex-ide-session-list-mode-map (kbd "RET") #'codex-ide-session-list-visit)
 
 (define-derived-mode codex-ide-session-list-mode tabulated-list-mode "Codex-Session-List"
   "Parent mode for Codex session list buffers.")

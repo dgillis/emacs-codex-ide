@@ -104,6 +104,57 @@
             (should-not (string-match-p "First result" (buffer-string)))
             (should (string-match-p "Updated result" (buffer-string)))))))))
 
+(ert-deftest codex-ide-session-thread-list-delete-thread-binds-D-and-refreshes ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (deleted-thread-id nil)
+        (thread-deleted nil)
+        (buffer-name nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+                   (lambda () t))
+                  ((symbol-function 'codex-ide-mcp-bridge-prompt-to-enable)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide-mcp-bridge-ensure-server)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide-delete-session-thread)
+                   (lambda (thread-id)
+                     (setq deleted-thread-id thread-id
+                           thread-deleted t)))
+                  ((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method _params)
+                     (pcase method
+                       ("initialize" '((ok . t)))
+                       ("thread/list"
+                        (if thread-deleted
+                            '((data . [((id . "thread-22222222")
+                                        (createdAt . 1744038896)
+                                        (updatedAt . 1744041000)
+                                        (preview . "Remaining thread"))]))
+                          '((data . [((id . "thread-11111111")
+                                      (createdAt . 1744038896)
+                                      (updatedAt . 1744039999)
+                                      (preview . "Delete me"))
+                                     ((id . "thread-22222222")
+                                      (createdAt . 1744038896)
+                                      (updatedAt . 1744041000)
+                                      (preview . "Remaining thread"))]))))
+                       (_ (ert-fail (format "Unexpected method %s" method)))))))
+          (setq buffer-name
+                (format "*Codex Threads: %s*"
+                        (file-name-nondirectory
+                         (directory-file-name project-dir))))
+          (codex-ide-session-thread-list)
+          (with-current-buffer buffer-name
+            (should (eq (lookup-key codex-ide-session-thread-list-mode-map (kbd "D"))
+                        #'codex-ide-session-thread-list-delete-thread))
+            (goto-char (point-min))
+            (forward-line 1)
+            (call-interactively #'codex-ide-session-thread-list-delete-thread)
+            (should (equal deleted-thread-id "thread-11111111"))
+            (should-not (string-match-p "Delete me" (buffer-string)))
+            (should (string-match-p "Remaining thread" (buffer-string)))))))))
+
 (provide 'codex-ide-session-thread-list-tests)
 
 ;;; codex-ide-session-thread-list-tests.el ends here

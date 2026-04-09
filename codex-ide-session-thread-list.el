@@ -13,11 +13,17 @@
   "Workspace directory displayed by the current thread list buffer.")
 
 (defvar codex-ide-session-thread-list-mode-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map codex-ide-session-list-mode-map)
-    (define-key map (kbd "l") #'codex-ide-session-thread-list-redisplay)
-    map)
+  (make-sparse-keymap)
   "Keymap for `codex-ide-session-thread-list-mode'.")
+
+(set-keymap-parent codex-ide-session-thread-list-mode-map
+                   codex-ide-session-list-mode-map)
+(define-key codex-ide-session-thread-list-mode-map
+            (kbd "D")
+            #'codex-ide-session-thread-list-delete-thread)
+(define-key codex-ide-session-thread-list-mode-map
+            (kbd "l")
+            #'codex-ide-session-thread-list-redisplay)
 
 (define-derived-mode codex-ide-session-thread-list-mode codex-ide-session-list-mode
   "Codex-Threads"
@@ -88,6 +94,16 @@
   "Visit THREAD-ID in the current thread list workspace."
   (codex-ide--prepare-session-operations)
   (codex-ide--show-or-resume-thread thread-id codex-ide-session-thread-list--directory))
+
+(defun codex-ide-session-thread-list-delete-thread ()
+  "Delete the stored thread on the current row and refresh the list."
+  (interactive)
+  (codex-ide--prepare-session-operations)
+  (let ((thread-id (tabulated-list-get-id)))
+    (unless thread-id
+      (user-error "No list entry at point"))
+    (codex-ide-delete-session-thread thread-id)
+    (tabulated-list-print t)))
 
 (defun codex-ide-session-thread-list-redisplay ()
   "Regenerate the workspace thread list using current thread state."
