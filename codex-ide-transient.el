@@ -14,6 +14,7 @@
 (declare-function codex-ide "codex-ide" ())
 (declare-function codex-ide-continue "codex-ide" ())
 (declare-function codex-ide-prompt "codex-ide" ())
+(declare-function codex-ide-reset-current-session "codex-ide" ())
 (declare-function codex-ide-stop "codex-ide" ())
 (declare-function codex-ide-switch-to-buffer "codex-ide" ())
 (declare-function codex-ide-check-status "codex-ide" ())
@@ -157,6 +158,8 @@
     ("p" "Send prompt from minibuffer" codex-ide-prompt)
     ("c" "Continue most recent" codex-ide-continue)
     ("s" "Start new" codex-ide)
+    ("r" "Reset current session" codex-ide-reset-current-session
+     :if codex-ide--in-session-buffer-p)
     ("q" "Stop current" codex-ide-stop
      :if codex-ide--in-session-buffer-p)]
    ["View"

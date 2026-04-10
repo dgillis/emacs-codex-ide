@@ -1869,6 +1869,55 @@
             (should-not (memq session codex-ide--sessions))
             (should-not (buffer-live-p (codex-ide-session-buffer session)))))))))
 
+(ert-deftest codex-ide-reset-current-session-errors-outside-session-buffer ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (with-temp-buffer
+        (setq-local default-directory (file-name-as-directory project-dir))
+        (should-error (codex-ide-reset-current-session) :type 'user-error)))))
+
+(ert-deftest codex-ide-reset-current-session-restarts-in-current-buffer ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests '()))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method _params)
+                     (setq requests (append requests (list method)))
+                     (pcase method
+                       ("thread/start" '((thread . ((id . "thread-reset-new")))))
+                       (_ '((ok . t)))))))
+          (let* ((session (codex-ide--create-process-session))
+                 (buffer (codex-ide-session-buffer session))
+                 (buffer-name (buffer-name buffer))
+                 (old-process (codex-ide-session-process session))
+                 (new-session nil))
+            (setf (codex-ide-session-thread-id session) "thread-reset-old")
+            (with-current-buffer buffer
+              (let ((inhibit-read-only t))
+                (goto-char (point-max))
+                (insert "old transcript\n"))
+              (setq new-session (codex-ide-reset-current-session)))
+            (should-not (eq new-session session))
+            (should (eq (codex-ide-session-buffer new-session) buffer))
+            (should (equal (buffer-name buffer) buffer-name))
+            (should-not (codex-ide-test-process-live old-process))
+            (should-not (memq session codex-ide--sessions))
+            (should (memq new-session codex-ide--sessions))
+            (should (codex-ide-test-process-live
+                     (codex-ide-session-process new-session)))
+            (should (string= (codex-ide-session-thread-id new-session)
+                             "thread-reset-new"))
+            (with-current-buffer buffer
+              (should (eq (codex-ide--session-for-current-buffer) new-session))
+              (should-not (string-match-p "old transcript" (buffer-string))))
+            (should (equal requests
+                           '("thread/unsubscribe"
+                             "initialize"
+                             "thread/start")))))))))
+
 (ert-deftest codex-ide-context-payload-uses-explicit-non-file-origin-buffer ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
@@ -2186,6 +2235,27 @@
               (should (string-match-p "(autoload 'codex-ide-mcp-bridge-enable "
                                       contents)))))
       (delete-directory temp-dir t)))))
+
+(ert-deftest codex-ide-render-markdown-region-caches-code-block-font-lock-setup ()
+  (let ((codex-ide--font-lock-spec-cache (make-hash-table :test 'eq))
+        (mode-call-count 0))
+    (cl-letf (((symbol-function 'codex-ide-test-cached-mode)
+               (lambda ()
+                 (setq mode-call-count (1+ mode-call-count))
+                 (kill-all-local-variables)
+                 (setq major-mode 'codex-ide-test-cached-mode)
+                 (setq mode-name "Codex Test Cached")
+                 (setq-local font-lock-defaults
+                             '((("\\_<foo\\_>" . font-lock-keyword-face)))))))
+      (with-temp-buffer
+        (insert "```codex-ide-test-cached\nfoo\n```\n")
+        (codex-ide--render-markdown-region (point-min) (point-max))
+        (codex-ide--render-markdown-region (point-min) (point-max))
+        (should (= mode-call-count 1))
+        (goto-char (point-min))
+        (search-forward "foo")
+        (should (eq (get-text-property (1- (point)) 'face)
+                    'font-lock-keyword-face))))))
 
 (provide 'codex-ide-tests)
 

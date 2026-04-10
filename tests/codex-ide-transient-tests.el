@@ -20,6 +20,8 @@
               #'codex-ide))
   (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "c")) :command)
               #'codex-ide-continue))
+  (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "r")) :command)
+              #'codex-ide-reset-current-session))
   (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "p")) :command)
               #'codex-ide-prompt)))
 

@@ -1069,12 +1069,17 @@ ACTION is a short past-tense label used in log messages, such as
   (codex-ide-log-message session "Initialization complete")
   (codex-ide--update-header-line session))
 
-(defun codex-ide--create-process-session ()
-  "Create a new app-server-backed session for the current working directory."
+(defun codex-ide--create-process-session (&optional reuse-buffer reuse-name-suffix)
+  "Create a new app-server-backed session for the current working directory.
+When REUSE-BUFFER is non-nil, use it as the session buffer and keep
+REUSE-NAME-SUFFIX as the session name suffix."
   (let ((working-dir (codex-ide--get-working-directory)))
-    (let* ((name-suffix (codex-ide--next-session-name-suffix working-dir))
-           (buffer (get-buffer-create
-                    (codex-ide--session-buffer-name working-dir name-suffix)))
+    (let* ((name-suffix (if reuse-buffer
+                            reuse-name-suffix
+                          (codex-ide--next-session-name-suffix working-dir)))
+           (buffer (or reuse-buffer
+                       (get-buffer-create
+                        (codex-ide--session-buffer-name working-dir name-suffix))))
            (process-label
             (if name-suffix
                 (format "%s<%d>"
@@ -2200,6 +2205,80 @@ If no live session exists, prompt to start one."
                (file-name-nondirectory (directory-file-name working-dir))))
      (t
       (message "No Codex session is running in this buffer")))))
+
+;;;###autoload
+(defun codex-ide-reset-current-session ()
+  "Stop the current Codex session and start a new one in the same buffer."
+  (interactive)
+  (let* ((session (and (derived-mode-p 'codex-ide-session-mode)
+                       (codex-ide--session-for-current-buffer)))
+         (working-dir (and session (codex-ide-session-directory session)))
+         (buffer (and session (codex-ide-session-buffer session)))
+         (name-suffix (and session (codex-ide-session-name-suffix session)))
+         (new-session nil))
+    (unless session
+      (user-error "Codex reset is only available in a Codex session buffer"))
+    (unless (buffer-live-p buffer)
+      (user-error "Current Codex session buffer is no longer live"))
+    (codex-ide--prepare-session-operations)
+    (when (and (process-live-p (codex-ide-session-process session))
+               (codex-ide-session-thread-id session))
+      (codex-ide-log-message
+       session
+       "Unsubscribing thread %s before reset"
+       (codex-ide-session-thread-id session))
+      (ignore-errors
+        (codex-ide--request-sync
+         session
+         "thread/unsubscribe"
+         `((threadId . ,(codex-ide-session-thread-id session))))))
+    (codex-ide-log-message session "Resetting current session")
+    (codex-ide--teardown-session session)
+    (let ((default-directory (file-name-as-directory working-dir)))
+      (setq new-session
+            (codex-ide--create-process-session buffer name-suffix)))
+    (condition-case err
+        (progn
+          (codex-ide--initialize-session new-session)
+          (let ((result (codex-ide--request-sync
+                         new-session
+                         "thread/start"
+                         (with-current-buffer buffer
+                           (codex-ide--thread-start-params)))))
+            (setf (codex-ide-session-thread-id new-session)
+                  (codex-ide--extract-thread-id result))
+            (codex-ide--session-metadata-put new-session :session-context-sent nil)
+            (codex-ide-log-message
+             new-session
+             "Started new thread %s after reset"
+             (codex-ide-session-thread-id new-session)))
+          (setf (codex-ide-session-status new-session) "idle")
+          (codex-ide--update-header-line new-session)
+          (codex-ide--show-session-buffer new-session)
+          (codex-ide--track-active-buffer)
+          (message "Reset Codex in %s"
+                   (file-name-nondirectory (directory-file-name working-dir)))
+          new-session)
+      (error
+       (when new-session
+         (let* ((stderr-tail (codex-ide--session-metadata-get new-session :stderr-tail))
+                (classification
+                 (codex-ide--render-session-error
+                  new-session
+                  (list (error-message-string err) stderr-tail)
+                  "Codex reset failed")))
+           (when (process-live-p (codex-ide-session-process new-session))
+             (delete-process (codex-ide-session-process new-session)))
+           (codex-ide--show-session-buffer new-session)
+           (codex-ide--cleanup-session new-session)
+           (signal 'user-error
+                   (list (codex-ide--format-session-error-message
+                          classification
+                          (codex-ide--extract-error-text
+                           (error-message-string err)
+                           stderr-tail)
+                          "Codex reset failed")))))
+       (signal (car err) (cdr err))))))
 
 ;;;###autoload
 (defun codex-ide-switch-to-buffer ()

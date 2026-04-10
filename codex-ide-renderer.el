@@ -486,14 +486,66 @@ inserted text."
         (when (fboundp candidate)
           candidate))))))
 
+(defvar codex-ide--font-lock-spec-cache (make-hash-table :test 'eq)
+  "Cache of font-lock setup captured from major modes.")
+
+(defconst codex-ide--cached-font-lock-variables
+  '(font-lock-defaults
+    font-lock-keywords
+    font-lock-keywords-only
+    font-lock-syntax-table
+    font-lock-syntactic-face-function
+    font-lock-syntactic-keywords
+    font-lock-fontify-region-function
+    font-lock-unfontify-region-function
+    font-lock-extend-region-functions
+    font-lock-extra-managed-props
+    font-lock-multiline
+    syntax-propertize-function)
+  "Buffer-local variables copied from language modes for transcript fontification.")
+
+(defun codex-ide--font-lock-spec-for-mode (mode)
+  "Return cached font-lock setup for MODE.
+The mode is invoked only when populating the cache.  Later callers reuse the
+captured syntax table and font-lock variables without running the full major
+mode again."
+  (or (gethash mode codex-ide--font-lock-spec-cache)
+      (let ((spec
+             (with-temp-buffer
+               (delay-mode-hooks
+                 (funcall mode))
+               (list
+                :syntax-table (copy-syntax-table (syntax-table))
+                :variables
+                (mapcar (lambda (variable)
+                          (list variable
+                                (local-variable-p variable)
+                                (when (boundp variable)
+                                  (symbol-value variable))))
+                        codex-ide--cached-font-lock-variables)))))
+        (puthash mode spec codex-ide--font-lock-spec-cache)
+        spec)))
+
+(defun codex-ide--apply-font-lock-spec (spec)
+  "Apply cached font-lock SPEC to the current buffer."
+  (set-syntax-table (copy-syntax-table (plist-get spec :syntax-table)))
+  (dolist (entry (plist-get spec :variables))
+    (let ((variable (nth 0 entry))
+          (localp (nth 1 entry))
+          (value (nth 2 entry)))
+      (when localp
+        (set (make-local-variable variable) (copy-tree value))))))
+
 (defun codex-ide--fontify-code-block-region (start end language)
   "Apply syntax highlighting to region START END using LANGUAGE."
   (when-let ((mode (codex-ide--markdown-language-mode language)))
-    (let ((source-buffer (current-buffer))
+    (let ((spec (codex-ide--font-lock-spec-for-mode mode))
+          (source-buffer (current-buffer))
           (code (buffer-substring-no-properties start end)))
       (with-temp-buffer
         (insert code)
-        (funcall mode)
+        (codex-ide--apply-font-lock-spec spec)
+        (font-lock-mode 1)
         (font-lock-ensure (point-min) (point-max))
         (let ((pos (point-min)))
           (while (< pos (point-max))

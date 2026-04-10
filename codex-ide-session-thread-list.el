@@ -76,18 +76,18 @@
                  (codex-ide-session-thread-list--thread-status thread directory)
                  'codex-ide-session-list-status-face)
                 (codex-ide-session-list-cell
-                 (codex-ide--format-thread-updated-at
-                  (alist-get 'updatedAt thread))
-                 'codex-ide-session-list-time-face)
+                 (or (codex-ide-session-thread-list--thread-buffer-name
+                      thread directory)
+                     "")
+                 'codex-ide-session-list-secondary-face)
                 (codex-ide-session-list-cell
                  (codex-ide--format-thread-updated-at
                   (alist-get 'createdAt thread))
                  'codex-ide-session-list-time-face)
                 (codex-ide-session-list-cell
-                 (or (codex-ide-session-thread-list--thread-buffer-name
-                      thread directory)
-                     "")
-                 'codex-ide-session-list-secondary-face)))))
+                 (codex-ide--format-thread-updated-at
+                  (alist-get 'updatedAt thread))
+                 'codex-ide-session-list-time-face)))))
      threads)))
 
 (defun codex-ide-session-thread-list--visit (thread-id)
@@ -132,9 +132,9 @@
            [("ID" 12 t)
             ("Preview" 100 t)
             ("Status" 12 t)
-            ("Updated" 25 t)
+            ("Buffer" 28 t)
             ("Created" 25 t)
-            ("Buffer" 28 t)]
+            ("Updated" 25 t)]
            #'codex-ide-session-thread-list--entries
            #'codex-ide-session-thread-list--visit
            '("Updated" . t)
