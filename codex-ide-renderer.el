@@ -1006,6 +1006,7 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
          session
          item-id
          (list :type item-type
+               :item item
                :summary summary
                :details-rendered t
                :saw-output nil))))))
@@ -1084,13 +1085,20 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
             'error)))
         ("fileChange"
          (let ((diff-text (codex-ide--file-change-diff-text item))
-               (streamed-diff (plist-get state :diff-text)))
-           (codex-ide--render-file-change-diff-text
-            buffer
-            (if (and (stringp diff-text)
-                     (not (string-empty-p diff-text)))
-                diff-text
-              streamed-diff))))
+               (streamed-diff (plist-get state :diff-text))
+               (approval-rendered-items
+                (codex-ide--session-metadata-get
+                 session
+                 :approval-file-change-diff-rendered-items)))
+           (unless (or (plist-get state :approval-diff-rendered)
+                       (and approval-rendered-items
+                            (gethash item-id approval-rendered-items)))
+             (codex-ide--render-file-change-diff-text
+              buffer
+              (if (and (stringp diff-text)
+                       (not (string-empty-p diff-text)))
+                  diff-text
+                streamed-diff)))))
         ("exitedReviewMode"
          (when-let ((review (alist-get 'review item)))
            (codex-ide--append-agent-text

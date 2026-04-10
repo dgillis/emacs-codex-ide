@@ -1485,6 +1485,57 @@ CHOICES is an alist of labels to returned values."
   "Insert an emphasized approval field LABEL."
   (insert (propertize label 'face 'codex-ide-approval-label-face)))
 
+(defun codex-ide--approval-file-change-diff-text (session params)
+  "Return diff text for file-change approval PARAMS in SESSION."
+  (let* ((item-id (alist-get 'itemId params))
+         (state (and item-id (codex-ide--item-state session item-id)))
+         (streamed-diff (and state (plist-get state :diff-text))))
+    (or (seq-some
+         (lambda (candidate)
+           (when (listp candidate)
+             (let ((text (codex-ide--file-change-diff-text candidate)))
+               (when (and (stringp text)
+                          (not (string-empty-p text)))
+                 text))))
+         (list params
+               (alist-get 'item params)
+               (alist-get 'fileChange params)
+               (alist-get 'fileChangeItem params)
+               (and state (plist-get state :item))))
+        (when (and (stringp streamed-diff)
+                   (not (string-empty-p streamed-diff)))
+          streamed-diff))))
+
+(defun codex-ide--mark-approval-file-change-diff-rendered (session params)
+  "Mark the file-change item in PARAMS as having rendered its approval diff."
+  (when-let ((item-id (alist-get 'itemId params)))
+    (let ((rendered-items
+           (or (codex-ide--session-metadata-get
+                session
+                :approval-file-change-diff-rendered-items)
+               (codex-ide--session-metadata-put
+                session
+                :approval-file-change-diff-rendered-items
+                (make-hash-table :test 'equal)))))
+      (puthash item-id t rendered-items))
+    (when-let ((state (codex-ide--item-state session item-id)))
+      (codex-ide--put-item-state
+       session
+       item-id
+       (plist-put state :approval-diff-rendered t)))))
+
+(defun codex-ide--insert-approval-diff (text)
+  "Insert approval diff TEXT using file-change diff faces."
+  (let ((trimmed (and (stringp text) (string-trim-right text))))
+    (when (and trimmed (not (string-empty-p trimmed)))
+      (codex-ide--insert-approval-label "Proposed changes:")
+      (insert "\n\n")
+      (dolist (line (split-string trimmed "\n"))
+        (insert (propertize (concat line "\n")
+                            'face
+                            (codex-ide--file-change-diff-face line))))
+      (insert "\n"))))
+
 (defun codex-ide--insert-approval-detail (detail)
   "Insert one formatted approval DETAIL entry."
   (pcase (plist-get detail :kind)
@@ -1495,6 +1546,8 @@ CHOICES is an alist of labels to returned values."
                          'face
                          'codex-ide-item-summary-face))
      (insert "\n\n"))
+    ('diff
+     (codex-ide--insert-approval-diff (plist-get detail :text)))
     (_
      (when-let ((label (plist-get detail :label)))
        (codex-ide--insert-approval-label (format "%s: " label)))
@@ -1649,11 +1702,21 @@ PARAMS describe the request."
                  (codex-ide--jsonrpc-send-response
                   session id `((decision . ,decision))))
              (codex-ide--render-buffer-approval
-             session
-             id
-             'file-change
+              session
+              id
+              'file-change
               "[Approval required]"
-              (list (list :label "Approve file changes" :text reason))
+             (delq nil
+                   (list
+                    (list :label "Approve file changes" :text reason)
+                     (when-let ((diff-text
+                                 (codex-ide--approval-file-change-diff-text
+                                  session
+                                  params)))
+                       (codex-ide--mark-approval-file-change-diff-rendered
+                        session
+                        params)
+                       (list :kind 'diff :text diff-text))))
               choices
               params)))
        (quit
@@ -1821,6 +1884,10 @@ PARAMS describe the request."
              (codex-ide-session-current-message-start-marker session) nil
              (codex-ide-session-item-states session) (make-hash-table :test 'equal)
              (codex-ide-session-status session) "running")
+       (codex-ide--session-metadata-put
+        session
+        :approval-file-change-diff-rendered-items
+        nil)
        (codex-ide-log-message
         session
         "Turn started: %s"

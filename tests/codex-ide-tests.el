@@ -935,6 +935,98 @@
             (should (string-match-p "\\[Approval required\\]"
                                     (buffer-string)))))))))
 
+(ert-deftest codex-ide-file-change-approval-renders-diff-before-buttons ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (process (codex-ide-session-process session))
+               (diff-text (string-join
+                           '("diff --git a/foo.txt b/foo.txt"
+                             "--- a/foo.txt"
+                             "+++ b/foo.txt"
+                             "@@ -1 +1 @@"
+                             "-old"
+                             "+new")
+                           "\n")))
+          (setf (codex-ide-session-current-turn-id session) "turn-file-approval"
+                (codex-ide-session-status session) "running")
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function)
+                       (funcall function)))
+                    ((symbol-function 'codex-ide-display-buffer)
+                     (lambda (_buffer) (selected-window)))
+                    ((symbol-function 'message)
+                     (lambda (&rest _) nil)))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/started")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "inProgress")))))))
+            (codex-ide--handle-file-change-approval
+             session
+             45
+             '((itemId . "file-change-1")
+               (reason . "edit foo.txt"))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (let ((text (buffer-string)))
+              (should (string-match-p "Approve file changes: edit foo\\.txt" text))
+              (should (string-match-p "Proposed changes:\n\n" text))
+              (should (< (string-match-p "Proposed changes:" text)
+                         (string-match-p "\\[accept\\]" text)))
+              (should (string-match-p "diff --git a/foo\\.txt b/foo\\.txt" text))
+              (should (string-match-p "-old" text))
+              (should (string-match-p "+new" text)))
+            (goto-char (point-min))
+            (search-forward "Proposed changes:")
+            (should (eq (get-text-property (match-beginning 0) 'face)
+                        'codex-ide-approval-label-face))
+            (search-forward "-old")
+            (should (eq (get-text-property (match-beginning 0) 'face)
+                        'codex-ide-file-diff-removed-face))
+            (search-forward "+new")
+            (should (eq (get-text-property (match-beginning 0) 'face)
+                        'codex-ide-file-diff-added-face))
+            (goto-char (point-min))
+            (search-forward "[accept]")
+            (backward-char 1)
+            (push-button))
+          (let* ((payload (json-parse-string
+                           (car (codex-ide-test-process-sent-strings process))
+                           :object-type 'alist
+                           :array-type 'list)))
+            (should (equal (alist-get 'id payload) 45))
+            (should (equal (alist-get 'decision (alist-get 'result payload))
+                           "accept")))
+          (codex-ide--handle-notification
+           session
+           `((method . "item/completed")
+             (params . ((item . ((type . "fileChange")
+                                 (id . "file-change-1")
+                                 (changes . (((path . "foo.txt")
+                                              (diff . ,diff-text))))
+                                 (status . "completed")))))))
+          (codex-ide--handle-notification
+           session
+           `((method . "item/completed")
+             (params . ((item . ((type . "fileChange")
+                                 (id . "file-change-1")
+                                 (changes . (((path . "foo.txt")
+                                              (diff . ,diff-text))))
+                                 (status . "completed")))))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (let* ((text (buffer-string))
+                   (first-diff (string-match "diff --git a/foo\\.txt b/foo\\.txt" text))
+                   (first-diff-end (and first-diff (match-end 0))))
+              (should first-diff)
+              (should-not
+               (string-match-p "diff --git a/foo\\.txt b/foo\\.txt"
+                               text
+                               first-diff-end)))))))))
+
 (ert-deftest codex-ide-permissions-approval-inline-decline-sends-empty-permissions ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
