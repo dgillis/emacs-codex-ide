@@ -18,72 +18,43 @@ keeps the interaction surface fully inside Emacs.
 
 ** Features
 
-- One app-server-backed Codex session per project
-- Pure Emacs session buffers instead of embedding =vterm= or =eat=
-- Dedicated major modes for Codex session and log buffers
-- Transient menu for common session, navigation, and configuration actions
-- Project-aware session startup, switching, stopping, and continue flows
-- Prompt submission from either the session buffer or the minibuffer
-- Prompt history navigation and in-buffer prompt editing
-- Active-buffer tracking so file, line, and cursor context can be sent to Codex
-- Lightweight transcript rendering for links, inline code, and fenced code blocks
-- Syntax-highlighted fenced code blocks using Emacs major modes when available
-- Optional Emacs MCP bridge for opening files, reading context, and running
-  whitelisted commands inside the current Emacs session
+*** Codex Session Buffers
 
-** Emacs Tool Integration
+=codex-ide-session-mode= is the Emacs buffer interface for working with Codex:
+write prompts in-place, read streamed responses, follow file links, and review
+tool approvals without leaving the editor.
 
-Codex IDE can expose the running Emacs instance back to Codex through the
-optional MCP bridge. When enabled, Codex can work with editor context directly
-instead of treating Emacs as an opaque terminal.
-
-The bridge currently supports:
-
-- Current buffer context reporting, including file, buffer, line, and column
-- Opening files in Emacs at a requested location
-- Running interactive Emacs commands from a whitelist you control
-- Optional unrestricted Elisp evaluation, disabled by default
-
-This design keeps the default setup conservative while still allowing deeper
-editor automation when you explicitly opt into it.
-
-** Screenshots
-
-The screenshots below show the current UI running inside Emacs, with Codex
-rendered as a native buffer rather than a terminal pane.
-
-*** Buffer-Aware Context
-
-Codex IDE tracks the active project buffer so prompts can carry file, line, and
-cursor context from the editor you are already using.
-
-#+CAPTION: A Codex session alongside Magit, with the active editor buffer reflected in the session context.
-[[file:screenshots/buffer-selection-awareness.png]]
-
-*** Clickable File Links
-
-Transcript file references are turned into clickable links so you can jump from
-assistant output straight into the corresponding file and location.
-
-#+CAPTION: Clickable file links in the session transcript opening source locations in Emacs.
-[[file:screenshots/clickable-code-links.png]]
-
-*** Syntax-Highlighted Code Blocks
-
-Assistant-generated fenced code blocks are rendered directly in the transcript
-and fontified using an appropriate Emacs major mode when one is available.
-
-#+CAPTION: Python output rendered in the session buffer with syntax highlighting.
-[[file:screenshots/code-syntax-coloring.png]]
-
-*** Prompting and Approvals
-
-Session buffers support in-place prompt editing, streamed responses, and
-approval flows for actions that need confirmation.
-
-#+CAPTION: Prompt submission and in-buffer approval handling inside a Codex session.
+#+CAPTION: Prompting Codex from an Emacs session buffer.
 [[file:screenshots/codex-prompts-in-emacs.png]]
 
+#+CAPTION: Syntax-highlighted code rendered inside the Codex transcript.
+[[file:screenshots/code-syntax-coloring.png]]
+
+#+CAPTION: Clickable file links that jump from the transcript into source buffers.
+[[file:screenshots/clickable-code-links.png]]
+
+*** Codex Thread Lists
+
+=codex-ide-session-thread-list= provides a tabulated Emacs mode for finding,
+resuming, and deleting previous Codex sessions for the current workspace.
+
+#+CAPTION: Stored workspace threads with previews, status, live buffers, and timestamps.
+[[file:screenshots/codex-threads-list.png]]
+
+#+CAPTION: Active Codex session buffers across workspaces.
+[[file:screenshots/codex-buffer-list.png]]
+
+*** Menus and Configuration
+
+=codex-ide-menu= is the main entry point for starting, resuming, switching, and
+inspecting Codex sessions. The configuration menu keeps model, approval,
+sandbox, window, and bridge settings close at hand.
+
+#+CAPTION: The main Codex IDE command menu.
+[[file:screenshots/codex-ide-menu.png]]
+
+#+CAPTION: The Codex IDE configuration menu.
+[[file:screenshots/codex-ide-config-menu.png]]
 
 * Installation
 
@@ -120,176 +91,81 @@ To install using =use-package= and [[https://github.com/radian-software/straight
 After installation, run =M-x codex-ide-menu= or =M-x codex-ide= to start a
 session for the current project.
 
-If the =codex= executable is not available on Emacs' =PATH=, set it explicitly:
+* Getting Started
 
-#+begin_src emacs-lisp
-(use-package codex-ide
-  :custom
-  (codex-ide-cli-path "/path/to/codex"))
-#+end_src
+** =codex-ide-menu=
 
-* Usage
+Use =M-x codex-ide-menu= as the main entry point. It opens a transient menu for
+starting a new session, continuing the most recent session, sending a prompt
+from the minibuffer, switching to existing buffers, opening session lists, and
+adjusting configuration.
 
-** Basic Commands
+#+CAPTION: The main menu is the recommended starting point for everyday Codex IDE commands.
+[[file:screenshots/codex-ide-menu.png]]
 
-The main entry point is the transient menu. Run =M-x codex-ide-menu= to get a
-single command surface for starting sessions, sending prompts, switching
-buffers, toggling windows, and adjusting configuration.
+** =codex-ide-session-mode=
 
-| Command | Description |
-|----------------------------------------+------------------------------------------------------|
-| =M-x codex-ide-menu= | Open the main Codex IDE transient menu |
-| =M-x codex-ide= | Start a new Codex session for the current project |
-| =M-x codex-ide-continue= | Continue the most recent Codex session in this directory |
-| =M-x codex-ide-prompt= | Submit a prompt from the minibuffer |
-| =M-x codex-ide-submit= | Submit the current in-buffer prompt |
-| =M-x codex-ide-send-active-buffer-context= | Send the tracked active buffer context as a prompt |
-| =M-x codex-ide-interrupt= | Interrupt the active Codex turn |
-| =M-x codex-ide-stop= | Stop the current project's Codex session |
-| =M-x codex-ide-switch-to-buffer= | Show the current project's Codex buffer |
-| =M-x codex-ide-list-sessions= | Switch between active Codex sessions |
-| =M-x codex-ide-check-status= | Report Codex CLI and bridge status |
+=codex-ide-session-mode= is the buffer interface to Codex. It renders the
+conversation transcript, keeps the active prompt editable in-place, streams
+assistant output, turns file references into links, and handles interruption or
+approval flows from inside Emacs.
 
-Within a session buffer:
+Key bindings:
 
-- =C-c RET= submits the current prompt
-- =C-c C-c= or =C-c C-k= interrupts the active turn
-- =C-c C-o= sends the active buffer context
-- =C-M-p= and =C-M-n= jump between prior user prompt lines
-- =M-p= and =M-n= browse prompt history while point is in the active prompt
+- =C-c RET= submits the active prompt.
+- =C-c C-c= or =C-c C-k= interrupts the current response.
+- =C-M-p= and =C-M-n= move between prompt lines.
+- =M-p= and =M-n= cycle prompt history while point is in the active prompt.
+- =TAB= and =S-TAB= move between clickable buttons and file links.
 
-** Multi-Project Support
+** =codex-ide-session-thread-list=
 
-Codex IDE uses Emacs' built-in =project.el= to scope sessions. Each project gets
-its own Codex session buffer and app-server process, so you can keep multiple
-projects active at once and switch between them with
-=codex-ide-list-sessions=.
+=codex-ide-session-thread-list= opens a tabulated list of active and previous
+Codex sessions for the current workspace. Use it to inspect stored thread
+previews, see which threads already have live buffers, resume previous work, or
+delete old threads.
 
-The default buffer naming scheme is:
+Key bindings:
 
-- =*codex[project-name]*= for the session buffer
-- =*codex[project-name]-log*= for the log buffer
+- =RET= opens or resumes the thread at point.
+- =D= deletes the thread at point, or every thread touched by the active region.
+- =l= refreshes the list.
+- Standard =tabulated-list-mode= keys sort and navigate the table.
 
-You can override the naming function with =codex-ide-buffer-name-function= or
-change the prefix with =codex-ide-buffer-name-prefix=.
+* Examples
 
-** Window Management
+** Interactive Approvals
 
-Codex IDE reuses normal Emacs buffer display behavior when showing session
-buffers. Set =codex-ide-focus-on-open= to control whether the selected window
-switches to the displayed Codex buffer.
+Commands that need confirmation use Emacs-native approval prompts, keeping
+review and execution in the same session buffer.
 
-** Active Buffer Context
+#+CAPTION: Reviewing and approving a requested action directly from the Codex session.
+[[file:screenshots/codex-approval-required-2x.gif]]
 
-One of the main workflow features in this package is active-buffer tracking.
-Codex IDE can observe the current project file, line, and column in Emacs and
-include that context automatically in prompts.
+** Large Change Review
 
-=codex-ide-include-active-buffer-context= controls the behavior:
+Codex can work through larger edits while the session buffer streams progress,
+tool use, and follow-up prompts in one place.
 
-- =when-changed= includes active buffer context only when it changed since the
-  last prompt for that session
-- =always= includes active buffer context on every prompt
-- =nil= disables automatic inclusion
+#+CAPTION: Following a larger Codex change from the live session transcript.
+[[file:screenshots/codex-ide-large-change-2x.gif]]
 
-You can also send the current buffer context explicitly with
-=codex-ide-send-active-buffer-context=.
+** Thread Navigation
 
-** Emacs MCP Bridge
+Stored threads can be reopened from the workspace thread list, including older
+sessions that are no longer live in an Emacs buffer.
 
-If you enable =codex-ide-enable-emacs-tool-bridge=, Codex IDE starts an MCP
-bridge alongside =codex app-server= and ensures the current Emacs instance is
-reachable through =emacsclient=.
+#+CAPTION: Navigating the thread list and opening a previous Codex conversation.
+[[file:screenshots/codex-threads-navigation-2x.gif]]
 
-Example setup:
+** Resume Stored Threads
 
-#+begin_src emacs-lisp
-(use-package codex-ide
-  :custom
-  (codex-ide-enable-emacs-tool-bridge t)
-  (codex-ide-emacs-bridge-command-whitelist
-   '(save-buffer other-window delete-other-windows)))
-#+end_src
+Previous conversations can be restored into a new session buffer and continued
+with their Codex thread context intact.
 
-When enabled, the bridge can:
+#+CAPTION: Resuming a stored thread and continuing the conversation in a session buffer.
+[[file:screenshots/codex-resume-stored-thread-2x.gif]]
 
-- Describe the current Emacs bridge state to Codex
-- Return current editor context
-- Open files in the running Emacs session
-- Run selected interactive commands from your whitelist
-
-Set =codex-ide-emacs-bridge-allow-eval= only if you explicitly want to expose
-unrestricted Elisp evaluation to Codex.
-
-* Configuration
-
-** Configuration Variables
-
-| Variable | Description | Default |
-|--------------------------------------------------+--------------------------------------------------------+-----------------------------------------------|
-| ~codex-ide-cli-path~ | Path to the Codex CLI executable | ~"codex"~ |
-| ~codex-ide-buffer-name-function~ | Function used to derive session buffer names | ~codex-ide--default-buffer-name~ |
-| ~codex-ide-cli-extra-flags~ | Extra flags appended to =codex app-server= | ~""~ |
-| ~codex-ide-model~ | Optional model name for new or resumed threads | ~nil~ |
-| ~codex-ide-buffer-name-prefix~ | Prefix used in session and log buffer names | ~"codex"~ |
-| ~codex-ide-focus-on-open~ | Focus the Codex window after displaying it | ~t~ |
-| ~codex-ide-approval-policy~ | Approval policy for new or resumed threads | ~"on-request"~ |
-| ~codex-ide-sandbox-mode~ | Sandbox mode for new or resumed threads | ~"workspace-write"~ |
-| ~codex-ide-personality~ | Personality for new or resumed threads | ~"pragmatic"~ |
-| ~codex-ide-request-timeout~ | Seconds to wait for synchronous app-server responses | ~10~ |
-| ~codex-ide-log-max-lines~ | Maximum lines retained in each log buffer | ~10000~ |
-| ~codex-ide-include-active-buffer-context~ | Automatic active-buffer context inclusion policy | ~'when-changed~ |
-| ~codex-ide-enable-emacs-tool-bridge~ | Enable the Emacs MCP bridge | ~nil~ |
-| ~codex-ide-emacs-tool-bridge-name~ | Name used when registering the bridge with Codex | ~"emacs"~ |
-| ~codex-ide-emacs-bridge-python-command~ | Python executable used to launch the bridge | ~"python3"~ |
-| ~codex-ide-emacs-bridge-emacsclient-command~ | =emacsclient= executable used by the bridge | ~"emacsclient"~ |
-| ~codex-ide-emacs-bridge-script-path~ | Optional path to a custom bridge script | ~nil~ |
-| ~codex-ide-emacs-bridge-server-name~ | Emacs server name for bridge calls | ~nil~ |
-| ~codex-ide-suppress-server-start-prompts~ | Start the Emacs server without prompting | ~nil~ |
-| ~codex-ide-emacs-bridge-command-whitelist~ | Interactive commands exposed through the bridge | ~'(save-buffer)~ |
-| ~codex-ide-emacs-bridge-allow-eval~ | Expose unrestricted Elisp eval to Codex | ~nil~ |
-| ~codex-ide-emacs-bridge-startup-timeout~ | MCP bridge startup timeout in seconds | ~10~ |
-| ~codex-ide-emacs-bridge-tool-timeout~ | MCP tool call timeout in seconds | ~60~ |
-
-** Window Display
-
-Codex IDE uses normal =display-buffer= behavior. To keep focus in the current
-window when opening Codex:
-
-#+begin_src emacs-lisp
-(setq codex-ide-focus-on-open nil)
-#+end_src
-
-** Session Defaults
-
-You can set thread defaults up front:
-
-#+begin_src emacs-lisp
-(setq codex-ide-model "your-model-name"
-      codex-ide-approval-policy "on-request"
-      codex-ide-sandbox-mode "workspace-write"
-      codex-ide-personality "pragmatic")
-#+end_src
-
-These values are applied when creating or resuming threads through the package.
-
-** Bridge Configuration
-
-To customize the Emacs MCP bridge:
-
-#+begin_src emacs-lisp
-(setq codex-ide-enable-emacs-tool-bridge t
-      codex-ide-emacs-bridge-python-command "python3"
-      codex-ide-emacs-bridge-emacsclient-command "emacsclient"
-      codex-ide-emacs-bridge-command-whitelist
-      '(save-buffer other-window delete-other-windows))
-#+end_src
-
-If you use a named Emacs server:
-
-#+begin_src emacs-lisp
-(setq codex-ide-emacs-bridge-server-name "main")
-#+end_src
 
 * License
 
