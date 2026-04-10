@@ -55,6 +55,16 @@
   "Face used for item detail lines."
   :group 'codex-ide)
 
+(defface codex-ide-approval-header-face
+  '((t :inherit font-lock-warning-face :weight bold))
+  "Face used for inline approval request headers."
+  :group 'codex-ide)
+
+(defface codex-ide-approval-label-face
+  '((t :inherit font-lock-keyword-face :weight bold))
+  "Face used for inline approval field labels."
+  :group 'codex-ide)
+
 (defface codex-ide-file-diff-header-face
   '((t :inherit font-lock-keyword-face))
   "Face used for file-change diff headers."
@@ -123,6 +133,7 @@
     ("running" "Running")
     ("idle" "Idle")
     ("starting" "Starting")
+    ("approval" "Approval")
     ("interrupting" "Interrupting")
     ("submitted" "Submitted")
     ("disconnected" "Disconnected")
@@ -135,7 +146,7 @@
     (cond
      ((equal status "idle") 'codex-ide-status-idle-face)
      ((member status '("running" "submitted")) 'codex-ide-status-running-face)
-     ((member status '("starting" "interrupting")) 'codex-ide-status-busy-face)
+     ((member status '("starting" "interrupting" "approval")) 'codex-ide-status-busy-face)
      ((or (member status '("failed" "error" "disconnected" "finished" "killed"))
           (and status
                (string-match-p (rx (or "exit" "exited" "abnormally")) status)))

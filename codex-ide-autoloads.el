@@ -319,6 +319,7 @@ that session and then remove the persisted thread data from disk.
 ;;; Generated autoloads from codex-ide-renderer.el
 
 (register-definition-prefixes "codex-ide-renderer" '("codex-ide-"))
+
 
 ;;; End of scraped data
 

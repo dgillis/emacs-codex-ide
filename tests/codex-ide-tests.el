@@ -801,6 +801,130 @@
           (should (null response-error))
           (should (string= (codex-ide-session-status session) "running")))))))
 
+(ert-deftest codex-ide-command-approval-renders-inline-buttons-and-resolves-on-click ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (process (codex-ide-session-process session)))
+          (setf (codex-ide-session-current-turn-id session) "turn-approval-1"
+                (codex-ide-session-status session) "running")
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function)
+                       (funcall function)))
+                    ((symbol-function 'codex-ide-display-buffer)
+                     (lambda (_buffer) (selected-window)))
+                    ((symbol-function 'completing-read)
+                     (lambda (&rest _)
+                       (ert-fail "approval should not use completing-read"))))
+            (codex-ide--handle-command-approval
+             session
+             42
+             '((command . "git status")
+               (reason . "inspect worktree")
+               (proposedExecpolicyAmendment . ["git" "status"]))))
+          (should (string= (codex-ide-session-status session) "approval"))
+          (should (string-match-p "Codex:Approval"
+                                  (codex-ide--mode-line-status session)))
+          (should (= (hash-table-count (codex-ide--pending-approvals session)) 1))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (let ((text (buffer-string))
+                  (separator (string-trim-right
+                              (codex-ide--output-separator-string))))
+              (should (string-match-p
+                       (concat "\n\n"
+                               (regexp-quote separator)
+                               "\n\n\\[Approval required\\]\n\n"
+                               "Run the following command\\?\n\n"
+                               "    git status\n\n"
+                               "Reason: inspect worktree\n"
+                               "\\[accept\\]\n"
+                               "\\[accept for session\\]\n"
+                               "\\[accept and allow prefix (git status)\\]\n"
+                               "\\[decline\\]\n"
+                               "\\[cancel turn\\]\n\n")
+                       text))
+              (should (string-match-p "Reason: inspect worktree" text))
+              (should-not (string-match-p "Codex approval required" text))
+              (should-not (string-match-p "Proposed prefix:" text))
+              (should-not (string-match-p "Status: Pending" text))
+              (should-not (string-match-p "Choose:" text))
+              (should (string-match-p "\\[accept for session\\]" text)))
+            (goto-char (point-min))
+            (search-forward (string-trim-right
+                             (codex-ide--output-separator-string)))
+            (should (eq (get-text-property (match-beginning 0) 'face)
+                        'codex-ide-output-separator-face))
+            (search-forward "[Approval required]")
+            (should (eq (get-text-property (match-beginning 0) 'face)
+                        'codex-ide-approval-header-face))
+            (search-forward "Run the following command?")
+            (should (eq (get-text-property (match-beginning 0) 'face)
+                        'codex-ide-approval-label-face))
+            (search-forward "git status")
+            (should (eq (get-text-property (match-beginning 0) 'face)
+                        'codex-ide-item-summary-face))
+            (goto-char (point-min))
+            (search-forward "[accept for session]")
+            (backward-char 1)
+            (push-button))
+          (let* ((sent (codex-ide-test-process-sent-strings process))
+                 (payload (json-parse-string (car sent)
+                                             :object-type 'alist
+                                             :array-type 'list)))
+            (should (= (length sent) 1))
+            (should (equal (alist-get 'id payload) 42))
+            (should (equal (alist-get 'decision (alist-get 'result payload))
+                           "acceptForSession")))
+          (should (= (hash-table-count (codex-ide--pending-approvals session)) 0))
+          (should (string= (codex-ide-session-status session) "running"))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (string-match-p "\\[cancel turn\\]\n\nSelected: accept for session\n[^ \n]"
+                                    (concat (buffer-string) "x")))
+            (goto-char (point-max))
+            (search-backward "Selected:")
+            (should (eq (get-text-property (point) 'face)
+                        'codex-ide-approval-label-face))
+            (goto-char (point-min))
+            (search-forward "[accept for session]")
+            (backward-char 1)
+            (should-not (button-at (point))))
+          (should (= (length (codex-ide-test-process-sent-strings process)) 1)))))))
+
+(ert-deftest codex-ide-permissions-approval-inline-decline-sends-empty-permissions ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (process (codex-ide-session-process session)))
+          (setf (codex-ide-session-current-turn-id session) "turn-approval-2"
+                (codex-ide-session-status session) "running")
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function)
+                       (funcall function)))
+                    ((symbol-function 'codex-ide-display-buffer)
+                     (lambda (_buffer) (selected-window))))
+            (codex-ide--handle-permissions-approval
+             session
+             43
+             '((reason . "run a tool")
+               (permissions . (((tool . "shell")))))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (string-match-p "\\[Approval required\\]\n\nReason: run a tool"
+                                    (buffer-string)))
+            (goto-char (point-min))
+            (search-forward "[decline]")
+            (backward-char 1)
+            (push-button))
+          (let* ((payload (json-parse-string
+                           (car (codex-ide-test-process-sent-strings process))
+                           :object-type 'alist
+                           :array-type 'list))
+                 (result (alist-get 'result payload)))
+            (should (equal (alist-get 'id payload) 43))
+            (should (equal (alist-get 'permissions result) nil))
+            (should-not (alist-get 'scope result))))))))
+
 (ert-deftest codex-ide-process-sentinel-renders-startup-failure-from-stderr ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir

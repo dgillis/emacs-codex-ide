@@ -191,7 +191,7 @@ When SUFFIX is nil, return BUFFER-NAME unchanged."
             ((or "completed" "complete" "success") "idle")
             ((or "systemerror" "system_error") "error")
             ((or "failed" "error") "error")
-            ((or "idle" "running" "submitted" "starting" "interrupting"
+            ((or "idle" "running" "submitted" "starting" "interrupting" "approval"
                  "disconnected" "finished" "killed")
              (downcase trimmed))
             (_ trimmed)))))))
