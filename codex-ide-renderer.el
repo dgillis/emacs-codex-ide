@@ -10,6 +10,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'json)
 (require 'subr-x)
 (require 'codex-ide-core)
@@ -29,6 +30,8 @@
 (defvar codex-ide-log-max-lines)
 (defvar codex-ide-reasoning-effort)
 (defvar codex-ide-resume-summary-turn-limit)
+;; Cached to avoid repeated feature loading during streamed rendering.
+(defvar codex-ide--markdown-display-mode-function-cache 'unset)
 
 (defface codex-ide-user-prompt-face
   '((((class color) (background light))
@@ -425,30 +428,49 @@ inserted text."
 
 (defun codex-ide--clear-markdown-properties (start end)
   "Clear Codex markdown rendering properties between START and END."
-  (let ((pos start))
+  (let ((end-marker (copy-marker end)))
     ;; Only remove properties from regions previously marked as markdown.
     ;; Clearing `face' across the whole agent-message span can wipe faces from
     ;; later non-markdown transcript entries like "* Ran ..." summaries.
-    (while (< pos end)
-      (let ((next (next-single-property-change pos 'codex-ide-markdown nil end)))
-        (when (get-text-property pos 'codex-ide-markdown)
-          (remove-text-properties
-           pos next
-           '(font-lock-face nil
-             face nil
-             mouse-face nil
-             help-echo nil
-             keymap nil
-             category nil
-             button nil
-             action nil
-             follow-link nil
-             display nil
-             codex-ide-path nil
-             codex-ide-line nil
-             codex-ide-column nil
-             codex-ide-markdown nil)))
-        (setq pos next)))))
+    (save-excursion
+      (goto-char start)
+      (while (< (point) (marker-position end-marker))
+        (let* ((pos (point))
+               (next (or (next-single-property-change
+                          pos 'codex-ide-markdown nil (marker-position end-marker))
+                         (marker-position end-marker))))
+          (cond
+           ((and (get-text-property pos 'codex-ide-markdown)
+                 (get-text-property pos 'codex-ide-markdown-table-original))
+            (let ((original (get-text-property
+                             pos
+                             'codex-ide-markdown-table-original)))
+              (delete-region pos next)
+              (goto-char pos)
+              (insert original)))
+           ((get-text-property pos 'codex-ide-markdown)
+            (remove-text-properties
+             pos next
+             '(font-lock-face nil
+               face nil
+               mouse-face nil
+               help-echo nil
+               keymap nil
+               category nil
+               button nil
+               action nil
+               follow-link nil
+               display nil
+               codex-ide-path nil
+               codex-ide-line nil
+               codex-ide-column nil
+               codex-ide-table-link nil
+               codex-ide-markdown-table-original nil
+               codex-ide-markdown nil))
+            (goto-char next))
+           (t
+            (goto-char next))))))
+    (set-marker end-marker nil)))
 
 (defun codex-ide--normalize-markdown-link-label (label)
   "Return LABEL with markdown code delimiters stripped when present."
@@ -604,15 +626,304 @@ mode again."
              codex-ide-markdown t))
           (goto-char closing-end))))))
 
-(defun codex-ide--render-markdown-region (start end)
-  "Apply lightweight markdown rendering between START and END."
+(defun codex-ide--markdown-table-row-line-p (line)
+  "Return non-nil when LINE looks like a markdown pipe table row."
+  (string-match-p "\\`[ \t]*|.*|[ \t]*\\'" line))
+
+(defun codex-ide--markdown-table-separator-line-p (line)
+  "Return non-nil when LINE looks like a markdown table separator row."
+  (string-match-p
+   "\\`[ \t]*|[ \t]*:?-+:?[ \t]*\\(?:|[ \t]*:?-+:?[ \t]*\\)+|[ \t]*\\'"
+   line))
+
+(defun codex-ide--markdown-table-parse-row (line)
+  "Split markdown pipe table LINE into trimmed cell strings."
+  (mapcar #'string-trim
+          (split-string
+           (string-trim (string-remove-prefix "|"
+                                              (string-remove-suffix "|"
+                                                                    (string-trim-right line))))
+           "|")))
+
+(defun codex-ide--markdown-line-region-end (&optional limit)
+  "Return the current line end position, including a trailing newline when present.
+When LIMIT is non-nil, do not move beyond it."
+  (let* ((line-end (line-end-position))
+         (newline-end (if (< line-end (point-max))
+                          (1+ line-end)
+                        line-end)))
+    (min (or limit newline-end) newline-end)))
+
+(defun codex-ide--markdown-table-column-alignments (separator)
+  "Return column alignments parsed from markdown table SEPARATOR."
+  (mapcar
+   (lambda (cell)
+     (let ((trimmed (string-trim cell)))
+       (cond
+        ((and (string-prefix-p ":" trimmed)
+              (string-suffix-p ":" trimmed))
+         'center)
+        ((string-suffix-p ":" trimmed)
+         'right)
+        (t 'left))))
+   (codex-ide--markdown-table-parse-row separator)))
+
+(defconst codex-ide--markdown-table-inline-pattern
+  (concat
+   "\\(\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))\\)"
+   "\\|`\\([^`\n]+\\)`")
+  "Pattern for safe inline markdown supported inside rendered tables.")
+
+(defun codex-ide--markdown-table-render-cell (cell)
+  "Return CELL rendered as visible table text."
+  (let ((pos 0)
+        (parts nil))
+    (while (string-match codex-ide--markdown-table-inline-pattern cell pos)
+      (let ((match-start (match-beginning 0))
+            (match-end (match-end 0)))
+        (when (> match-start pos)
+          (push (substring cell pos match-start) parts))
+        (cond
+         ((match-beginning 2)
+          (let* ((label (codex-ide--normalize-markdown-link-label
+                         (match-string 2 cell)))
+                 (target (match-string 3 cell))
+                 (parsed (codex-ide--parse-file-link-target target)))
+            (push
+             (if parsed
+                 (propertize
+                  label
+                  'face 'link
+                  'mouse-face 'highlight
+                  'help-echo target
+                  'codex-ide-table-link t
+                  'codex-ide-path (nth 0 parsed)
+                  'codex-ide-line (nth 1 parsed)
+                  'codex-ide-column (nth 2 parsed))
+               (propertize
+                label
+                'face 'link
+                'mouse-face 'highlight
+                'help-echo target))
+             parts)))
+         ((match-beginning 4)
+          (push (propertize (match-string 4 cell)
+                            'face 'font-lock-keyword-face)
+                parts)))
+        (setq pos match-end)))
+    (when (< pos (length cell))
+      (push (substring cell pos) parts))
+    (apply #'concat (nreverse parts))))
+
+(defun codex-ide--markdown-table-pad-cell (cell width alignment)
+  "Return CELL padded to WIDTH using ALIGNMENT."
+  (let* ((cell-width (string-width cell))
+         (padding (max 0 (- width cell-width))))
+    (pcase alignment
+      ('right
+       (concat (make-string padding ?\s) cell))
+      ('center
+       (let* ((left (/ padding 2))
+              (right (- padding left)))
+         (concat (make-string left ?\s)
+                 cell
+                 (make-string right ?\s))))
+      (_
+       (concat cell (make-string padding ?\s))))))
+
+(defun codex-ide--markdown-table-format-row (cells widths alignments)
+  "Return a propertized table row from CELLS using WIDTHS and ALIGNMENTS."
+  (concat
+   "| "
+   (mapconcat
+    (lambda (triple)
+      (pcase-let ((`(,cell ,width ,alignment) triple))
+        (codex-ide--markdown-table-pad-cell cell width alignment)))
+    (cl-mapcar #'list cells widths alignments)
+    " | ")
+   " |\n"))
+
+(defun codex-ide--markdown-table-separator-string (widths alignments)
+  "Return a separator line for WIDTHS and ALIGNMENTS."
+  (concat
+   "|"
+   (mapconcat
+    (lambda (pair)
+      (pcase-let ((`(,width ,alignment) pair))
+        (let* ((visible-width (max 3 (+ width 2)))
+               (inner-width (max 1 (- visible-width 2)))
+               (dashes (make-string inner-width ?-)))
+          (pcase alignment
+            ('center (format ":%s:" dashes))
+            ('right (format "-%s:" dashes))
+            (_ (make-string visible-width ?-))))))
+    (cl-mapcar #'list widths alignments)
+    "|")
+   "|\n"))
+
+(defun codex-ide--markdown-table-display-string (lines)
+  "Return a rendered display string for markdown table LINES, or nil."
+  (when (>= (length lines) 2)
+    (let* ((header (car lines))
+           (separator (cadr lines))
+           (body (cddr lines)))
+      (when (and (codex-ide--markdown-table-row-line-p header)
+                 (codex-ide--markdown-table-separator-line-p separator))
+        (let* ((alignments (codex-ide--markdown-table-column-alignments separator))
+               (raw-rows (mapcar #'codex-ide--markdown-table-parse-row
+                                 (cons header
+                                       (seq-filter #'codex-ide--markdown-table-row-line-p
+                                                   body))))
+               (column-count (apply #'max (mapcar #'length raw-rows)))
+               (normalized-alignments
+                (append alignments
+                        (make-list (max 0 (- column-count (length alignments)))
+                                   'left)))
+               (rendered-rows
+                (mapcar
+                 (lambda (row)
+                   (append
+                    (mapcar #'codex-ide--markdown-table-render-cell row)
+                    (make-list (max 0 (- column-count (length row))) "")))
+                 raw-rows))
+               (widths
+                (cl-loop for column from 0 below column-count
+                         collect (apply #'max 1
+                                        (mapcar (lambda (row)
+                                                  (string-width (nth column row)))
+                                                rendered-rows))))
+               (table-text
+                (concat
+                 (codex-ide--markdown-table-format-row
+                  (car rendered-rows)
+                  widths
+                  normalized-alignments)
+                 (codex-ide--markdown-table-separator-string
+                  widths
+                  normalized-alignments)
+                 (mapconcat
+                  (lambda (row)
+                    (codex-ide--markdown-table-format-row
+                     row
+                     widths
+                     normalized-alignments))
+                  (cdr rendered-rows)
+                  ""))))
+          (add-face-text-property
+           0 (length table-text) 'fixed-pitch 'append table-text)
+          table-text)))))
+
+(defun codex-ide--buttonize-markdown-table-links (start end)
+  "Convert rendered file-link spans between START and END into buttons."
+  (let ((pos start))
+    (while (< pos end)
+      (let ((next (or (next-single-property-change pos 'codex-ide-table-link nil end)
+                      end)))
+        (when (and (get-text-property pos 'codex-ide-table-link)
+                   (get-text-property pos 'codex-ide-path))
+          (make-text-button
+           pos next
+           'action #'codex-ide--open-file-link
+           'follow-link t
+           'help-echo (get-text-property pos 'help-echo)
+           'face 'link
+           'codex-ide-markdown t
+           'codex-ide-path (get-text-property pos 'codex-ide-path)
+           'codex-ide-line (get-text-property pos 'codex-ide-line)
+           'codex-ide-column (get-text-property pos 'codex-ide-column)))
+        (setq pos next)))))
+
+(defun codex-ide--markdown-table-block-at-point (end &optional allow-trailing)
+  "Return markdown table data at point as (START END LINES), or nil.
+END bounds the scan region. When ALLOW-TRAILING is nil, require a line after
+the table so streaming partial tables at point-max are not rendered yet."
+  (let* ((header-start (line-beginning-position))
+         (header-end (line-end-position))
+         (header (buffer-substring-no-properties header-start header-end)))
+    (when (and (not (get-text-property header-start 'codex-ide-markdown))
+               (codex-ide--markdown-table-row-line-p header))
+      (save-excursion
+        (forward-line 1)
+        (when (< (point) end)
+          (let* ((separator-start (line-beginning-position))
+                 (separator-end (line-end-position))
+                 (separator
+                  (buffer-substring-no-properties separator-start separator-end)))
+            (when (and (not (get-text-property separator-start 'codex-ide-markdown))
+                       (codex-ide--markdown-table-separator-line-p separator))
+              (let ((lines (list header separator))
+                    (block-end
+                     (save-excursion
+                       (goto-char separator-start)
+                       (codex-ide--markdown-line-region-end end))))
+                (forward-line 1)
+                (while (and (< (point) end)
+                            (let* ((row-start (line-beginning-position))
+                                   (row-end (line-end-position))
+                                   (row
+                                    (buffer-substring-no-properties
+                                     row-start row-end)))
+                              (and (not (get-text-property
+                                         row-start 'codex-ide-markdown))
+                                   (codex-ide--markdown-table-row-line-p row))))
+                  (let* ((row-start (line-beginning-position))
+                         (row-end (line-end-position))
+                         (row (buffer-substring-no-properties row-start row-end)))
+                    (setq lines (append lines (list row))
+                          block-end (codex-ide--markdown-line-region-end end)))
+                  (forward-line 1))
+                (when (or allow-trailing
+                          (< block-end end))
+                  (list header-start block-end lines))))))))))
+
+(defun codex-ide--render-markdown-tables (start end &optional allow-trailing)
+  "Render markdown pipe tables between START and END.
+When ALLOW-TRAILING is nil, leave an unfinished trailing table unrendered."
+  (let ((end-marker (copy-marker end)))
+    (goto-char start)
+    (while (< (point) (marker-position end-marker))
+      (if-let ((table (codex-ide--markdown-table-block-at-point
+                       (marker-position end-marker)
+                       allow-trailing)))
+          (pcase-let ((`(,block-start ,block-end ,lines) table))
+            (if-let ((rendered (codex-ide--markdown-table-display-string lines)))
+                (let ((original (buffer-substring-no-properties
+                                 block-start
+                                 block-end)))
+                  (goto-char block-start)
+                  (delete-region block-start block-end)
+                  (insert rendered)
+                  (add-text-properties
+                   block-start
+                   (point)
+                   `(codex-ide-markdown t
+                     codex-ide-markdown-table-original ,original))
+                  (codex-ide--buttonize-markdown-table-links block-start (point))
+                  (goto-char (point)))
+              (goto-char block-end)))
+        (forward-line 1)))
+    (set-marker end-marker nil)))
+
+(defun codex-ide--render-markdown-region (start end &optional allow-trailing-tables)
+  "Apply lightweight markdown rendering between START and END.
+When ALLOW-TRAILING-TABLES is nil, do not render a trailing table that reaches
+END; this keeps streamed partial tables from being reformatted on every delta."
   (save-excursion
-    (let ((inhibit-read-only t))
-      (codex-ide--clear-markdown-properties start end)
+    (let ((inhibit-read-only t)
+          (end-marker (copy-marker end)))
+      (codex-ide--clear-markdown-properties start (marker-position end-marker))
       (goto-char start)
-      (codex-ide--render-fenced-code-blocks start end)
+      (codex-ide--render-fenced-code-blocks start (marker-position end-marker))
       (goto-char start)
-      (while (re-search-forward "\\(\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))\\)" end t)
+      (codex-ide--render-markdown-tables
+       start
+       (marker-position end-marker)
+       allow-trailing-tables)
+      (goto-char start)
+      (while (re-search-forward
+              "\\(\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))\\)"
+              (marker-position end-marker)
+              t)
         (unless (or (get-text-property (match-beginning 1) 'codex-ide-markdown)
                     (get-text-property (1- (match-end 1)) 'codex-ide-markdown))
           (let* ((match-start (match-beginning 1))
@@ -636,7 +947,10 @@ mode again."
                match-start match-end
                `(display ,display-label))))))
       (goto-char start)
-      (while (re-search-forward "`\\([^`\n]+\\)`" end t)
+      (while (re-search-forward
+              "`\\([^`\n]+\\)`"
+              (marker-position end-marker)
+              t)
         (unless (or (get-text-property (match-beginning 0) 'codex-ide-markdown)
                     (get-text-property (1- (match-end 0)) 'codex-ide-markdown))
           (let ((code-start (match-beginning 1))
@@ -652,7 +966,8 @@ mode again."
             (add-text-properties
              code-end (match-end 0)
              '(display ""
-               codex-ide-markdown t))))))))
+               codex-ide-markdown t)))))
+      (set-marker end-marker nil))))
 
 (defun codex-ide--insert-input-prompt (&optional session initial-text)
   "Insert a writable `>' prompt for SESSION.
@@ -1115,6 +1430,15 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt."
          (status (alist-get 'status item)))
     (let ((codex-ide--current-agent-item-type item-type))
       (pcase item-type
+        ("agentMessage"
+         (when-let ((message-start (codex-ide-session-current-message-start-marker session)))
+           (when (and (equal item-id (codex-ide-session-current-message-item-id session))
+                      (eq (marker-buffer message-start) buffer))
+             (with-current-buffer buffer
+               (codex-ide--render-markdown-region
+                (marker-position message-start)
+                (point-max)
+                t)))))
         ("commandExecution"
          (cond
           ((equal status "failed")
@@ -1313,7 +1637,7 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
         (codex-ide--append-agent-text buffer text)
         (when-let ((start (codex-ide-session-current-message-start-marker session)))
           (with-current-buffer buffer
-            (codex-ide--render-markdown-region start (point-max)))))
+            (codex-ide--render-markdown-region start (point-max) t))))
       t)))
 
 (defun codex-ide--replay-thread-read-turn (session turn)

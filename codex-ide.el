@@ -84,6 +84,11 @@ which applies to the current turn and subsequent turns for the thread."
 - You are a Codex server running inside Emacs.
 - You can use MCP tools to inspect and interact with the running Emacs session.
 - Interpret Emacs terminology as relevant context to the user's request: buffers, regions, windows, point, mark, current file, etc.
+- Responses are rendered as Markdown in an Emacs buffer.
+- Markdown pipe tables are rendered as visible tables.
+- In table cells, wrap code-like identifiers, filenames, paths, symbols, and expressions in backticks.
+- Use markdown links for file references when appropriate, for example [`foo.el`](/tmp/foo.el#L3C2).
+- Avoid bare underscores or asterisks for code-like text inside tables; use backticks instead.
 - Do not needlessly use Emacs commands to accomplish agent tasks."
   "Optionally baseline prompt injected into the first real prompt of a new thread.
 When set to a non-empty string, `codex-ide' prepends it once as an
@@ -1952,7 +1957,7 @@ PARAMS describe the request."
            (codex-ide--append-agent-text buffer delta)
            (when-let ((start (codex-ide-session-current-message-start-marker session)))
              (with-current-buffer buffer
-               (codex-ide--render-markdown-region start (point-max)))))))
+               (codex-ide--render-markdown-region start (point-max) nil))))))
       ("item/commandExecution/outputDelta"
        (let ((item-id (alist-get 'itemId params)))
          (codex-ide-log-message
