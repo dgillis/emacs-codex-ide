@@ -40,7 +40,10 @@
                          (directory-file-name project-dir))))
           (codex-ide-session-thread-list)
           (should (= (length codex-ide--sessions) 1))
-          (should (equal (nreverse requests) '("initialize" "thread/list")))
+          (should (equal (seq-remove (lambda (method)
+                                       (equal method "config/read"))
+                                     (nreverse requests))
+                         '("initialize" "thread/list")))
           (with-current-buffer buffer-name
             (should (derived-mode-p 'codex-ide-session-thread-list-mode))
             (should hl-line-mode)

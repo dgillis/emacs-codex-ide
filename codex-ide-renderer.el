@@ -17,7 +17,9 @@
 
 (declare-function codex-ide--extract-error-text "codex-ide" (&rest values))
 (declare-function codex-ide--classify-session-error "codex-ide" (&rest values))
+(declare-function codex-ide--ensure-server-model-name "codex-ide" (&optional session))
 (declare-function codex-ide--format-session-error-summary "codex-ide" (classification &optional prefix))
+(declare-function codex-ide--server-model-name "codex-ide" (&optional session))
 (declare-function codex-ide--sanitize-ansi-text "codex-ide" (text))
 (declare-function codex-ide--session-for-current-project "codex-ide" ())
 (declare-function codex-ide--strip-emacs-context-prefix "codex-ide" (text))
@@ -349,6 +351,15 @@ inserted text."
                          codex-ide-reasoning-effort)))
     (format "effort:%s" effort)))
 
+(defun codex-ide--format-model-summary (&optional session)
+  "Return a compact header summary for SESSION's model."
+  (let ((model (and session
+                    (codex-ide--server-model-name session))))
+    (unless model
+      (codex-ide--ensure-server-model-name session))
+    (when model
+      (format "model:%s" model))))
+
 (defun codex-ide--format-rate-limit-summary (rate-limits)
   "Return a compact header summary for RATE-LIMITS."
   (when-let* ((primary (alist-get 'primary rate-limits))
@@ -377,6 +388,8 @@ inserted text."
              (rate-limit-summary
               (codex-ide--format-rate-limit-summary
                (codex-ide--session-metadata-get session :rate-limits)))
+             (model-summary
+              (codex-ide--format-model-summary session))
              (effort-summary
               (codex-ide--format-reasoning-effort-summary session)))
         (setq header-line-format
@@ -385,6 +398,7 @@ inserted text."
                 (delq nil
                       (list
                        (format "focus: %s" focus)
+                       model-summary
                        effort-summary
                        token-summary
                        rate-limit-summary))

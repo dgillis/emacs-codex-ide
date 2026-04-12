@@ -11,6 +11,7 @@
 
 (declare-function codex-ide-mcp-bridge-enable "codex-ide-mcp-bridge" ())
 (declare-function codex-ide-mcp-bridge-disable "codex-ide-mcp-bridge" ())
+(declare-function codex-ide--available-model-names "codex-ide" ())
 (declare-function codex-ide "codex-ide" ())
 (declare-function codex-ide-continue "codex-ide" ())
 (declare-function codex-ide-prompt "codex-ide" ())
@@ -37,6 +38,12 @@
 (defvar codex-ide-enable-emacs-tool-bridge)
 (defvar codex-ide-emacs-bridge-require-approval)
 
+(defconst codex-ide--other-model-choice "Other..."
+  "Sentinel choice used to enter a custom model name.")
+
+(defconst codex-ide--empty-model-choice "<empty>"
+  "Sentinel choice used to clear the configured model.")
+
 (defun codex-ide--in-session-buffer-p ()
   "Return non-nil when the current buffer is a Codex session buffer."
   (derived-mode-p 'codex-ide-session-mode))
@@ -55,6 +62,26 @@
                (directory-file-name (codex-ide--get-working-directory))))
        'face 'success)
     (propertize "No active session" 'face 'transient-inactive-value)))
+
+(defun codex-ide--read-model ()
+  "Prompt for a model, preferring server-provided choices when available."
+  (let* ((default (or codex-ide-model ""))
+         (models (codex-ide--available-model-names)))
+    (if models
+        (let ((choice (completing-read
+                       "Model (choose or use Other...; empty clears): "
+                       (append models
+                               (list codex-ide--empty-model-choice
+                                     codex-ide--other-model-choice))
+                       nil nil nil nil default)))
+          (cond
+           ((equal choice codex-ide--empty-model-choice)
+            "")
+           ((equal choice codex-ide--other-model-choice)
+            (read-string "Custom model (leave empty to clear): " default))
+           (t
+            choice)))
+      (read-string "Model (leave empty to clear): " default))))
 
 (transient-define-suffix codex-ide--set-cli-path (path)
   "Set the Codex CLI path."
@@ -100,8 +127,7 @@
 (transient-define-suffix codex-ide--set-model (model)
   "Set the Codex model."
   :description "Set model"
-  (interactive (list (read-string "Model (leave empty to clear): "
-                                  (or codex-ide-model ""))))
+  (interactive (list (codex-ide--read-model)))
   (setq codex-ide-model (unless (string-empty-p model) model))
   (message "Codex model %s"
            (if codex-ide-model
