@@ -778,6 +778,34 @@
                 (should (string-match-p "\\[/Emacs prompt context\\]"
                                         (alist-get 'text (aref input 0))))))))))))
 
+(ert-deftest codex-ide-submit-includes-reasoning-effort-when-configured ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (submitted nil)
+        (codex-ide-reasoning-effort "high"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-test-effort")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "Explain this")
+            (cl-letf (((symbol-function 'codex-ide--request-sync)
+                       (lambda (_session _method params)
+                         (setq submitted params)
+                         nil)))
+              (codex-ide--submit-prompt)))
+          (should (equal (alist-get 'effort submitted) "high")))))))
+
+(ert-deftest codex-ide-header-line-shows-reasoning-effort ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-reasoning-effort "high"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--update-header-line session)
+            (should (string-match-p "effort:high"
+                                    (substring-no-properties header-line-format)))))))))
+
 (ert-deftest codex-ide-process-filter-handles-responses-notifications-and-partials ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (response-result nil)

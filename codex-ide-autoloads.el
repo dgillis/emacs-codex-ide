@@ -24,6 +24,11 @@ Additional flags appended to the `codex app-server` command.")
 (defvar codex-ide-model nil "\
 Optional model name for new or resumed threads.")
 (custom-autoload 'codex-ide-model "codex-ide" t)
+(defvar codex-ide-reasoning-effort nil "\
+Optional reasoning effort for new Codex turns.
+When non-nil, codex-ide sends this as the `effort' override on `turn/start',
+which applies to the current turn and subsequent turns for the thread.")
+(custom-autoload 'codex-ide-reasoning-effort "codex-ide" t)
 (defvar codex-ide-session-baseline-prompt "\n- You are a Codex server running inside Emacs.\n- You can use MCP tools to inspect and interact with the running Emacs session.\n- Interpret Emacs terminology as relevant context to the user's request: buffers, regions, windows, point, mark, current file, etc.\n- Do not needlessly use Emacs commands to accomplish agent tasks." "\
 Optionally baseline prompt injected into the first real prompt of a new thread.
 When set to a non-empty string, `codex-ide' prepends it once as an

@@ -8,7 +8,6 @@ ARGS=(
   -Q
   --batch
   --eval "(setq load-prefer-newer t)"
-  --eval "(setq load-suffixes '(\".el\"))"
   -L "$ROOT_DIR"
   -L "$TEST_DIR"
 )

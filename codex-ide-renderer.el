@@ -27,6 +27,7 @@
 (declare-function codex-ide-log-message "codex-ide" (session format-string &rest args))
 
 (defvar codex-ide-log-max-lines)
+(defvar codex-ide-reasoning-effort)
 (defvar codex-ide-resume-summary-turn-limit)
 
 (defface codex-ide-user-prompt-face
@@ -339,6 +340,12 @@ inserted text."
                 (format "reason:%s" (codex-ide--format-compact-number last-reasoning)))))
        "  "))))
 
+(defun codex-ide--format-reasoning-effort-summary (session)
+  "Return a compact header summary for SESSION's reasoning effort."
+  (when-let ((effort (or (codex-ide--session-metadata-get session :reasoning-effort)
+                         codex-ide-reasoning-effort)))
+    (format "effort:%s" effort)))
+
 (defun codex-ide--format-rate-limit-summary (rate-limits)
   "Return a compact header summary for RATE-LIMITS."
   (when-let* ((primary (alist-get 'primary rate-limits))
@@ -366,13 +373,16 @@ inserted text."
                (codex-ide--session-metadata-get session :token-usage)))
              (rate-limit-summary
               (codex-ide--format-rate-limit-summary
-               (codex-ide--session-metadata-get session :rate-limits))))
+               (codex-ide--session-metadata-get session :rate-limits)))
+             (effort-summary
+              (codex-ide--format-reasoning-effort-summary session)))
         (setq header-line-format
               (propertize
                (string-join
                 (delq nil
                       (list
                        (format "focus: %s" focus)
+                       effort-summary
                        token-summary
                        rate-limit-summary))
                 "  ")

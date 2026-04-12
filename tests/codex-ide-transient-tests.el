@@ -15,6 +15,9 @@
   (should (transient-get-suffix 'codex-ide-menu "l"))
   (should (transient-get-suffix 'codex-ide-menu "t")))
 
+(ert-deftest codex-ide-config-menu-exposes-reasoning-effort-suffix ()
+  (should (transient-get-suffix 'codex-ide-config-menu "R")))
+
 (ert-deftest codex-ide-menu-session-suffixes-use-current-commands ()
   (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "s")) :command)
               #'codex-ide))
@@ -24,6 +27,16 @@
               #'codex-ide-reset-current-session))
   (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "p")) :command)
               #'codex-ide-prompt)))
+
+(ert-deftest codex-ide-save-config-persists-reasoning-effort ()
+  (let ((codex-ide-reasoning-effort "high")
+        (saved nil))
+    (cl-letf (((symbol-function 'customize-save-variable)
+               (lambda (symbol value)
+                 (push (cons symbol value) saved))))
+      (codex-ide--save-config))
+    (should (equal (alist-get 'codex-ide-reasoning-effort saved)
+                   "high"))))
 
 (provide 'codex-ide-transient-tests)
 

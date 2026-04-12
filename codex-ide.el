@@ -66,6 +66,20 @@
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-reasoning-effort nil
+  "Optional reasoning effort for new Codex turns.
+When non-nil, codex-ide sends this as the `effort' override on `turn/start',
+which applies to the current turn and subsequent turns for the thread."
+  :type '(choice (const :tag "Default" nil)
+                 (const "none")
+                 (const "minimal")
+                 (const "low")
+                 (const "medium")
+                 (const "high")
+                 (const "xhigh"))
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-session-baseline-prompt "
 - You are a Codex server running inside Emacs.
 - You can use MCP tools to inspect and interact with the running Emacs session.
@@ -821,6 +835,17 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
   "Extract the thread id from RESULT."
   (alist-get 'id (alist-get 'thread result)))
 
+(defun codex-ide--extract-reasoning-effort (payload)
+  "Extract a reasoning effort string from PAYLOAD, if present."
+  (or (alist-get 'reasoningEffort payload)
+      (alist-get 'reasoningEffort (alist-get 'thread payload))
+      (alist-get 'reasoningEffort (alist-get 'turn payload))))
+
+(defun codex-ide--remember-reasoning-effort (session payload)
+  "Persist reasoning effort from PAYLOAD into SESSION metadata."
+  (when-let ((effort (codex-ide--extract-reasoning-effort payload)))
+    (codex-ide--session-metadata-put session :reasoning-effort effort)))
+
 (defun codex-ide--thread-read-turns (thread-read)
   "Return turn history from THREAD-READ."
   (or (alist-get 'turns thread-read)
@@ -1040,11 +1065,13 @@ ACTION is a short past-tense label used in log messages, such as
              (downcase action)
              (error-message-string err))
             nil))))
-    (codex-ide--request-sync
+    (codex-ide--remember-reasoning-effort
      session
-     "thread/resume"
-     (with-current-buffer (codex-ide-session-buffer session)
-       (codex-ide--thread-resume-params thread-id)))
+     (codex-ide--request-sync
+      session
+      "thread/resume"
+      (with-current-buffer (codex-ide-session-buffer session)
+        (codex-ide--thread-resume-params thread-id))))
     (setf (codex-ide-session-thread-id session) thread-id)
     (codex-ide--session-metadata-put session :session-context-sent t)
     (codex-ide-log-message session "%s thread %s" action thread-id)
@@ -1323,6 +1350,7 @@ MODE can be nil or `new', `continue', or `resume'."
                               "thread/start"
                               (with-current-buffer (codex-ide-session-buffer session)
                                 (codex-ide--thread-start-params)))))
+                 (codex-ide--remember-reasoning-effort session result)
                  (setf (codex-ide-session-thread-id session)
                        (codex-ide--extract-thread-id result))
                  (codex-ide--session-metadata-put session :session-context-sent nil)
@@ -1842,6 +1870,7 @@ PARAMS describe the request."
     (codex-ide-log-message session "Received notification %s" method)
     (pcase method
       ("thread/started"
+       (codex-ide--remember-reasoning-effort session params)
        (when-let ((thread-id (alist-get 'id (alist-get 'thread params))))
          (setf (codex-ide-session-thread-id session) thread-id))
        (codex-ide-log-message
@@ -1881,6 +1910,7 @@ PARAMS describe the request."
           (or (alist-get 'planType rate-limits) "unknown"))
          (codex-ide--update-header-line session)))
       ("turn/started"
+       (codex-ide--remember-reasoning-effort session params)
        (setf (codex-ide-session-current-turn-id session)
              (or (alist-get 'id (alist-get 'turn params))
                  (alist-get 'turnId params))
@@ -2245,6 +2275,7 @@ If no live session exists, prompt to start one."
                          "thread/start"
                          (with-current-buffer buffer
                            (codex-ide--thread-start-params)))))
+            (codex-ide--remember-reasoning-effort new-session result)
             (setf (codex-ide-session-thread-id new-session)
                   (codex-ide--extract-thread-id result))
             (codex-ide--session-metadata-put new-session :session-context-sent nil)
@@ -2396,10 +2427,17 @@ If no live session exists for the current buffer, prompt to start one first."
     (redisplay)
     (condition-case err
         (progn
+          (when codex-ide-reasoning-effort
+            (codex-ide--session-metadata-put
+             session
+             :reasoning-effort
+             codex-ide-reasoning-effort))
           (codex-ide--request-sync
            session
            "turn/start"
            `((threadId . ,thread-id)
+             ,@(when codex-ide-reasoning-effort
+                 `((effort . ,codex-ide-reasoning-effort)))
              (input . ,(alist-get 'input payload))))
           (when (alist-get 'included-session-context payload)
             (codex-ide--session-metadata-put session :session-context-sent t)))

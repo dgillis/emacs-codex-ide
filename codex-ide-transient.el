@@ -29,6 +29,7 @@
 (defvar codex-ide-cli-path)
 (defvar codex-ide-cli-extra-flags)
 (defvar codex-ide-model)
+(defvar codex-ide-reasoning-effort)
 (defvar codex-ide-approval-policy)
 (defvar codex-ide-sandbox-mode)
 (defvar codex-ide-personality)
@@ -107,6 +108,18 @@
                (format "set to %s" codex-ide-model)
              "cleared")))
 
+(transient-define-suffix codex-ide--set-reasoning-effort (value)
+  "Set `codex-ide-reasoning-effort'."
+  :description "Set reasoning effort"
+  (interactive (list (completing-read "Reasoning effort (leave empty to clear): "
+                                      '("none" "minimal" "low" "medium" "high" "xhigh")
+                                      nil nil nil nil codex-ide-reasoning-effort)))
+  (setq codex-ide-reasoning-effort (unless (string-empty-p value) value))
+  (message "Codex reasoning effort %s"
+           (if codex-ide-reasoning-effort
+               (format "set to %s" codex-ide-reasoning-effort)
+             "cleared")))
+
 (transient-define-suffix codex-ide--toggle-focus-on-open ()
   "Toggle `codex-ide-focus-on-open'."
   (interactive)
@@ -138,6 +151,7 @@
   (customize-save-variable 'codex-ide-cli-path codex-ide-cli-path)
   (customize-save-variable 'codex-ide-cli-extra-flags codex-ide-cli-extra-flags)
   (customize-save-variable 'codex-ide-model codex-ide-model)
+  (customize-save-variable 'codex-ide-reasoning-effort codex-ide-reasoning-effort)
   (customize-save-variable 'codex-ide-approval-policy codex-ide-approval-policy)
   (customize-save-variable 'codex-ide-sandbox-mode codex-ide-sandbox-mode)
   (customize-save-variable 'codex-ide-personality codex-ide-personality)
@@ -176,6 +190,7 @@
    ["CLI"
     ("p" "Set CLI path" codex-ide--set-cli-path)
     ("m" "Set model" codex-ide--set-model)
+    ("R" "Set reasoning effort" codex-ide--set-reasoning-effort)
     ("x" "Set extra flags" codex-ide--set-cli-extra-flags)
    ("a" "Set approval policy" codex-ide--set-approval-policy)
    ("P" "Set personality" codex-ide--set-personality)

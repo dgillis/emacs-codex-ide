@@ -9,7 +9,6 @@
 (require 'cl-lib)
 
 (setq load-prefer-newer t)
-(setq load-suffixes '(".el"))
 
 (add-to-list 'load-path
              (file-name-directory
