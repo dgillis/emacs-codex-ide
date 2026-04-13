@@ -213,6 +213,42 @@
               (should (eq (window-buffer window) target-buffer))
               (should (= (length (window-list nil 'no-minibuf)) 2)))))))))
 
+(ert-deftest codex-ide-display-new-session-buffer-uses-vertical-split ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (save-window-excursion
+        (delete-other-windows)
+        (let ((target-buffer (get-buffer-create " *codex-new-session-vertical*"))
+              (origin-window (selected-window))
+              (codex-ide-new-session-split 'vertical)
+              (codex-ide-focus-on-open nil))
+          (let* ((origin-left (nth 0 (window-edges origin-window)))
+                 (window (codex-ide--display-new-session-buffer target-buffer))
+                 (window-left (nth 0 (window-edges window))))
+            (should (window-live-p window))
+            (should-not (eq window origin-window))
+            (should (> window-left origin-left))
+            (should (eq (window-buffer window) target-buffer))
+            (should (eq (selected-window) origin-window))))))))
+
+(ert-deftest codex-ide-display-new-session-buffer-uses-horizontal-split ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (save-window-excursion
+        (delete-other-windows)
+        (let ((target-buffer (get-buffer-create " *codex-new-session-horizontal*"))
+              (origin-window (selected-window))
+              (codex-ide-new-session-split 'horizontal)
+              (codex-ide-focus-on-open nil))
+          (let* ((origin-top (nth 1 (window-edges origin-window)))
+                 (window (codex-ide--display-new-session-buffer target-buffer))
+                 (window-top (nth 1 (window-edges window))))
+            (should (window-live-p window))
+            (should-not (eq window origin-window))
+            (should (> window-top origin-top))
+            (should (eq (window-buffer window) target-buffer))
+            (should (eq (selected-window) origin-window))))))))
+
 (ert-deftest codex-ide-sessions-for-directory-returns-live-sessions-in-registry-order ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
@@ -310,6 +346,43 @@
               (goto-char (point-max))
               (forward-line 0)
               (should (looking-at-p "> ")))))))))
+
+(ert-deftest codex-ide-start-session-new-honors-new-session-split ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests '()))
+    (codex-ide-test-with-fixture project-dir
+      (save-window-excursion
+        (delete-other-windows)
+        (let ((origin-window (selected-window))
+              (codex-ide-new-session-split 'vertical)
+              (codex-ide-focus-on-open nil))
+          (codex-ide-test-with-fake-processes
+            (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+                       (lambda () t))
+                      ((symbol-function 'codex-ide-mcp-bridge-prompt-to-enable)
+                       (lambda () nil))
+                      ((symbol-function 'codex-ide-mcp-bridge-ensure-server)
+                       (lambda () nil))
+                      ((symbol-function 'codex-ide--request-sync)
+                       (lambda (_session method params)
+                         (push (cons method params) requests)
+                         (pcase method
+                           ("initialize" '((ok . t)))
+                           ("thread/start" '((thread . ((id . "thread-split-1")))))
+                           (_ (ert-fail (format "Unexpected method %s" method)))))))
+              (let* ((origin-left (nth 0 (window-edges origin-window)))
+                     (session (codex-ide--start-session 'new))
+                     (session-window (get-buffer-window
+                                      (codex-ide-session-buffer session))))
+                (should (window-live-p session-window))
+                (should-not (eq session-window origin-window))
+                (should (> (nth 0 (window-edges session-window)) origin-left))
+                (should (string= (codex-ide-session-thread-id session)
+                                 "thread-split-1"))
+                (should (equal (seq-remove (lambda (method)
+                                             (equal method "config/read"))
+                                           (mapcar #'car (nreverse requests)))
+                               '("initialize" "thread/start")))))))))))
 
 (ert-deftest codex-ide-first-submit-injects-session-context-once ()
   (let* ((project-dir (codex-ide-test--make-temp-project))

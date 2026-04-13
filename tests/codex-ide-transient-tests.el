@@ -19,6 +19,9 @@
 (ert-deftest codex-ide-config-menu-exposes-reasoning-effort-suffix ()
   (should (transient-get-suffix 'codex-ide-config-menu "R")))
 
+(ert-deftest codex-ide-config-menu-exposes-new-session-split-suffix ()
+  (should (transient-get-suffix 'codex-ide-config-menu "w")))
+
 (ert-deftest codex-ide-menu-session-suffixes-use-current-commands ()
   (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "s")) :command)
               #'codex-ide))
@@ -31,13 +34,23 @@
 
 (ert-deftest codex-ide-save-config-persists-reasoning-effort ()
   (let ((codex-ide-reasoning-effort "high")
+        (codex-ide-new-session-split 'vertical)
         (saved nil))
     (cl-letf (((symbol-function 'customize-save-variable)
                (lambda (symbol value)
                  (push (cons symbol value) saved))))
       (codex-ide--save-config))
     (should (equal (alist-get 'codex-ide-reasoning-effort saved)
-                   "high"))))
+                   "high"))
+    (should (eq (alist-get 'codex-ide-new-session-split saved)
+                'vertical))))
+
+(ert-deftest codex-ide-set-new-session-split-updates-global-default ()
+  (let ((codex-ide-new-session-split nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (&rest _) nil)))
+      (codex-ide--set-new-session-split 'horizontal))
+    (should (eq codex-ide-new-session-split 'horizontal))))
 
 (ert-deftest codex-ide-read-model-uses-server-provided-choices ()
   (let ((called nil))

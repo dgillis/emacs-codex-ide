@@ -111,6 +111,18 @@ brand-new thread. Resume and continue flows do not resend it."
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-new-session-split nil
+  "Window split direction to use when showing newly created Codex sessions.
+When nil, newly created sessions use the existing `codex-ide-display-buffer'
+behavior.  When `vertical', split the selected window left/right and show the
+session on the right.  When `horizontal', split the selected window top/bottom
+and show the session below."
+  :type '(choice (const :tag "Default display behavior" nil)
+                 (const :tag "Vertical split" vertical)
+                 (const :tag "Horizontal split" horizontal))
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-buffer-display-when-approval-required t
   "Whether to display a Codex buffer when it requires approval.
 When nil, approval requests are rendered into their Codex buffer and announced
@@ -366,6 +378,19 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
           (when (not (string-empty-p codex-ide-cli-extra-flags))
             (split-string-shell-command codex-ide-cli-extra-flags))))
 
+(defun codex-ide--display-buffer-in-window (buffer window)
+  "Display BUFFER in WINDOW, preserving dedication when possible."
+  (when window
+    (let ((was-dedicated (window-dedicated-p window)))
+      (when was-dedicated
+        (set-window-dedicated-p window nil))
+      (set-window-buffer window buffer)
+      (when was-dedicated
+        (set-window-dedicated-p window was-dedicated))
+      (when codex-ide-focus-on-open
+        (select-window window))))
+  window)
+
 (defun codex-ide-display-buffer (buffer)
   "Display BUFFER according to Codex window selection preferences."
   (codex-ide--remember-buffer-context-before-switch)
@@ -387,16 +412,35 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
               (and (memq :new-window config)
                    (split-window-sensibly selected-window))
               selected-window)))
-    (when window
-      (let ((was-dedicated (window-dedicated-p window)))
-        (when was-dedicated
-          (set-window-dedicated-p window nil))
-        (set-window-buffer window buffer)
-        (when was-dedicated
-          (set-window-dedicated-p window was-dedicated))
-        (when codex-ide-focus-on-open
-          (select-window window))))
-    window))
+    (codex-ide--display-buffer-in-window buffer window)))
+
+(defun codex-ide--split-window-for-new-session (window)
+  "Return a split child of WINDOW for a new session, or nil.
+The split direction is controlled by `codex-ide-new-session-split'."
+  (pcase codex-ide-new-session-split
+    ('nil nil)
+    ((or 'vertical 'horizontal)
+     (condition-case nil
+         (save-selected-window
+           (select-window window)
+           (if (eq codex-ide-new-session-split 'vertical)
+               (split-window-right)
+             (split-window-below)))
+       (error nil)))
+    (_ (user-error "Invalid codex-ide-new-session-split: %S"
+                   codex-ide-new-session-split))))
+
+(defun codex-ide--display-new-session-buffer (buffer)
+  "Display BUFFER for a newly created Codex session."
+  (if codex-ide-new-session-split
+      (let ((window (codex-ide--split-window-for-new-session
+                     (selected-window))))
+        (if window
+            (progn
+              (codex-ide--remember-buffer-context-before-switch)
+              (codex-ide--display-buffer-in-window buffer window))
+          (codex-ide-display-buffer buffer)))
+    (codex-ide-display-buffer buffer)))
 
 
 (defun codex-ide--trim-log-buffer ()
@@ -1406,9 +1450,12 @@ REUSE-NAME-SUFFIX as the session name suffix."
                     (codex-ide--app-server-command))
                    "Codex startup failed"))))))))
 
-(defun codex-ide--show-session-buffer (session)
-  "Display SESSION's buffer and return SESSION."
-  (codex-ide-display-buffer (codex-ide-session-buffer session))
+(defun codex-ide--show-session-buffer (session &optional newly-created)
+  "Display SESSION's buffer and return SESSION.
+When NEWLY-CREATED is non-nil, honor `codex-ide-new-session-split'."
+  (if newly-created
+      (codex-ide--display-new-session-buffer (codex-ide-session-buffer session))
+    (codex-ide-display-buffer (codex-ide-session-buffer session)))
   (codex-ide--ensure-input-prompt session)
   session)
 
@@ -1501,7 +1548,7 @@ REUSE-NAME-SUFFIX as the session name suffix."
       (codex-ide--initialize-session session)
       (codex-ide--resume-thread-into-session session thread-id "Resumed")
       (codex-ide--update-header-line session)
-      (codex-ide--show-session-buffer session)
+      (codex-ide--show-session-buffer session t)
       (codex-ide--ensure-input-prompt session)
       session)))
 
@@ -1581,7 +1628,7 @@ MODE can be nil or `new', `continue', or `resume'."
                 (if (eq mode 'continue) "Continued" "Resumed"))))
             (setf (codex-ide-session-status session) "idle")
             (codex-ide--update-header-line session)
-            (codex-ide--show-session-buffer session)
+            (codex-ide--show-session-buffer session created-session)
             (codex-ide--track-active-buffer)
             (unless (codex-ide-session-output-prefix-inserted session)
               (codex-ide--ensure-input-prompt session))

@@ -35,6 +35,7 @@
 (defvar codex-ide-sandbox-mode)
 (defvar codex-ide-personality)
 (defvar codex-ide-focus-on-open)
+(defvar codex-ide-new-session-split)
 (defvar codex-ide-enable-emacs-tool-bridge)
 (defvar codex-ide-emacs-bridge-require-approval)
 
@@ -43,6 +44,12 @@
 
 (defconst codex-ide--empty-model-choice "<empty>"
   "Sentinel choice used to clear the configured model.")
+
+(defconst codex-ide--new-session-split-choices
+  '(("default display" . nil)
+    ("vertical split" . vertical)
+    ("horizontal split" . horizontal))
+  "Completion choices for `codex-ide-new-session-split'.")
 
 (defun codex-ide--in-session-buffer-p ()
   "Return non-nil when the current buffer is a Codex session buffer."
@@ -152,6 +159,29 @@
   (setq codex-ide-focus-on-open (not codex-ide-focus-on-open))
   (message "Focus on open %s" (if codex-ide-focus-on-open "enabled" "disabled")))
 
+(defun codex-ide--new-session-split-label ()
+  "Return a short label for `codex-ide-new-session-split'."
+  (or (car (rassoc codex-ide-new-session-split
+                   codex-ide--new-session-split-choices))
+      (format "%S" codex-ide-new-session-split)))
+
+(transient-define-suffix codex-ide--set-new-session-split (split)
+  "Set `codex-ide-new-session-split'."
+  :description "Set new session split"
+  (interactive
+   (list
+    (cdr
+     (assoc
+      (completing-read
+       "New session split: "
+       codex-ide--new-session-split-choices
+       nil t nil nil
+       (codex-ide--new-session-split-label))
+      codex-ide--new-session-split-choices))))
+  (setq codex-ide-new-session-split split)
+  (message "New session split set to %s"
+           (codex-ide--new-session-split-label)))
+
 (transient-define-suffix codex-ide--toggle-emacs-tool-bridge ()
   "Toggle `codex-ide-enable-emacs-tool-bridge'."
   (interactive)
@@ -182,6 +212,8 @@
   (customize-save-variable 'codex-ide-sandbox-mode codex-ide-sandbox-mode)
   (customize-save-variable 'codex-ide-personality codex-ide-personality)
   (customize-save-variable 'codex-ide-focus-on-open codex-ide-focus-on-open)
+  (customize-save-variable 'codex-ide-new-session-split
+                           codex-ide-new-session-split)
   (customize-save-variable 'codex-ide-enable-emacs-tool-bridge
                            codex-ide-enable-emacs-tool-bridge)
   (customize-save-variable 'codex-ide-emacs-bridge-require-approval
@@ -225,7 +257,11 @@
     ("f" "Toggle focus on open" codex-ide--toggle-focus-on-open
      :description (lambda ()
                      (format "Focus on open (%s)"
-                             (if codex-ide-focus-on-open "ON" "OFF"))))]
+                             (if codex-ide-focus-on-open "ON" "OFF"))))
+    ("w" "Set new session split" codex-ide--set-new-session-split
+     :description (lambda ()
+                     (format "New session split (%s)"
+                             (codex-ide--new-session-split-label))))]
    ["Bridge"
     ("e" "Toggle Emacs callback bridge" codex-ide--toggle-emacs-tool-bridge
      :description (lambda ()
