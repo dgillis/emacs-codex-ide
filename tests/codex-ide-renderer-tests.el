@@ -42,6 +42,19 @@
     (forward-line -1)
     (should (equal (get-text-property (point) 'display) ""))))
 
+(ert-deftest codex-ide-renderer-renders-json-fenced-code-blocks-with-stock-mode ()
+  (with-temp-buffer
+    (insert "```json\n{\"tool\": true}\n```\n")
+    (codex-ide--render-markdown-region (point-min) (point-max) t)
+    (goto-char (point-min))
+    (search-forward "tool")
+    (let ((code-pos (1- (point))))
+      (should (get-text-property code-pos 'codex-ide-markdown))
+      (should (memq 'fixed-pitch
+                    (ensure-list (get-text-property code-pos 'face))))
+      (should (memq 'font-lock-string-face
+                    (ensure-list (get-text-property code-pos 'face)))))))
+
 (ert-deftest codex-ide-renderer-fontifies-completed-fences-while-streaming ()
   (with-temp-buffer
     (insert "```javascript\nconst x = 1;\n")

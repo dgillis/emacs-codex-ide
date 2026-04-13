@@ -520,44 +520,46 @@ inserted text."
         (match-string 1 label)
       label)))
 
-(defun codex-ide--markdown-language-mode (language)
-  "Return an Emacs major mode function for fenced code block LANGUAGE."
+(defun codex-ide--markdown-language-mode-candidates (language)
+  "Return Emacs major mode functions for fenced code block LANGUAGE."
   (let* ((lang (downcase (string-trim (or language ""))))
-         (mode
+         (modes
           (alist-get
            lang
-           '(("bash" . sh-mode)
-             ("c" . c-mode)
-             ("c++" . c++-mode)
-             ("cpp" . c++-mode)
-             ("elisp" . emacs-lisp-mode)
-             ("emacs-lisp" . emacs-lisp-mode)
-             ("go" . go-mode)
-             ("java" . java-mode)
-             ("javascript" . js-mode)
-             ("js" . js-mode)
-             ("json" . json-mode)
-             ("python" . python-mode)
-             ("py" . python-mode)
-             ("ruby" . ruby-mode)
-             ("rust" . rust-mode)
-             ("shell" . sh-mode)
-             ("sh" . sh-mode)
-             ("typescript" . typescript-mode)
-             ("ts" . typescript-mode)
-             ("tsx" . tsx-ts-mode)
-             ("yaml" . yaml-mode)
-             ("yml" . yaml-mode))
+           '(("bash" . (sh-mode))
+             ("c" . (c-mode))
+             ("c++" . (c++-mode))
+             ("cpp" . (c++-mode))
+             ("elisp" . (emacs-lisp-mode))
+             ("emacs-lisp" . (emacs-lisp-mode))
+             ("go" . (go-mode go-ts-mode c-mode))
+             ("java" . (java-mode))
+             ("javascript" . (js-mode))
+             ("js" . (js-mode))
+             ("json" . (json-mode js-json-mode json-ts-mode js-mode))
+             ("python" . (python-mode))
+             ("py" . (python-mode))
+             ("ruby" . (ruby-mode))
+             ("rust" . (rust-mode rust-ts-mode c++-mode))
+             ("shell" . (sh-mode))
+             ("sh" . (sh-mode))
+             ("typescript" . (typescript-mode typescript-ts-mode js-mode))
+             ("ts" . (typescript-mode typescript-ts-mode js-mode))
+             ("tsx" . (tsx-ts-mode typescript-ts-mode js-mode))
+             ("yaml" . (yaml-mode yaml-ts-mode conf-mode))
+             ("yml" . (yaml-mode yaml-ts-mode conf-mode)))
            nil nil #'string=)))
-    (cond
-     ((and mode (fboundp mode))
-      mode)
-     ((string-empty-p lang)
-      nil)
-     (t
-      (let ((candidate (intern-soft (format "%s-mode" lang))))
-        (when (fboundp candidate)
-          candidate))))))
+    (cl-remove-duplicates
+     (cl-remove-if-not
+      #'fboundp
+      (append modes
+              (unless (string-empty-p lang)
+                (list (intern-soft (format "%s-mode" lang))))))
+     :test #'eq)))
+
+(defun codex-ide--markdown-language-mode (language)
+  "Return an Emacs major mode function for fenced code block LANGUAGE."
+  (car (codex-ide--markdown-language-mode-candidates language)))
 
 (defvar codex-ide--font-lock-spec-cache (make-hash-table :test 'eq)
   "Cache of font-lock setup captured from major modes.")
@@ -631,37 +633,51 @@ mode again."
              'append)))
         (setq pos next)))))
 
+(defun codex-ide--fontify-code-block-with-mode (source-buffer start end code language mode)
+  "Apply MODE fontification for CODE into SOURCE-BUFFER between START and END."
+  (or
+   (condition-case nil
+       (let ((spec (codex-ide--font-lock-spec-for-mode mode)))
+         (with-temp-buffer
+           (insert code)
+           (codex-ide--apply-font-lock-spec spec)
+           (font-lock-mode 1)
+           (font-lock-ensure (point-min) (point-max))
+           (codex-ide--copy-code-font-lock-properties
+            source-buffer start end))
+         t)
+     (error nil))
+   (condition-case nil
+       (with-temp-buffer
+         (insert code)
+         (let ((buffer-file-name
+                (format "codex-ide-snippet.%s"
+                        (if (string-empty-p (string-trim (or language "")))
+                            "txt"
+                          (downcase (string-trim language))))))
+           (delay-mode-hooks
+             (funcall mode)))
+         (font-lock-mode 1)
+         (font-lock-ensure (point-min) (point-max))
+         (codex-ide--copy-code-font-lock-properties
+          source-buffer start end)
+         t)
+     (error nil))))
+
 (defun codex-ide--fontify-code-block-region (start end language)
   "Apply syntax highlighting to region START END using LANGUAGE."
-  (when-let ((mode (codex-ide--markdown-language-mode language)))
-    (let ((source-buffer (current-buffer))
-          (code (buffer-substring-no-properties start end)))
-      (unless
-          (condition-case nil
-              (let ((spec (codex-ide--font-lock-spec-for-mode mode)))
-                (with-temp-buffer
-                  (insert code)
-                  (codex-ide--apply-font-lock-spec spec)
-                  (font-lock-mode 1)
-                  (font-lock-ensure (point-min) (point-max))
-                  (codex-ide--copy-code-font-lock-properties
-                   source-buffer start end))
-                t)
-            (error nil))
-        (condition-case nil
-          (with-temp-buffer
-            (insert code)
-            (let ((buffer-file-name
-                   (format "codex-ide-snippet.%s"
-                           (downcase (string-trim (or language ""))))))
-              (delay-mode-hooks
-                (funcall mode)))
-            (font-lock-mode 1)
-            (font-lock-ensure (point-min) (point-max))
-            (codex-ide--copy-code-font-lock-properties
-             source-buffer start end))
-          (error nil))
-        t))))
+  (let ((source-buffer (current-buffer))
+        (code (buffer-substring-no-properties start end)))
+    (cl-some
+     (lambda (mode)
+       (codex-ide--fontify-code-block-with-mode
+        source-buffer
+        start
+        end
+        code
+        language
+        mode))
+     (codex-ide--markdown-language-mode-candidates language))))
 
 (defun codex-ide--render-fenced-code-blocks (start end)
   "Render fenced code blocks between START and END."

@@ -378,6 +378,48 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
           (when (not (string-empty-p codex-ide-cli-extra-flags))
             (split-string-shell-command codex-ide-cli-extra-flags))))
 
+(defun codex-ide--environment-variable-value (name environment)
+  "Return NAME's value in ENVIRONMENT, or nil when unset."
+  (let ((prefix (concat name "=")))
+    (when-let ((entry (cl-find-if
+                       (lambda (value)
+                         (string-prefix-p prefix value))
+                       environment)))
+      (substring entry (length prefix)))))
+
+(defun codex-ide--set-environment-variable (environment name value)
+  "Return ENVIRONMENT with NAME set to VALUE."
+  (let ((prefix (concat name "=")))
+    (cons (concat prefix value)
+          (cl-remove-if
+           (lambda (entry)
+             (string-prefix-p prefix entry))
+           environment))))
+
+(defun codex-ide--app-server-process-environment (&optional environment)
+  "Return ENVIRONMENT adjusted for color-capable app-server tools."
+  (let ((env (copy-sequence (or environment process-environment))))
+    (unless (codex-ide--environment-variable-value "NO_COLOR" env)
+      (let ((term (codex-ide--environment-variable-value "TERM" env)))
+        (when (or (null term)
+                  (string-empty-p term)
+                  (string= term "dumb"))
+          (setq env (codex-ide--set-environment-variable
+                     env
+                     "TERM"
+                     "xterm-256color"))))
+      (unless (codex-ide--environment-variable-value "COLORTERM" env)
+        (setq env (codex-ide--set-environment-variable
+                   env
+                   "COLORTERM"
+                   "truecolor")))
+      (unless (codex-ide--environment-variable-value "CLICOLOR" env)
+        (setq env (codex-ide--set-environment-variable
+                   env
+                   "CLICOLOR"
+                   "1"))))
+    env))
+
 (defun codex-ide--display-buffer-in-window (buffer window)
   "Display BUFFER in WINDOW, preserving dedication when possible."
   (when window
@@ -1359,7 +1401,9 @@ ACTION is a short past-tense label used in log messages, such as
 When REUSE-BUFFER is non-nil, use it as the session buffer and keep
 REUSE-NAME-SUFFIX as the session name suffix."
   (let ((working-dir (codex-ide--get-working-directory)))
-    (let* ((name-suffix (if reuse-buffer
+    (let* ((process-environment
+            (codex-ide--app-server-process-environment process-environment))
+           (name-suffix (if reuse-buffer
                             reuse-name-suffix
                           (codex-ide--next-session-name-suffix working-dir)))
            (buffer (or reuse-buffer

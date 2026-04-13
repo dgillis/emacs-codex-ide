@@ -35,6 +35,27 @@
                 "test-model"
                 "--debug"))))))
 
+(ert-deftest codex-ide-app-server-process-environment-adds-color-defaults ()
+  (let ((env (codex-ide--app-server-process-environment
+              '("TERM=dumb"
+                "PATH=/bin"))))
+    (should (equal (codex-ide--environment-variable-value "TERM" env)
+                   "xterm-256color"))
+    (should (equal (codex-ide--environment-variable-value "COLORTERM" env)
+                   "truecolor"))
+    (should (equal (codex-ide--environment-variable-value "CLICOLOR" env)
+                   "1"))))
+
+(ert-deftest codex-ide-app-server-process-environment-respects-no-color ()
+  (let ((env (codex-ide--app-server-process-environment
+              '("NO_COLOR=1"
+                "TERM=dumb"
+                "PATH=/bin"))))
+    (should (equal (codex-ide--environment-variable-value "TERM" env)
+                   "dumb"))
+    (should-not (codex-ide--environment-variable-value "COLORTERM" env))
+    (should-not (codex-ide--environment-variable-value "CLICOLOR" env))))
+
 (ert-deftest codex-ide-create-process-session-builds-buffers-and-registers-session ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
