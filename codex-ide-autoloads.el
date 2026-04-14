@@ -121,6 +121,13 @@ Whether codex-ide should expose Emacs tools to Codex via MCP.
 When non-nil, codex-ide starts an MCP bridge server alongside `codex app-server'
 and ensures the current Emacs instance is reachable via `emacsclient'.")
 (custom-autoload 'codex-ide-enable-emacs-tool-bridge "codex-ide-mcp-bridge" t)
+(defvar codex-ide-want-mcp-bridge 'prompt "\
+Whether codex-ide should start the Emacs MCP bridge.
+
+When nil, do not start the bridge.  When t, start the bridge without prompting.
+When `prompt', ask before enabling the bridge, matching the historical startup
+behavior.")
+(custom-autoload 'codex-ide-want-mcp-bridge "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-tool-bridge-name "emacs" "\
 Name used when registering the Emacs MCP bridge with Codex.")
 (custom-autoload 'codex-ide-emacs-tool-bridge-name "codex-ide-mcp-bridge" t)
@@ -332,6 +339,12 @@ that session and then remove the persisted thread data from disk.
 
 (register-definition-prefixes "codex-ide-renderer" '("codex-ide-"))
 
+
+;;; Generated autoloads from codex-ide-debug-info.el
+
+(autoload 'codex-ide-show-debug-info "codex-ide-debug-info" "\
+Show a minibuffer summary of live Codex IDE session state." t)
+(register-definition-prefixes "codex-ide-debug-info" '("codex-ide-debug-info--"))
 
 ;;; End of scraped data
 

@@ -15,6 +15,7 @@ Keep the module boundaries clear:
 - `bin/codex-ide-mcp-server.py`: standalone MCP proxy that talks to a running Emacs via `emacsclient` and forwards JSON tool calls into `codex-ide-mcp-bridge--json-tool-call`.
 - `codex-ide-transient.el`: transient-based command menus and configuration UI. Treat this as command-surface glue, not the home for core business logic.
 - `tests/*-tests.el`: ERT coverage for session setup, command assembly, process handling, bridge config, context composition, and transcript behavior.
+- `tests/integration/*`: optional integration tests, if present, that run in an isolated Emacs process and exercise `codex-ide` against a real `codex app-server` instance. Keep these separate from the normal ERT suite because they are slower, environment-dependent, and may use real Codex authentication or network access.
 - `bin/run-tests.sh`: canonical test runner.
 
 Design expectations:
@@ -37,6 +38,7 @@ Coding conventions:
 - After making changes, note that files can be reloaded into the running Emacs session through the Emacs bridge, but only do so if the user explicitly requests it. When doing this, do not bother reloading changes in test files.
 - After all non-trivial file changes run the `emacs/lisp_check_parens` to ensure no mismatched parens.
 - Run existing tests after changes and add or update tests when behavior changes.
+- Do not run integration tests that require a real Emacs process or real Codex instance unless the user explicitly requests them.
 - Never commit code unless the user explicitly asks for a commit.
 
 ## Commands
@@ -46,6 +48,19 @@ Run tests:
 ```bash
 bin/run-tests.sh
 ```
+
+Run optional real-Codex integration tests only when explicitly requested:
+
+```bash
+bin/run-integration-tests.sh
+```
+
+By default this opens a normal Emacs session so failures can be observed and
+debugged interactively, uses the shell's current working directory as the Codex
+project under test, and runs a timer-driven async integration runner so Emacs
+stays responsive while Codex streams. For automation, run it with
+`CODEX_IDE_INTEGRATION_BATCH=1` to use the ERT-backed batch mode and exit with
+the ERT status.
 
 Run tests directly in batch mode:
 
@@ -115,6 +130,7 @@ Before finishing work:
 
 - Mention when reloading changed Elisp files into the live Emacs session with `emacsclient` is available, but only perform it if the user explicitly requests it.
 - Run `bin/run-tests.sh`.
+- Do not run optional real-Codex integration tests unless explicitly requested.
 - Add or update ERT tests for behavioral changes.
 - If relevant, verify batch compilation or explain clearly why it failed.
 - Remove any `.elc` files generated during testing or validation.

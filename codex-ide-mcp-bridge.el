@@ -29,6 +29,18 @@ and ensures the current Emacs instance is reachable via `emacsclient'."
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-want-mcp-bridge 'prompt
+  "Whether codex-ide should start the Emacs MCP bridge.
+
+When nil, do not start the bridge.  When t, start the bridge without prompting.
+When `prompt', ask before enabling the bridge, matching the historical startup
+behavior."
+  :type '(choice (const :tag "Do not start" nil)
+                 (const :tag "Start without prompting" t)
+                 (const :tag "Prompt at startup" prompt))
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-emacs-tool-bridge-name "emacs"
   "Name used when registering the Emacs MCP bridge with Codex."
   :type 'string
@@ -183,26 +195,38 @@ requests when `codex-ide-emacs-bridge-require-approval' is nil."
 ;;;###autoload
 (defun codex-ide-mcp-bridge-enabled-p ()
   "Return non-nil when the Emacs MCP bridge should be enabled."
-  codex-ide-enable-emacs-tool-bridge)
+  (cond
+   ((eq codex-ide-want-mcp-bridge nil) nil)
+   ((eq codex-ide-want-mcp-bridge t) t)
+   ((eq codex-ide-want-mcp-bridge 'prompt)
+    codex-ide-enable-emacs-tool-bridge)
+   (t nil)))
 
 ;;;###autoload
 (defun codex-ide-mcp-bridge-enable ()
   "Enable the Emacs MCP bridge and ensure the target Emacs server is running."
   (setq codex-ide-enable-emacs-tool-bridge t)
+  (when (eq codex-ide-want-mcp-bridge nil)
+    (setq codex-ide-want-mcp-bridge t))
   (codex-ide-mcp-bridge-ensure-server))
 
 ;;;###autoload
 (defun codex-ide-mcp-bridge-disable ()
   "Disable the Emacs MCP bridge."
+  (setq codex-ide-want-mcp-bridge nil)
   (setq codex-ide-enable-emacs-tool-bridge nil)
   codex-ide-enable-emacs-tool-bridge)
 
 ;;;###autoload
 (defun codex-ide-mcp-bridge-prompt-to-enable ()
   "Prompt once to enable the Emacs MCP bridge for session startup."
-  (when (and (not (codex-ide-mcp-bridge-enabled-p))
-             (y-or-n-p "Enable the Emacs tool bridge for this Codex session? "))
-    (codex-ide-mcp-bridge-enable)))
+  (cond
+   ((eq codex-ide-want-mcp-bridge t)
+    (codex-ide-mcp-bridge-enable))
+   ((eq codex-ide-want-mcp-bridge 'prompt)
+    (when (and (not (codex-ide-mcp-bridge-enabled-p))
+               (y-or-n-p "Enable the Emacs tool bridge for this Codex session? "))
+      (codex-ide-mcp-bridge-enable)))))
 
 (defun codex-ide-mcp-bridge--ensure-server-running-p (target-server-name)
   "Return non-nil when TARGET-SERVER-NAME is running.
@@ -228,6 +252,7 @@ Errors from `server-running-p' are treated as nil."
                      python-path
                      emacsclient-path)))
     `((enabled . ,enabled)
+      (want . ,codex-ide-want-mcp-bridge)
       (ready . ,ready)
       (scriptPath . ,script-path)
       (scriptExists . ,(file-exists-p script-path))

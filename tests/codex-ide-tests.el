@@ -45,7 +45,8 @@
           (should (codex-ide-test-process-p (codex-ide-session-process session)))
           (should (memq session codex-ide--sessions))
           (should (eq session
-                      (codex-ide--canonical-session-for-directory project-dir)))
+                      (codex-ide--last-active-session-for-directory project-dir)))
+          (should (numberp (codex-ide-session-created-at session)))
           (with-current-buffer (codex-ide-session-buffer session)
             (should (derived-mode-p 'codex-ide-session-mode))
             (should visual-line-mode)
@@ -213,59 +214,53 @@
               (should (eq (window-buffer window) target-buffer))
               (should (= (length (window-list nil 'no-minibuf)) 2)))))))))
 
-(ert-deftest codex-ide-display-new-session-buffer-uses-vertical-split ()
-  (let ((project-dir (codex-ide-test--make-temp-project)))
-    (codex-ide-test-with-fixture project-dir
-      (save-window-excursion
-        (delete-other-windows)
-        (let ((target-buffer (get-buffer-create " *codex-new-session-vertical*"))
-              (origin-window (selected-window))
-              (codex-ide-new-session-split 'vertical)
-              (codex-ide-focus-on-open nil))
-          (let* ((origin-left (nth 0 (window-edges origin-window)))
-                 (window (codex-ide--display-new-session-buffer target-buffer))
-                 (window-left (nth 0 (window-edges window))))
-            (should (window-live-p window))
-            (should-not (eq window origin-window))
-            (should (> window-left origin-left))
-            (should (eq (window-buffer window) target-buffer))
-            (should (eq (selected-window) origin-window))))))))
-
-(ert-deftest codex-ide-display-new-session-buffer-uses-horizontal-split ()
-  (let ((project-dir (codex-ide-test--make-temp-project)))
-    (codex-ide-test-with-fixture project-dir
-      (save-window-excursion
-        (delete-other-windows)
-        (let ((target-buffer (get-buffer-create " *codex-new-session-horizontal*"))
-              (origin-window (selected-window))
-              (codex-ide-new-session-split 'horizontal)
-              (codex-ide-focus-on-open nil))
-          (let* ((origin-top (nth 1 (window-edges origin-window)))
-                 (window (codex-ide--display-new-session-buffer target-buffer))
-                 (window-top (nth 1 (window-edges window))))
-            (should (window-live-p window))
-            (should-not (eq window origin-window))
-            (should (> window-top origin-top))
-            (should (eq (window-buffer window) target-buffer))
-            (should (eq (selected-window) origin-window))))))))
-
-(ert-deftest codex-ide-sessions-for-directory-returns-live-sessions-in-registry-order ()
+(ert-deftest codex-ide-last-active-session-for-directory-uses-activity-timestamps ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
         (let ((first (codex-ide--create-process-session))
               second)
           (setq second (codex-ide--create-process-session))
+          (setf (codex-ide-session-created-at first) 1.0
+                (codex-ide-session-created-at second) 2.0)
           (should (equal (codex-ide--sessions-for-directory project-dir t)
                          (list second first)))
-          (should (eq (codex-ide--canonical-session-for-directory project-dir)
+          (should (eq (codex-ide--last-active-session-for-directory project-dir)
+                      second))
+          (setf (codex-ide-session-last-thread-attached-at first) 3.0)
+          (should (eq (codex-ide--last-active-session-for-directory project-dir)
                       first))
+          (setf (codex-ide-session-last-prompt-submitted-at second) 4.0)
+          (should (eq (codex-ide--last-active-session-for-directory project-dir)
+                      second))
           (delete-process (codex-ide-session-process second))
           (codex-ide--cleanup-dead-sessions)
           (should (equal (codex-ide--sessions-for-directory project-dir t)
                          (list first)))
-          (should (eq (codex-ide--canonical-session-for-directory project-dir)
+          (should (eq (codex-ide--last-active-session-for-directory project-dir)
                       first)))))))
+
+(ert-deftest codex-ide-last-active-buffer-helpers-use-live-session-activity ()
+  (let ((project-a (codex-ide-test--make-temp-project))
+        (project-b (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-a
+      (codex-ide-test-with-fake-processes
+        (let ((session-a (codex-ide--create-process-session))
+              session-b)
+          (let ((default-directory (file-name-as-directory project-b)))
+            (setq session-b (codex-ide--create-process-session)))
+          (setf (codex-ide-session-created-at session-a) 1.0
+                (codex-ide-session-created-at session-b) 2.0
+                (codex-ide-session-last-prompt-submitted-at session-a) 3.0)
+          (should (eq (codex-ide--get-last-active-buffer-for-project project-a)
+                      (codex-ide-session-buffer session-a)))
+          (should (eq (codex-ide--get-last-active-buffer-for-project project-b)
+                      (codex-ide-session-buffer session-b)))
+          (should (eq (codex-ide--get-last-active-buffer-all-projects)
+                      (codex-ide-session-buffer session-a)))
+          (kill-buffer (codex-ide-session-buffer session-a))
+          (should-not
+           (codex-ide--get-last-active-buffer-for-project project-a)))))))
 
 (ert-deftest codex-ide-create-process-session-adds-suffixes-for-additional-workspace-sessions ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -423,6 +418,8 @@
             (should-not (string-match-p "\\[Emacs session context\\]" second-text))
             (should (string-match-p "\\[Emacs prompt context\\]" second-text))
             (should (string-match-p "Explain again" second-text))
+            (should (numberp
+                     (codex-ide-session-last-prompt-submitted-at session)))
             (should (codex-ide--session-metadata-get session :session-context-sent))))))))
 
 (ert-deftest codex-ide-session-baseline-prompt-ignores-empty-strings ()
@@ -768,6 +765,24 @@
         (should (string-match-p "Selected region: line 1, column 1 to line 1, column 8"
                                 prompt-text))))))
 
+(ert-deftest codex-ide-track-active-buffer-refreshes-all-session-headers-in-project ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (file-path (codex-ide-test--make-project-file
+                     project-dir "src/example.el" "(message \"hello\")\n")))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((first (codex-ide--create-process-session))
+              (second (codex-ide--create-process-session)))
+          (with-current-buffer (find-file-noselect file-path)
+            (setq-local default-directory (file-name-as-directory project-dir))
+            (goto-char (point-min))
+            (forward-line 0)
+            (codex-ide--track-active-buffer (current-buffer)))
+          (dolist (session (list first second))
+            (with-current-buffer (codex-ide-session-buffer session)
+              (should (string-match-p "focus: .*example\\.el:1"
+                                      (format "%s" header-line-format))))))))))
+
 (ert-deftest codex-ide-compose-turn-input-does-not-duplicate-prompt-context-block ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-path (codex-ide-test--make-project-file
@@ -796,7 +811,8 @@
 (ert-deftest codex-ide-prompt-uses-origin-buffer-context-for-non-file-buffers ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (other-dir (codex-ide-test--make-temp-project))
-         (submitted nil))
+         (submitted nil)
+         (minibuffer-prompt nil))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
         (let ((transient-mark-mode t)
@@ -812,7 +828,9 @@
             (forward-char 6)
             (activate-mark)
             (cl-letf (((symbol-function 'read-from-minibuffer)
-                      (lambda (&rest _) "Explain this"))
+                       (lambda (prompt &rest _)
+                         (setq minibuffer-prompt prompt)
+                         "Explain this"))
                       ((symbol-function 'codex-ide--ensure-session-for-current-project)
                        (lambda () session))
                       ((symbol-function 'codex-ide-display-buffer)
@@ -822,6 +840,9 @@
                          (setq submitted params)
                          nil)))
               (codex-ide-prompt)))
+          (should (equal minibuffer-prompt
+                         (format "Send prompt (%s): "
+                                 (buffer-name (codex-ide-session-buffer session)))))
           (let* ((input (alist-get 'input submitted))
                  (text (alist-get 'text (aref input 0))))
             (should (string-match-p "\\[Emacs prompt context\\]" text))
@@ -2148,6 +2169,8 @@
                         session))
             (should (string= (codex-ide-session-thread-id session)
                              "thread-explicit-1"))
+            (should (numberp
+                     (codex-ide-session-last-thread-attached-at session)))
             (should (equal (mapcar #'car (nreverse requests))
                            '("thread/read" "thread/resume")))
             (with-current-buffer (codex-ide-session-buffer session)

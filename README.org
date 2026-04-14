@@ -24,14 +24,14 @@ keeps the interaction surface fully inside Emacs.
 write prompts in-place, read streamed responses, follow file links, and review
 tool approvals without leaving the editor.
 
-#+CAPTION: Prompting Codex from an Emacs session buffer.
-[[file:screenshots/codex-prompts-in-emacs.png]]
+#+CAPTION: Clickable file links that jump from the transcript into source buffers.
+[[file:screenshots/clickable-code-links.png]]
 
 #+CAPTION: Syntax-highlighted code rendered inside the Codex transcript.
 [[file:screenshots/code-syntax-coloring.png]]
 
-#+CAPTION: Clickable file links that jump from the transcript into source buffers.
-[[file:screenshots/clickable-code-links.png]]
+#+CAPTION: Prompting Codex from an Emacs session buffer.
+[[file:screenshots/codex-approval-in-emacs.png]]
 
 *** Codex Thread Lists
 
@@ -170,3 +170,9 @@ with their Codex thread context intact.
 * License
 
 This project is licensed under the [[https://opensource.org/licenses/MIT][MIT License]].
+
+* Disclaimer
+
+Codex® is a trademark of OpenAI. Codex® is an application developed by OpenAI.
+
+This project is not affiliated with, endorsed by or sponsored by OpenAI.

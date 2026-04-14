@@ -71,6 +71,18 @@ Add this variable to `savehist-additional-variables' to persist it.")
     :initarg :thread-id
     :initform nil
     :accessor codex-ide-session-thread-id)
+   (created-at
+    :initarg :created-at
+    :initform nil
+    :accessor codex-ide-session-created-at)
+   (last-thread-attached-at
+    :initarg :last-thread-attached-at
+    :initform nil
+    :accessor codex-ide-session-last-thread-attached-at)
+   (last-prompt-submitted-at
+    :initarg :last-prompt-submitted-at
+    :initform nil
+    :accessor codex-ide-session-last-prompt-submitted-at)
    (current-turn-id
     :initarg :current-turn-id
     :initform nil
@@ -269,6 +281,22 @@ The first live session in a workspace uses no suffix."
   (and (codex-ide-session-p session)
        (process-live-p (codex-ide-session-process session))))
 
+(defun codex-ide--timestamp-now ()
+  "Return the current time as a sortable timestamp."
+  (float-time))
+
+(defun codex-ide--mark-session-thread-attached (session)
+  "Record that SESSION was attached to a thread now."
+  (setf (codex-ide-session-last-thread-attached-at session)
+        (codex-ide--timestamp-now))
+  session)
+
+(defun codex-ide--mark-session-prompt-submitted (session)
+  "Record that SESSION submitted a prompt now."
+  (setf (codex-ide-session-last-prompt-submitted-at session)
+        (codex-ide--timestamp-now))
+  session)
+
 (defun codex-ide--sessions-for-directory (directory &optional live-only)
   "Return tracked sessions for DIRECTORY.
 When LIVE-ONLY is non-nil, only include sessions with live processes."
@@ -281,17 +309,77 @@ When LIVE-ONLY is non-nil, only include sessions with live processes."
                 (codex-ide--live-session-p session))))
      codex-ide--sessions)))
 
-(defun codex-ide--canonical-session-for-directory (&optional directory)
-  "Return the canonical Codex session for DIRECTORY.
-For now, the canonical session is the earliest created live session for
-DIRECTORY."
-  (car (last (codex-ide--sessions-for-directory
-              (or directory (codex-ide--get-working-directory))
-              t))))
+(defun codex-ide--session-activity-time (session)
+  "Return SESSION's most recent activity timestamp."
+  (or (codex-ide-session-last-prompt-submitted-at session)
+      (codex-ide-session-last-thread-attached-at session)
+      (codex-ide-session-created-at session)
+      0))
+
+(defun codex-ide--most-recent-session (sessions)
+  "Return the most recently active session from SESSIONS."
+  (seq-reduce
+   (lambda (best session)
+     (if (or (not best)
+             (> (codex-ide--session-activity-time session)
+                (codex-ide--session-activity-time best)))
+         session
+       best))
+   sessions
+   nil))
+
+(defun codex-ide--last-active-session-for-directory (&optional directory)
+  "Return the most recently active live Codex session for DIRECTORY."
+  (codex-ide--most-recent-session
+   (codex-ide--sessions-for-directory
+    (or directory (codex-ide--get-working-directory))
+    t)))
+
+(defun codex-ide--last-active-session ()
+  "Return the most recently active live Codex session across all projects."
+  (codex-ide--most-recent-session
+   (seq-filter #'codex-ide--live-session-p codex-ide--sessions)))
+
+(defun codex-ide--live-session-directories ()
+  "Return directories that currently have live Codex sessions."
+  (let (directories)
+    (dolist (session codex-ide--sessions)
+      (when (codex-ide--live-session-p session)
+        (cl-pushnew (codex-ide-session-directory session)
+                    directories
+                    :test #'equal)))
+    (sort directories #'string-lessp)))
+
+(defun codex-ide--last-active-sessions-by-directory ()
+  "Return cons cells of live directory and most recently active session."
+  (mapcar
+   (lambda (directory)
+     (cons directory (codex-ide--last-active-session-for-directory directory)))
+   (codex-ide--live-session-directories)))
+
+(defun codex-ide--refresh-project-header-lines (directory)
+  "Refresh header lines for all live sessions in DIRECTORY."
+  (dolist (session (codex-ide--sessions-for-directory directory t))
+    (when (process-live-p (codex-ide-session-process session))
+      (codex-ide--update-header-line session))))
+
+(defun codex-ide--get-last-active-buffer-for-project (&optional directory)
+  "Return the most recently active live Codex session buffer for DIRECTORY."
+  (when-let ((session (codex-ide--last-active-session-for-directory directory))
+             (buffer (codex-ide-session-buffer session)))
+    (when (buffer-live-p buffer)
+      buffer)))
+
+(defun codex-ide--get-last-active-buffer-all-projects ()
+  "Return the most recently active live Codex session buffer across projects."
+  (when-let ((session (codex-ide--last-active-session))
+             (buffer (codex-ide-session-buffer session)))
+    (when (buffer-live-p buffer)
+      buffer)))
 
 (defun codex-ide--get-session ()
-  "Return the Codex session associated with the current working directory."
-  (codex-ide--canonical-session-for-directory
+  "Return the most recently active Codex session for the current working directory."
+  (codex-ide--last-active-session-for-directory
    (codex-ide--get-working-directory)))
 
 (defun codex-ide--get-process ()
@@ -477,9 +565,7 @@ This cache is maintained even when no Codex session is currently active."
               (working-dir (alist-get 'project-dir context)))
     (puthash working-dir context codex-ide--active-buffer-contexts)
     (puthash working-dir buffer codex-ide--active-buffer-objects)
-    (when-let ((session (codex-ide--canonical-session-for-directory working-dir)))
-      (when (process-live-p (codex-ide-session-process session))
-        (codex-ide--update-header-line session)))))
+    (codex-ide--refresh-project-header-lines working-dir)))
 
 (defun codex-ide--track-active-buffer-post-command ()
   "Track the last focused real file buffer after commands.
@@ -500,9 +586,7 @@ When BUFFER is nil, use the current buffer."
         (let ((working-dir (alist-get 'project-dir context)))
           (puthash working-dir context codex-ide--active-buffer-contexts)
           (puthash working-dir target codex-ide--active-buffer-objects)
-          (when-let ((session (codex-ide--canonical-session-for-directory working-dir)))
-            (when (process-live-p (codex-ide-session-process session))
-              (codex-ide--update-header-line session))))))))
+          (codex-ide--refresh-project-header-lines working-dir))))))
 
 (defun codex-ide--infer-recent-file-context ()
   "Infer the most recently used real file buffer context for the current project."

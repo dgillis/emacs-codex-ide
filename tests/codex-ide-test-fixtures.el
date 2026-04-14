@@ -58,6 +58,7 @@
           (codex-ide--session-metadata (make-hash-table :test 'eq))
           (codex-ide-session-baseline-prompt nil)
           (codex-ide-new-session-split nil)
+          (codex-ide-want-mcp-bridge 'prompt)
           (codex-ide-enable-emacs-tool-bridge nil))
      (unwind-protect
          (progn ,@body)
