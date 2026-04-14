@@ -264,6 +264,7 @@ top of the buffer."
 ;;;###autoload
 (define-derived-mode codex-ide-log-mode special-mode "Codex-IDE-Log"
   "Major mode for Codex IDE log buffers."
+  (buffer-disable-undo)
   (setq-local truncate-lines t))
 
 (defun codex-ide--initialize-log-buffer (buffer directory)
@@ -524,18 +525,19 @@ FORMAT-STRING and ARGS are passed to `format'."
     (error "Invalid Codex session: %S" session))
   (when-let ((buffer (codex-ide--ensure-log-buffer session)))
     (with-current-buffer buffer
-      (let ((inhibit-read-only t)
-            (moving (= (point) (point-max)))
-            start)
-        (goto-char (point-max))
-        (setq start (point))
-        (insert (format-time-string "[%Y-%m-%d %H:%M:%S] "))
-        (insert (apply #'format format-string args))
-        (insert "\n")
-        (codex-ide--trim-log-buffer)
-        (when moving
-          (goto-char (point-max)))
-        (copy-marker start)))))
+      (codex-ide--without-undo-recording
+        (let ((inhibit-read-only t)
+              (moving (= (point) (point-max)))
+              start)
+          (goto-char (point-max))
+          (setq start (point))
+          (insert (format-time-string "[%Y-%m-%d %H:%M:%S] "))
+          (insert (apply #'format format-string args))
+          (insert "\n")
+          (codex-ide--trim-log-buffer)
+          (when moving
+            (goto-char (point-max)))
+          (copy-marker start))))))
 
 (defun codex-ide--freeze-region (start end)
   "Make the region from START to END read-only."

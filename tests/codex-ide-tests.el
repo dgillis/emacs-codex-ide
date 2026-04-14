@@ -342,6 +342,91 @@
     (should-not font-lock-mode)
     (should-not jit-lock-functions)))
 
+(ert-deftest codex-ide-log-mode-disables-undo ()
+  (with-temp-buffer
+    (buffer-enable-undo)
+    (codex-ide-log-mode)
+    (should (eq buffer-undo-list t))))
+
+(ert-deftest codex-ide-append-to-buffer-does-not-record-undo ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (buffer-enable-undo)
+    (setq buffer-undo-list nil)
+    (codex-ide--append-to-buffer (current-buffer) (make-string 4096 ?x))
+    (should (= (buffer-size) 4096))
+    (should-not buffer-undo-list)))
+
+(ert-deftest codex-ide-render-markdown-region-does-not-record-undo ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (buffer-enable-undo)
+    (insert "See [`foo.el`](/tmp/foo.el#L3C2) and `code`.\n")
+    (setq buffer-undo-list nil)
+    (codex-ide--render-markdown-region (point-min) (point-max) t)
+    (should-not buffer-undo-list)))
+
+(ert-deftest codex-ide-discard-buffer-undo-history-clears-undo-tree-history ()
+  (with-temp-buffer
+    (buffer-enable-undo)
+    (setq buffer-undo-list '((1 . 2)))
+    (let ((called nil))
+      (cl-letf (((symbol-function 'undo-tree-clear-history)
+                 (lambda () (setq called t))))
+        (codex-ide--discard-buffer-undo-history))
+      (should-not buffer-undo-list)
+      (should called))))
+
+(ert-deftest codex-ide-session-prompt-keeps-typed-undo ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (buffer-enable-undo)
+    (setq buffer-undo-list nil)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (should-not buffer-undo-list)
+      (goto-char (point-max))
+      (insert "hello")
+      (undo-boundary)
+      (should buffer-undo-list)
+      (primitive-undo 1 (cdr buffer-undo-list))
+      (should (string= (buffer-string) "> ")))))
+
+(ert-deftest codex-ide-insert-input-prompt-clears-stale-undo-history ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (buffer-enable-undo)
+    (setq buffer-undo-list nil)
+    (insert "stale undo entry")
+    (undo-boundary)
+    (should buffer-undo-list)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (should-not buffer-undo-list))))
+
+(ert-deftest codex-ide-begin-turn-display-clears-submitted-prompt-undo ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (buffer-enable-undo)
+    (setq buffer-undo-list nil)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (insert "submitted prompt")
+      (undo-boundary)
+      (should buffer-undo-list)
+      (codex-ide--begin-turn-display session)
+      (should-not buffer-undo-list)
+      (should (string-match-p "^> submitted prompt\n\n\\'" (buffer-string))))))
+
 (ert-deftest codex-ide-session-markdown-faces-survive-font-lock-attempts ()
   (with-temp-buffer
     (codex-ide-session-mode)
