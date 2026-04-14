@@ -1,8 +1,9 @@
-;;; codex-ide.el --- Codex app-server integration for Emacs -*- lexical-binding: t; -*-
+;;; codex-ide.el --- Codex app-server integration -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
 
 ;; Author: Duncan Gillis
+;; URL: https://github.com/dgillis/codex-ide
 ;; Version: 0.2.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.9.0"))
 ;; Keywords: ai, tools
@@ -979,8 +980,7 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
                   "thread/list"
                   `((cwd . ,working-dir)
                     (limit . 50)
-                    (sortKey . "updated_at")
-                    )))
+                    (sortKey . "updated_at"))))
          (data (alist-get 'data result)))
     (append data nil)))
 
