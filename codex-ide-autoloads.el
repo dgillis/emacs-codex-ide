@@ -29,7 +29,7 @@ Optional reasoning effort for new Codex turns.
 When non-nil, codex-ide sends this as the `effort' override on `turn/start',
 which applies to the current turn and subsequent turns for the thread.")
 (custom-autoload 'codex-ide-reasoning-effort "codex-ide" t)
-(defvar codex-ide-session-baseline-prompt "\n- You are a Codex server running inside Emacs.\n- You can use MCP tools to inspect and interact with the running Emacs session.\n- Interpret Emacs terminology as relevant context to the user's request: buffers, regions, windows, point, mark, current file, etc.\n- Do not needlessly use Emacs commands to accomplish agent tasks." "\
+(defvar codex-ide-session-baseline-prompt "\n- You are a Codex server running inside Emacs.\n- You can use MCP tools to inspect and interact with the running Emacs session.\n- Interpret Emacs terminology as relevant context to the user's request: buffers, regions, windows, point, mark, current file, etc.\n- Responses are rendered as Markdown in an Emacs buffer.\n- Markdown pipe tables are rendered as visible tables.\n- In table cells, wrap code-like identifiers, filenames, paths, symbols, and expressions in backticks.\n- Use markdown links for file references when appropriate, for example [`foo.el`](/tmp/foo.el#L3C2).\n- Avoid bare underscores or asterisks for code-like text inside tables; use backticks instead.\n- Do not needlessly use Emacs commands to accomplish agent tasks." "\
 Optionally baseline prompt injected into the first real prompt of a new thread.
 When set to a non-empty string, `codex-ide' prepends it once as an
 `[Emacs session context]' block on the first submitted user turn for a
@@ -41,6 +41,13 @@ Prefix used when creating Codex session buffer names.")
 (defvar codex-ide-focus-on-open t "\
 Whether to focus the Codex window after showing it.")
 (custom-autoload 'codex-ide-focus-on-open "codex-ide" t)
+(defvar codex-ide-new-session-split nil "\
+Window split direction to use when showing newly created Codex sessions.
+When nil, newly created sessions use the existing `codex-ide-display-buffer'
+behavior.  When `vertical', split the selected window left/right and show the
+session on the right.  When `horizontal', split the selected window top/bottom
+and show the session below.")
+(custom-autoload 'codex-ide-new-session-split "codex-ide" t)
 (defvar codex-ide-buffer-display-when-approval-required t "\
 Whether to display a Codex buffer when it requires approval.
 When nil, approval requests are rendered into their Codex buffer and announced
@@ -72,6 +79,12 @@ Maximum number of lines to keep in each Codex log buffer.
 When a log buffer grows beyond this limit, older lines are removed from the
 top of the buffer.")
 (custom-autoload 'codex-ide-log-max-lines "codex-ide" t)
+(defvar codex-ide-log-stream-deltas nil "\
+Whether to log every streamed output delta.
+
+When nil, high-frequency text deltas are omitted from the log buffer.  Item
+start, completion, errors, and other lifecycle events are still logged.")
+(custom-autoload 'codex-ide-log-stream-deltas "codex-ide" t)
 (defvar codex-ide-resume-summary-turn-limit 100 "\
 How many recent turns to summarize when resuming a stored thread.")
 (custom-autoload 'codex-ide-resume-summary-turn-limit "codex-ide" t)
@@ -121,6 +134,13 @@ Whether codex-ide should expose Emacs tools to Codex via MCP.
 When non-nil, codex-ide starts an MCP bridge server alongside `codex app-server'
 and ensures the current Emacs instance is reachable via `emacsclient'.")
 (custom-autoload 'codex-ide-enable-emacs-tool-bridge "codex-ide-mcp-bridge" t)
+(defvar codex-ide-want-mcp-bridge 'prompt "\
+Whether codex-ide should start the Emacs MCP bridge.
+
+When nil, do not start the bridge.  When t, start the bridge without prompting.
+When `prompt', ask before enabling the bridge, matching the historical startup
+behavior.")
+(custom-autoload 'codex-ide-want-mcp-bridge "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-tool-bridge-name "emacs" "\
 Name used when registering the Emacs MCP bridge with Codex.")
 (custom-autoload 'codex-ide-emacs-tool-bridge-name "codex-ide-mcp-bridge" t)
@@ -331,6 +351,13 @@ that session and then remove the persisted thread data from disk.
 ;;; Generated autoloads from codex-ide-renderer.el
 
 (register-definition-prefixes "codex-ide-renderer" '("codex-ide-"))
+
+
+;;; Generated autoloads from codex-ide-debug-info.el
+
+(autoload 'codex-ide-show-debug-info "codex-ide-debug-info" "\
+Show a minibuffer summary of live Codex IDE session state." t)
+(register-definition-prefixes "codex-ide-debug-info" '("codex-ide-debug-info--"))
 
 
 ;;; End of scraped data

@@ -19,6 +19,8 @@
 (declare-function codex-ide-stop "codex-ide" ())
 (declare-function codex-ide-switch-to-buffer "codex-ide" ())
 (declare-function codex-ide-check-status "codex-ide" ())
+(autoload 'codex-ide-show-debug-info "codex-ide-debug-info"
+  "Show a minibuffer summary of live Codex IDE session state." t)
 (declare-function codex-ide--get-working-directory "codex-ide-core" ())
 (declare-function codex-ide--get-process "codex-ide-core" ())
 
@@ -37,6 +39,7 @@
 (defvar codex-ide-focus-on-open)
 (defvar codex-ide-new-session-split)
 (defvar codex-ide-enable-emacs-tool-bridge)
+(defvar codex-ide-want-mcp-bridge)
 (defvar codex-ide-emacs-bridge-require-approval)
 
 (defconst codex-ide--other-model-choice "Other..."
@@ -183,13 +186,16 @@
            (codex-ide--new-session-split-label)))
 
 (transient-define-suffix codex-ide--toggle-emacs-tool-bridge ()
-  "Toggle `codex-ide-enable-emacs-tool-bridge'."
+  "Toggle `codex-ide-want-mcp-bridge'."
   (interactive)
-  (if codex-ide-enable-emacs-tool-bridge
-      (codex-ide-mcp-bridge-disable)
+  (if (eq codex-ide-want-mcp-bridge t)
+      (progn
+        (setq codex-ide-want-mcp-bridge nil)
+        (codex-ide-mcp-bridge-disable))
+    (setq codex-ide-want-mcp-bridge t)
     (codex-ide-mcp-bridge-enable))
   (message "Emacs callback bridge %s"
-           (if codex-ide-enable-emacs-tool-bridge "enabled" "disabled")))
+           (if (eq codex-ide-want-mcp-bridge t) "enabled" "disabled")))
 
 (transient-define-suffix codex-ide--toggle-emacs-bridge-approval ()
   "Toggle `codex-ide-emacs-bridge-require-approval'."
@@ -214,6 +220,8 @@
   (customize-save-variable 'codex-ide-focus-on-open codex-ide-focus-on-open)
   (customize-save-variable 'codex-ide-new-session-split
                            codex-ide-new-session-split)
+  (customize-save-variable 'codex-ide-want-mcp-bridge
+                           codex-ide-want-mcp-bridge)
   (customize-save-variable 'codex-ide-enable-emacs-tool-bridge
                            codex-ide-enable-emacs-tool-bridge)
   (customize-save-variable 'codex-ide-emacs-bridge-require-approval
@@ -266,7 +274,10 @@
     ("e" "Toggle Emacs callback bridge" codex-ide--toggle-emacs-tool-bridge
      :description (lambda ()
                      (format "Emacs callback bridge (%s)"
-                             (if codex-ide-enable-emacs-tool-bridge "ON" "OFF"))))
+                             (pcase codex-ide-want-mcp-bridge
+                               ('t "ON")
+                               ('prompt "PROMPT")
+                               (_ "OFF")))))
     ("A" "Toggle bridge approvals" codex-ide--toggle-emacs-bridge-approval
      :description (lambda ()
                      (format "Bridge approvals (%s)"
@@ -281,7 +292,8 @@
   "Open a small debug/status menu for Codex IDE."
   ["Codex IDE Debug"
    ["Status"
-    ("s" "Check CLI status" codex-ide-check-status)]])
+    ("s" "Check CLI status" codex-ide-check-status)
+    ("i" "Show debug info" codex-ide-show-debug-info)]])
 
 (provide 'codex-ide-transient)
 

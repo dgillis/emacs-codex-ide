@@ -1,8 +1,9 @@
-;;; codex-ide.el --- Codex app-server integration for Emacs -*- lexical-binding: t; -*-
+;;; codex-ide.el --- Codex app-server integration -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
 
 ;; Author: Duncan Gillis
+;; URL: https://github.com/dgillis/codex-ide
 ;; Version: 0.2.0
 ;; Package-Requires: ((emacs "28.1") (transient "0.9.0"))
 ;; Keywords: ai, tools
@@ -1197,8 +1198,7 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
                   "thread/list"
                   `((cwd . ,working-dir)
                     (limit . 50)
-                    (sortKey . "updated_at")
-                    )))
+                    (sortKey . "updated_at"))))
          (data (alist-get 'data result)))
     (append data nil)))
 
@@ -1399,6 +1399,7 @@ ACTION is a short past-tense label used in log messages, such as
       (codex-ide--remember-reasoning-effort session result)
       (codex-ide--remember-model-name session result))
     (setf (codex-ide-session-thread-id session) thread-id)
+    (codex-ide--mark-session-thread-attached session)
     (codex-ide--session-metadata-put session :session-context-sent t)
     (codex-ide-log-message session "%s thread %s" action thread-id)
     (when thread-read
@@ -1447,6 +1448,7 @@ REUSE-NAME-SUFFIX as the session name suffix."
                      :name-suffix name-suffix
                      :buffer buffer
                      :log-buffer nil
+                     :created-at (codex-ide--timestamp-now)
                      :request-counter 0
                      :pending-requests (make-hash-table :test 'equal)
                      :item-states (make-hash-table :test 'equal)
@@ -1564,7 +1566,7 @@ When NEWLY-CREATED is non-nil, honor `codex-ide-new-session-split'."
                            (or directory (codex-ide--get-working-directory))))
                    (codex-ide--live-session-p session))
           session))
-      (codex-ide--canonical-session-for-directory directory)))
+      (codex-ide--last-active-session-for-directory directory)))
 
 (defun codex-ide--prepare-session-operations ()
   "Ensure Codex prerequisites needed for session-backed operations."
@@ -1686,6 +1688,7 @@ MODE can be nil or `new', `continue', or `resume'."
                  (codex-ide--remember-model-name session result)
                  (setf (codex-ide-session-thread-id session)
                        (codex-ide--extract-thread-id result))
+                 (codex-ide--mark-session-thread-attached session)
                  (codex-ide--session-metadata-put session :session-context-sent nil)
                  (codex-ide-log-message
                   session
@@ -2206,7 +2209,8 @@ PARAMS describe the request."
        (codex-ide--remember-reasoning-effort session params)
        (codex-ide--remember-model-name session params)
        (when-let ((thread-id (alist-get 'id (alist-get 'thread params))))
-         (setf (codex-ide-session-thread-id session) thread-id))
+         (setf (codex-ide-session-thread-id session) thread-id)
+         (codex-ide--mark-session-thread-attached session))
        (codex-ide-log-message
         session
         "Thread started: %s"
@@ -2623,6 +2627,7 @@ If no live session exists, prompt to start one."
             (codex-ide--remember-reasoning-effort new-session result)
             (setf (codex-ide-session-thread-id new-session)
                   (codex-ide--extract-thread-id result))
+            (codex-ide--mark-session-thread-attached new-session)
             (codex-ide--session-metadata-put new-session :session-context-sent nil)
             (codex-ide-log-message
              new-session
@@ -2702,13 +2707,13 @@ If no live session exists for the current buffer, prompt to start one first."
   (interactive)
   (let ((origin-buffer (current-buffer))
         (session (codex-ide--ensure-session-for-current-project)))
-    (let ((prompt (read-from-minibuffer
-                   "Codex prompt (RET inserts newline, C-j to submit): ")))
+    (let* ((buffer (codex-ide-session-buffer session))
+           (prompt (read-from-minibuffer
+                    (format "Send prompt (%s): " (buffer-name buffer)))))
       (unless (string-empty-p prompt)
-        (let* ((buffer (codex-ide-session-buffer session))
-               (window (let ((codex-ide-display-buffer-options
-                              '(:reuse-buffer-window :reuse-mode-window :new-window)))
-                         (codex-ide-display-buffer buffer))))
+        (let ((window (let ((codex-ide-display-buffer-options
+                             '(:reuse-buffer-window :reuse-mode-window :new-window)))
+                        (codex-ide-display-buffer buffer))))
           (with-selected-window window
             (with-current-buffer buffer
               (if (codex-ide-session-input-overlay session)
@@ -2789,6 +2794,11 @@ If no live session exists for the current buffer, prompt to start one first."
           (when codex-ide-model
             (codex-ide--set-session-model-name session codex-ide-model)
             (codex-ide--update-header-line session))
+          (codex-ide--mark-session-prompt-submitted session)
+          (when codex-ide-model
+            (codex-ide--set-session-model-name session codex-ide-model)
+            (codex-ide--update-header-line session))
+          (codex-ide--mark-session-prompt-submitted session)
           (when (alist-get 'included-session-context payload)
             (codex-ide--session-metadata-put session :session-context-sent t)))
       (error

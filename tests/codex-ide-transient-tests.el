@@ -108,6 +108,10 @@
       (codex-ide--set-model "gpt-5.4"))
     (should (equal codex-ide-model "gpt-5.4"))))
 
+(ert-deftest codex-ide-debug-menu-exposes-show-debug-info ()
+  (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-debug-menu "i")) :command)
+              #'codex-ide-show-debug-info)))
+
 (provide 'codex-ide-transient-tests)
 
 ;;; codex-ide-transient-tests.el ends here
