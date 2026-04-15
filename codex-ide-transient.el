@@ -11,6 +11,7 @@
 
 (declare-function codex-ide-mcp-bridge-enable "codex-ide-mcp-bridge" ())
 (declare-function codex-ide-mcp-bridge-disable "codex-ide-mcp-bridge" ())
+(declare-function codex-ide--available-model-names "codex-ide" ())
 (declare-function codex-ide "codex-ide" ())
 (declare-function codex-ide-continue "codex-ide" ())
 (declare-function codex-ide-prompt "codex-ide" ())
@@ -31,13 +32,27 @@
 (defvar codex-ide-cli-path)
 (defvar codex-ide-cli-extra-flags)
 (defvar codex-ide-model)
+(defvar codex-ide-reasoning-effort)
 (defvar codex-ide-approval-policy)
 (defvar codex-ide-sandbox-mode)
 (defvar codex-ide-personality)
 (defvar codex-ide-focus-on-open)
+(defvar codex-ide-new-session-split)
 (defvar codex-ide-enable-emacs-tool-bridge)
 (defvar codex-ide-want-mcp-bridge)
 (defvar codex-ide-emacs-bridge-require-approval)
+
+(defconst codex-ide--other-model-choice "Other..."
+  "Sentinel choice used to enter a custom model name.")
+
+(defconst codex-ide--empty-model-choice "<empty>"
+  "Sentinel choice used to clear the configured model.")
+
+(defconst codex-ide--new-session-split-choices
+  '(("default display" . nil)
+    ("vertical split" . vertical)
+    ("horizontal split" . horizontal))
+  "Completion choices for `codex-ide-new-session-split'.")
 
 (defun codex-ide--in-session-buffer-p ()
   "Return non-nil when the current buffer is a Codex session buffer."
@@ -57,6 +72,26 @@
                (directory-file-name (codex-ide--get-working-directory))))
        'face 'success)
     (propertize "No active session" 'face 'transient-inactive-value)))
+
+(defun codex-ide--read-model ()
+  "Prompt for a model, preferring server-provided choices when available."
+  (let* ((default (or codex-ide-model ""))
+         (models (codex-ide--available-model-names)))
+    (if models
+        (let ((choice (completing-read
+                       "Model (choose or use Other...; empty clears): "
+                       (append models
+                               (list codex-ide--empty-model-choice
+                                     codex-ide--other-model-choice))
+                       nil nil nil nil default)))
+          (cond
+           ((equal choice codex-ide--empty-model-choice)
+            "")
+           ((equal choice codex-ide--other-model-choice)
+            (read-string "Custom model (leave empty to clear): " default))
+           (t
+            choice)))
+      (read-string "Model (leave empty to clear): " default))))
 
 (transient-define-suffix codex-ide--set-cli-path (path)
   "Set the Codex CLI path."
@@ -102,12 +137,23 @@
 (transient-define-suffix codex-ide--set-model (model)
   "Set the Codex model."
   :description "Set model"
-  (interactive (list (read-string "Model (leave empty to clear): "
-                                  (or codex-ide-model ""))))
+  (interactive (list (codex-ide--read-model)))
   (setq codex-ide-model (unless (string-empty-p model) model))
   (message "Codex model %s"
            (if codex-ide-model
                (format "set to %s" codex-ide-model)
+             "cleared")))
+
+(transient-define-suffix codex-ide--set-reasoning-effort (value)
+  "Set `codex-ide-reasoning-effort'."
+  :description "Set reasoning effort"
+  (interactive (list (completing-read "Reasoning effort (leave empty to clear): "
+                                      '("none" "minimal" "low" "medium" "high" "xhigh")
+                                      nil nil nil nil codex-ide-reasoning-effort)))
+  (setq codex-ide-reasoning-effort (unless (string-empty-p value) value))
+  (message "Codex reasoning effort %s"
+           (if codex-ide-reasoning-effort
+               (format "set to %s" codex-ide-reasoning-effort)
              "cleared")))
 
 (transient-define-suffix codex-ide--toggle-focus-on-open ()
@@ -115,6 +161,29 @@
   (interactive)
   (setq codex-ide-focus-on-open (not codex-ide-focus-on-open))
   (message "Focus on open %s" (if codex-ide-focus-on-open "enabled" "disabled")))
+
+(defun codex-ide--new-session-split-label ()
+  "Return a short label for `codex-ide-new-session-split'."
+  (or (car (rassoc codex-ide-new-session-split
+                   codex-ide--new-session-split-choices))
+      (format "%S" codex-ide-new-session-split)))
+
+(transient-define-suffix codex-ide--set-new-session-split (split)
+  "Set `codex-ide-new-session-split'."
+  :description "Set new session split"
+  (interactive
+   (list
+    (cdr
+     (assoc
+      (completing-read
+       "New session split: "
+       codex-ide--new-session-split-choices
+       nil t nil nil
+       (codex-ide--new-session-split-label))
+      codex-ide--new-session-split-choices))))
+  (setq codex-ide-new-session-split split)
+  (message "New session split set to %s"
+           (codex-ide--new-session-split-label)))
 
 (transient-define-suffix codex-ide--toggle-emacs-tool-bridge ()
   "Toggle `codex-ide-want-mcp-bridge'."
@@ -144,10 +213,13 @@
   (customize-save-variable 'codex-ide-cli-path codex-ide-cli-path)
   (customize-save-variable 'codex-ide-cli-extra-flags codex-ide-cli-extra-flags)
   (customize-save-variable 'codex-ide-model codex-ide-model)
+  (customize-save-variable 'codex-ide-reasoning-effort codex-ide-reasoning-effort)
   (customize-save-variable 'codex-ide-approval-policy codex-ide-approval-policy)
   (customize-save-variable 'codex-ide-sandbox-mode codex-ide-sandbox-mode)
   (customize-save-variable 'codex-ide-personality codex-ide-personality)
   (customize-save-variable 'codex-ide-focus-on-open codex-ide-focus-on-open)
+  (customize-save-variable 'codex-ide-new-session-split
+                           codex-ide-new-session-split)
   (customize-save-variable 'codex-ide-want-mcp-bridge
                            codex-ide-want-mcp-bridge)
   (customize-save-variable 'codex-ide-enable-emacs-tool-bridge
@@ -184,6 +256,7 @@
    ["CLI"
     ("p" "Set CLI path" codex-ide--set-cli-path)
     ("m" "Set model" codex-ide--set-model)
+    ("R" "Set reasoning effort" codex-ide--set-reasoning-effort)
     ("x" "Set extra flags" codex-ide--set-cli-extra-flags)
    ("a" "Set approval policy" codex-ide--set-approval-policy)
    ("P" "Set personality" codex-ide--set-personality)
@@ -192,7 +265,11 @@
     ("f" "Toggle focus on open" codex-ide--toggle-focus-on-open
      :description (lambda ()
                      (format "Focus on open (%s)"
-                             (if codex-ide-focus-on-open "ON" "OFF"))))]
+                             (if codex-ide-focus-on-open "ON" "OFF"))))
+    ("w" "Set new session split" codex-ide--set-new-session-split
+     :description (lambda ()
+                     (format "New session split (%s)"
+                             (codex-ide--new-session-split-label))))]
    ["Bridge"
     ("e" "Toggle Emacs callback bridge" codex-ide--toggle-emacs-tool-bridge
      :description (lambda ()

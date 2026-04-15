@@ -35,6 +35,27 @@
                 "test-model"
                 "--debug"))))))
 
+(ert-deftest codex-ide-app-server-process-environment-adds-color-defaults ()
+  (let ((env (codex-ide--app-server-process-environment
+              '("TERM=dumb"
+                "PATH=/bin"))))
+    (should (equal (codex-ide--environment-variable-value "TERM" env)
+                   "xterm-256color"))
+    (should (equal (codex-ide--environment-variable-value "COLORTERM" env)
+                   "truecolor"))
+    (should (equal (codex-ide--environment-variable-value "CLICOLOR" env)
+                   "1"))))
+
+(ert-deftest codex-ide-app-server-process-environment-respects-no-color ()
+  (let ((env (codex-ide--app-server-process-environment
+              '("NO_COLOR=1"
+                "TERM=dumb"
+                "PATH=/bin"))))
+    (should (equal (codex-ide--environment-variable-value "TERM" env)
+                   "dumb"))
+    (should-not (codex-ide--environment-variable-value "COLORTERM" env))
+    (should-not (codex-ide--environment-variable-value "CLICOLOR" env))))
+
 (ert-deftest codex-ide-create-process-session-builds-buffers-and-registers-session ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
@@ -214,6 +235,42 @@
               (should (eq (window-buffer window) target-buffer))
               (should (= (length (window-list nil 'no-minibuf)) 2)))))))))
 
+(ert-deftest codex-ide-display-new-session-buffer-uses-vertical-split ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (save-window-excursion
+        (delete-other-windows)
+        (let ((target-buffer (get-buffer-create " *codex-new-session-vertical*"))
+              (origin-window (selected-window))
+              (codex-ide-new-session-split 'vertical)
+              (codex-ide-focus-on-open nil))
+          (let* ((origin-left (nth 0 (window-edges origin-window)))
+                 (window (codex-ide--display-new-session-buffer target-buffer))
+                 (window-left (nth 0 (window-edges window))))
+            (should (window-live-p window))
+            (should-not (eq window origin-window))
+            (should (> window-left origin-left))
+            (should (eq (window-buffer window) target-buffer))
+            (should (eq (selected-window) origin-window))))))))
+
+(ert-deftest codex-ide-display-new-session-buffer-uses-horizontal-split ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (save-window-excursion
+        (delete-other-windows)
+        (let ((target-buffer (get-buffer-create " *codex-new-session-horizontal*"))
+              (origin-window (selected-window))
+              (codex-ide-new-session-split 'horizontal)
+              (codex-ide-focus-on-open nil))
+          (let* ((origin-top (nth 1 (window-edges origin-window)))
+                 (window (codex-ide--display-new-session-buffer target-buffer))
+                 (window-top (nth 1 (window-edges window))))
+            (should (window-live-p window))
+            (should-not (eq window origin-window))
+            (should (> window-top origin-top))
+            (should (eq (window-buffer window) target-buffer))
+            (should (eq (selected-window) origin-window))))))))
+
 (ert-deftest codex-ide-last-active-session-for-directory-uses-activity-timestamps ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
@@ -304,6 +361,174 @@
       (codex-ide-session-mode)
       (should-not visual-line-mode))))
 
+(ert-deftest codex-ide-session-mode-disables-font-lock-jit-lock ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (should (eq font-lock-function #'ignore))
+    (should-not font-lock-defaults)
+    (should-not font-lock-keywords)
+    (should-not font-lock-mode)
+    (should-not jit-lock-functions)
+    (font-lock-mode 1)
+    (should-not font-lock-mode)
+    (should-not jit-lock-functions)))
+
+(ert-deftest codex-ide-log-mode-disables-undo ()
+  (with-temp-buffer
+    (buffer-enable-undo)
+    (codex-ide-log-mode)
+    (should (eq buffer-undo-list t))))
+
+(ert-deftest codex-ide-append-to-buffer-does-not-record-undo ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (buffer-enable-undo)
+    (setq buffer-undo-list nil)
+    (codex-ide--append-to-buffer (current-buffer) (make-string 4096 ?x))
+    (should (= (buffer-size) 4096))
+    (should-not buffer-undo-list)))
+
+(ert-deftest codex-ide-render-markdown-region-does-not-record-undo ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (buffer-enable-undo)
+    (insert "See [`foo.el`](/tmp/foo.el#L3C2) and `code`.\n")
+    (setq buffer-undo-list nil)
+    (codex-ide--render-markdown-region (point-min) (point-max) t)
+    (should-not buffer-undo-list)))
+
+(ert-deftest codex-ide-discard-buffer-undo-history-clears-undo-tree-history ()
+  (with-temp-buffer
+    (buffer-enable-undo)
+    (setq buffer-undo-list '((1 . 2)))
+    (let ((called nil))
+      (cl-letf (((symbol-function 'undo-tree-clear-history)
+                 (lambda () (setq called t))))
+        (codex-ide--discard-buffer-undo-history))
+      (should-not buffer-undo-list)
+      (should called))))
+
+(ert-deftest codex-ide-session-prompt-keeps-typed-undo ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (buffer-enable-undo)
+    (setq buffer-undo-list nil)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (should-not buffer-undo-list)
+      (goto-char (point-max))
+      (insert "hello")
+      (undo-boundary)
+      (should buffer-undo-list)
+      (primitive-undo 1 (cdr buffer-undo-list))
+      (should (string= (buffer-string) "> ")))))
+
+(ert-deftest codex-ide-insert-input-prompt-clears-stale-undo-history ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (buffer-enable-undo)
+    (setq buffer-undo-list nil)
+    (insert "stale undo entry")
+    (undo-boundary)
+    (should buffer-undo-list)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (should-not buffer-undo-list))))
+
+(ert-deftest codex-ide-begin-turn-display-clears-submitted-prompt-undo ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (buffer-enable-undo)
+    (setq buffer-undo-list nil)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (insert "submitted prompt")
+      (undo-boundary)
+      (should buffer-undo-list)
+      (codex-ide--begin-turn-display session)
+      (should-not buffer-undo-list)
+      (should (string-match-p "^> submitted prompt\n\nWorking\\.\\.\\.\n\\'"
+                              (buffer-string))))))
+
+(ert-deftest codex-ide-first-rendered-item-clears-pending-output-indicator ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (should (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . "echo hi")
+         (cwd . "/tmp")))
+      (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (should (string-match-p "\\* Ran echo hi" (buffer-string))))))
+
+(ert-deftest codex-ide-empty-reasoning-rewrites-pending-output-indicator ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "reason-1")
+         (type . "reasoning")
+         (summary . [])))
+      (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (should (string-match-p "Reasoning\\.\\.\\." (buffer-string)))
+      (codex-ide--ensure-agent-message-prefix session "msg-1")
+      (should-not (string-match-p "Reasoning\\.\\.\\." (buffer-string))))))
+
+(ert-deftest codex-ide-finish-turn-clears-pending-output-indicator ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (should (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (codex-ide--finish-turn session)
+      (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (goto-char (point-max))
+      (forward-line 0)
+      (should (looking-at-p "> $")))))
+
+(ert-deftest codex-ide-session-markdown-faces-survive-font-lock-attempts ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((inhibit-read-only t))
+      (insert "`code`")
+      (codex-ide--render-markdown-region (point-min) (point-max))
+      (font-lock-mode 1)
+      (font-lock-ensure (point-min) (point-max))
+      (goto-char (point-min))
+      (search-forward "code")
+      (should (eq (get-text-property (1- (point)) 'face)
+                  'font-lock-keyword-face)))))
+
 (ert-deftest codex-ide-session-mode-binds-tab-to-button-navigation ()
   (with-temp-buffer
     (codex-ide-session-mode)
@@ -332,13 +557,52 @@
                        (_ (ert-fail (format "Unexpected method %s" method)))))))
           (let ((session (codex-ide--start-session 'new)))
             (should (string= (codex-ide-session-thread-id session) "thread-test-1"))
-            (should (equal (mapcar #'car (nreverse requests))
+            (should (equal (seq-remove (lambda (method)
+                                         (equal method "config/read"))
+                                       (mapcar #'car (nreverse requests)))
                            '("initialize" "thread/start")))
             (with-current-buffer (codex-ide-session-buffer session)
               (should (derived-mode-p 'codex-ide-session-mode))
               (goto-char (point-max))
               (forward-line 0)
               (should (looking-at-p "> ")))))))))
+
+(ert-deftest codex-ide-start-session-new-honors-new-session-split ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests '()))
+    (codex-ide-test-with-fixture project-dir
+      (save-window-excursion
+        (delete-other-windows)
+        (let ((origin-window (selected-window))
+              (codex-ide-new-session-split 'vertical)
+              (codex-ide-focus-on-open nil))
+          (codex-ide-test-with-fake-processes
+            (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+                       (lambda () t))
+                      ((symbol-function 'codex-ide-mcp-bridge-prompt-to-enable)
+                       (lambda () nil))
+                      ((symbol-function 'codex-ide-mcp-bridge-ensure-server)
+                       (lambda () nil))
+                      ((symbol-function 'codex-ide--request-sync)
+                       (lambda (_session method params)
+                         (push (cons method params) requests)
+                         (pcase method
+                           ("initialize" '((ok . t)))
+                           ("thread/start" '((thread . ((id . "thread-split-1")))))
+                           (_ (ert-fail (format "Unexpected method %s" method)))))))
+              (let* ((origin-left (nth 0 (window-edges origin-window)))
+                     (session (codex-ide--start-session 'new))
+                     (session-window (get-buffer-window
+                                      (codex-ide-session-buffer session))))
+                (should (window-live-p session-window))
+                (should-not (eq session-window origin-window))
+                (should (> (nth 0 (window-edges session-window)) origin-left))
+                (should (string= (codex-ide-session-thread-id session)
+                                 "thread-split-1"))
+                (should (equal (seq-remove (lambda (method)
+                                             (equal method "config/read"))
+                                           (mapcar #'car (nreverse requests)))
+                               '("initialize" "thread/start")))))))))))
 
 (ert-deftest codex-ide-first-submit-injects-session-context-once ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
@@ -386,6 +650,13 @@
 (ert-deftest codex-ide-session-baseline-prompt-ignores-empty-strings ()
   (let ((codex-ide-session-baseline-prompt "   "))
     (should-not (codex-ide--format-session-context))))
+
+(ert-deftest codex-ide-session-baseline-prompt-default-includes-table-guidance ()
+  (let ((formatted (codex-ide--format-session-context)))
+    (should (string-match-p "Responses are rendered as Markdown in an Emacs buffer" formatted))
+    (should (string-match-p "Markdown pipe tables are rendered as visible tables" formatted))
+    (should (string-match-p "wrap code-like identifiers, filenames, paths, symbols, and expressions in backticks" formatted))
+    (should (string-match-p "Avoid bare underscores or asterisks for code-like text inside tables" formatted))))
 
 (ert-deftest codex-ide-thread-choice-candidates-disambiguate-duplicate-previews ()
   (let* ((first-thread '((id . "thread-12345678")
@@ -469,7 +740,10 @@
                           project-dir)))
             (should (codex-ide-session-p session))
             (should (memq session codex-ide--sessions))
-            (should (equal (nreverse requests) '("initialize")))
+            (should (equal (seq-remove (lambda (method)
+                                         (equal method "config/read"))
+                                       (nreverse requests))
+                           '("initialize")))
             (should (string= (codex-ide-session-status session) "idle"))))))))
 
 (ert-deftest codex-ide-show-session-buffer-adds-prompt-to-idle-query-session ()
@@ -489,7 +763,10 @@
                           project-dir)))
             (should-not (codex-ide--input-prompt-active-p session))
             (codex-ide--show-session-buffer session)
-            (should (equal (nreverse requests) '("initialize")))
+            (should (equal (seq-remove (lambda (method)
+                                         (equal method "config/read"))
+                                       (nreverse requests))
+                           '("initialize")))
             (should (codex-ide--input-prompt-active-p session))
             (with-current-buffer (codex-ide-session-buffer session)
               (goto-char (marker-position
@@ -529,7 +806,9 @@
                                                              project-dir)))
               (should (eq session query-session))
               (should (= (length codex-ide--sessions) 1))
-              (should (equal (nreverse requests)
+              (should (equal (seq-remove (lambda (method)
+                                           (equal method "config/read"))
+                                         (nreverse requests))
                              '("thread/read" "thread/resume")))
               (should (string= (codex-ide-session-thread-id session)
                                "thread-reused-1"))
@@ -835,6 +1114,413 @@
                 (should (string-match-p "\\[/Emacs prompt context\\]"
                                         (alist-get 'text (aref input 0))))))))))))
 
+(ert-deftest codex-ide-submit-includes-reasoning-effort-when-configured ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (submitted nil)
+        (codex-ide-reasoning-effort "high"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-test-effort")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "Explain this")
+            (cl-letf (((symbol-function 'codex-ide--request-sync)
+                       (lambda (_session _method params)
+                         (setq submitted params)
+                         nil)))
+              (codex-ide--submit-prompt)))
+          (should (equal (alist-get 'effort submitted) "high")))))))
+
+(ert-deftest codex-ide-submit-includes-model-when-configured ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (submitted nil)
+        (codex-ide-model "gpt-5.4-mini"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-test-model")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "Explain this")
+            (cl-letf (((symbol-function 'codex-ide--request-sync)
+                       (lambda (_session _method params)
+                         (setq submitted params)
+                         nil)))
+              (codex-ide--submit-prompt)))
+          (should (equal (alist-get 'model submitted) "gpt-5.4-mini")))))))
+
+(ert-deftest codex-ide-submit-remembers-submitted-model-for-header ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-model "gpt-5.4-mini"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session))
+              (updated nil))
+          (setf (codex-ide-session-thread-id session) "thread-test-model-header")
+          (codex-ide--session-metadata-put session :model-name "gpt-5.3")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "Explain this")
+            (cl-letf (((symbol-function 'codex-ide--request-sync)
+                       (lambda (&rest _) nil))
+                      ((symbol-function 'codex-ide--update-header-line)
+                       (lambda (_session)
+                         (setq updated t))))
+              (codex-ide--submit-prompt)))
+          (should updated)
+          (should (equal (codex-ide--server-model-name session)
+                         "gpt-5.4-mini")))))))
+
+(ert-deftest codex-ide-header-line-shows-reasoning-effort ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-reasoning-effort "high"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--update-header-line session)
+            (should (string-match-p "effort:high"
+                                    (substring-no-properties header-line-format)))))))))
+
+(ert-deftest codex-ide-header-line-shows-model-name ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (codex-ide--session-metadata-put session :model-name "gpt-5.4")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--update-header-line session)
+            (should (string-match-p "model:gpt-5\\.4"
+                                    (substring-no-properties header-line-format)))))))))
+
+(ert-deftest codex-ide-header-line-prefers-session-model-over-global-default ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-model "gpt-5.4"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-1")
+          (codex-ide--session-metadata-put session :model-name "gpt-5.4-mini")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--update-header-line session)
+            (should (string-match-p "model:gpt-5\\.4-mini"
+                                    (substring-no-properties header-line-format)))
+            (should-not (string-match-p "model:gpt-5\\.4\\([^.-]\\|$\\)"
+                                        (substring-no-properties header-line-format)))))))))
+
+(ert-deftest codex-ide-header-line-requests-server-model-when-session-model-is-unset ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-model "gpt-5.4")
+        (requested nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--ensure-server-model-name)
+                     (lambda (_session)
+                       (setq requested t))))
+            (with-current-buffer (codex-ide-session-buffer session)
+              (codex-ide--update-header-line session)
+              (should requested)
+              (should-not (string-match-p "model:"
+                                          (substring-no-properties header-line-format))))))))))
+
+(ert-deftest codex-ide-header-line-uses-server-model-when-local-model-is-unset ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-model nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--server-model-name)
+                     (lambda (_session)
+                       "gpt-5.4-mini")))
+            (with-current-buffer (codex-ide-session-buffer session)
+              (codex-ide--update-header-line session)
+              (should (string-match-p "model:gpt-5\\.4-mini"
+                                      (substring-no-properties header-line-format))))))))))
+
+(ert-deftest codex-ide-available-model-names-queries-model-list ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requested-method nil)
+        (requested-params nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+                     (lambda () t))
+                    ((symbol-function 'codex-ide--cleanup-dead-sessions)
+                     (lambda () nil))
+                    ((symbol-function 'codex-ide--ensure-active-buffer-tracking)
+                     (lambda () nil))
+                    ((symbol-function 'codex-ide--query-session-for-thread-selection)
+                     (lambda (&optional _directory) session))
+                    ((symbol-function 'codex-ide--request-sync)
+                     (lambda (_session method params)
+                       (setq requested-method method
+                             requested-params params)
+                       '((data . (((id . "gpt-5.4") (model . "gpt-5.4"))
+                                  ((id . "gpt-5.4-mini") (model . "gpt-5.4-mini"))))
+                         (nextCursor . nil)))))
+            (should (equal (codex-ide--available-model-names)
+                           '("gpt-5.4" "gpt-5.4-mini")))
+            (should (equal requested-method "model/list"))
+            (should (equal requested-params '((limit . 100))))))))))
+
+(ert-deftest codex-ide-config-read-sends-object-params-with-cwd ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requested nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--request-sync)
+                     (lambda (_session method params)
+                       (setq requested (cons method params))
+                       '((config . ((model . "gpt-5.4")))))))
+            (should (equal (codex-ide--config-read session)
+                           '((config . ((model . "gpt-5.4"))))))
+            (should (equal (car requested) "config/read"))
+            (should (equal (cdr requested)
+                           `((includeLayers . :json-false)
+                             (cwd . ,(codex-ide-session-directory session)))))))))))
+
+(ert-deftest codex-ide-server-model-name-prefers-config-read-model ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests nil)
+        (requested-params nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--request-async)
+                     (lambda (_session method params callback)
+                       (push method requests)
+                       (push params requested-params)
+                       (funcall callback
+                                '((config . ((model . "gpt-5.4"))))
+                                nil)
+                       1)))
+            (should-not (codex-ide--server-model-name session))
+            (codex-ide--ensure-server-model-name session)
+            (should (equal (codex-ide--server-model-name session) "gpt-5.4"))
+            (should (equal requests '("config/read")))
+            (should (equal (car requested-params)
+                           `((includeLayers . :json-false)
+                             (cwd . ,(codex-ide-session-directory session)))))
+            (should-not (codex-ide--session-metadata-get
+                         session
+                         :model-name-requested))
+            (codex-ide--ensure-server-model-name session)
+            (should (equal requests '("config/read")))))))))
+
+(ert-deftest codex-ide-server-model-name-ignores-stale-config-read-after-model-known ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (callback nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--request-async)
+                     (lambda (_session method _params cb)
+                       (should (equal method "config/read"))
+                       (setq callback cb)
+                       1)))
+            (codex-ide--ensure-server-model-name session)
+            (should callback)
+            (codex-ide--set-session-model-name session "gpt-5.4")
+            (funcall callback '((config . ((model . "gpt-5.3")))) nil)
+            (should (equal (codex-ide--server-model-name session)
+                           "gpt-5.4"))
+            (should-not (codex-ide--session-metadata-get
+                         session
+                         :model-name-requested))))))))
+
+(ert-deftest codex-ide-item-completed-remembers-session-model-name ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session))
+              (updated nil))
+          (cl-letf (((symbol-function 'codex-ide--update-header-line)
+                     (lambda (_session)
+                       (setq updated t))))
+            (codex-ide--handle-notification
+             session
+             '((method . "item/completed")
+               (params . ((item . ((id . "item-1")
+                                   (type . "agentMessage")
+                                   (model . "gpt-5.4-mini")
+                                   (status . "completed"))))))))
+          (should (equal (codex-ide--server-model-name session)
+                         "gpt-5.4-mini"))
+          (should updated))))))
+
+(ert-deftest codex-ide-item-started-updates-session-model-name ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session))
+              (updated nil))
+          (codex-ide--session-metadata-put session :model-name "gpt-5.4")
+          (cl-letf (((symbol-function 'codex-ide--update-header-line)
+                     (lambda (_session)
+                       (setq updated t))))
+            (codex-ide--handle-notification
+             session
+             '((method . "item/started")
+               (params . ((item . ((id . "item-1")
+                                   (type . "agentMessage")
+                                   (model . "gpt-5.4-mini"))))))))
+          (should (equal (codex-ide--server-model-name session)
+                         "gpt-5.4-mini"))
+          (should updated))))))
+
+(ert-deftest codex-ide-item-started-refreshes-server-model-when-payload-lacks-model ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session))
+              (updated nil))
+          (codex-ide--session-metadata-put session :model-name :unknown)
+          (codex-ide--session-metadata-put session :model-name-requested t)
+          (cl-letf (((symbol-function 'codex-ide--request-async)
+                     (lambda (_session method params callback)
+                       (push (cons method params) requests)
+                       (funcall callback
+                                '((config . ((model . "gpt-5.4"))))
+                                nil)
+                       1))
+                    ((symbol-function 'codex-ide--update-header-line)
+                     (lambda (_session)
+                       (setq updated t))))
+            (codex-ide--handle-notification
+             session
+             '((method . "item/started")
+               (params . ((item . ((id . "item-1")
+                                   (type . "reasoning"))))))))
+          (should (equal (codex-ide--server-model-name session) "gpt-5.4"))
+          (should-not (codex-ide--session-metadata-get
+                       session
+                       :model-name-requested))
+          (should updated)
+          (should (equal (nreverse requests)
+                         `(("config/read"
+                            (includeLayers . :json-false)
+                            (cwd . ,(codex-ide-session-directory session)))))))))))
+
+(ert-deftest codex-ide-item-started-does-not-refresh-known-session-model ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session))
+              (updated nil))
+          (codex-ide--session-metadata-put session :model-name "gpt-5.4")
+          (cl-letf (((symbol-function 'codex-ide--request-async)
+                     (lambda (&rest args)
+                       (push args requests)
+                       (ert-fail "Did not expect config/read refresh")))
+                    ((symbol-function 'codex-ide--update-header-line)
+                     (lambda (_session)
+                       (setq updated t))))
+            (codex-ide--handle-notification
+             session
+             '((method . "item/started")
+               (params . ((item . ((id . "item-1")
+                                   (type . "reasoning"))))))))
+          (should-not updated)
+          (should (equal (codex-ide--server-model-name session) "gpt-5.4"))
+          (should-not requests))))))
+
+(ert-deftest codex-ide-turn-started-does-not-refresh-known-session-model ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session))
+              (updated nil))
+          (codex-ide--session-metadata-put session :model-name "gpt-5.4")
+          (cl-letf (((symbol-function 'codex-ide--request-async)
+                     (lambda (&rest args)
+                       (push args requests)
+                       (ert-fail "Did not expect config/read refresh")))
+                    ((symbol-function 'codex-ide--update-header-line)
+                     (lambda (_session)
+                       (setq updated t))))
+            (codex-ide--handle-notification
+             session
+             '((method . "turn/started")
+               (params . ((turn . ((id . "turn-1")))))))
+            (should updated)
+            (should (equal (codex-ide--server-model-name session) "gpt-5.4"))
+            (should-not requests)))))))
+
+(ert-deftest codex-ide-resume-thread-into-session-prefers-thread-model-over-local-default ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-model "gpt-5.4")
+        (requests nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method params)
+                     (push (cons method params) requests)
+                     (pcase method
+                       ("thread/read"
+                        '((thread . ((id . "thread-explicit-1")
+                                     (model . "gpt-5.4-mini")
+                                     (name . "Explicit flow")
+                                     (preview . "Replay exact thread")))
+                          (turns . (((id . "turn-1")
+                                     (items . (((type . "userMessage")
+                                                (content . (((type . "text")
+                                                             (text . "Resume this exact thread.")))))
+                                               ((type . "agentMessage")
+                                                (id . "item-1")
+                                                (text . "Exact thread resumed.")))))))))
+                       ("thread/resume" '((ok . t)))
+                       (_ (ert-fail (format "Unexpected method %s" method))))))
+                  ((symbol-function 'codex-ide--request-async)
+                   (lambda (&rest _) 1)))
+          (let ((session (codex-ide--create-process-session)))
+            (should (eq (codex-ide--resume-thread-into-session
+                         session "thread-explicit-1" "Resumed")
+                        session))
+            (should (equal (codex-ide--server-model-name session)
+                           "gpt-5.4-mini"))
+            (should (equal (mapcar #'car (nreverse requests))
+                           '("thread/read" "thread/resume")))))))))
+
+(ert-deftest codex-ide-server-model-name-becomes-unknown-when-config-read-has-no-model ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--request-async)
+                     (lambda (_session method _params callback)
+                       (push method requests)
+                       (should (equal method "config/read"))
+                       (funcall callback '((config . ((approvalPolicy . "never")))) nil)
+                       1)))
+            (should-not (codex-ide--server-model-name session))
+            (codex-ide--ensure-server-model-name session)
+            (should (equal (codex-ide--server-model-name session)
+                           "unknown"))
+            (should (equal requests '("config/read")))))))))
+
+(ert-deftest codex-ide-server-model-name-becomes-unknown-when-config-read-errors ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--request-async)
+                     (lambda (_session method _params callback)
+                       (push method requests)
+                       (should (equal method "config/read"))
+                       (funcall callback nil '((message . "boom")))
+                       1)))
+            (should-not (codex-ide--server-model-name session))
+            (codex-ide--ensure-server-model-name session)
+            (should (equal (codex-ide--server-model-name session)
+                           "unknown"))
+            (should (equal requests '("config/read")))))))))
+
 (ert-deftest codex-ide-process-filter-handles-responses-notifications-and-partials ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (response-result nil)
@@ -861,13 +1547,15 @@
 (ert-deftest codex-ide-command-approval-renders-inline-buttons-and-resolves-on-click ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (displayed-buffer nil)
-        (message-text nil))
+        (message-text nil)
+        (codex-ide-model "gpt-5.4"))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
         (let* ((session (codex-ide--create-process-session))
                (process (codex-ide-session-process session)))
           (setf (codex-ide-session-current-turn-id session) "turn-approval-1"
                 (codex-ide-session-status session) "running")
+          (codex-ide--session-metadata-put session :model-name "gpt-5.4")
           (cl-letf (((symbol-function 'run-at-time)
                      (lambda (_time _repeat function)
                        (funcall function)))
@@ -1051,10 +1739,16 @@
             (search-forward "[accept]")
             (backward-char 1)
             (push-button))
-          (let* ((payload (json-parse-string
-                           (car (codex-ide-test-process-sent-strings process))
-                           :object-type 'alist
-                           :array-type 'list)))
+          (let* ((payloads
+                  (mapcar (lambda (json)
+                            (json-parse-string json
+                                               :object-type 'alist
+                                               :array-type 'list))
+                          (codex-ide-test-process-sent-strings process)))
+                 (payload (seq-find (lambda (item)
+                                      (equal (alist-get 'id item) 45))
+                                    payloads)))
+            (should payload)
             (should (equal (alist-get 'id payload) 45))
             (should (equal (alist-get 'decision (alist-get 'result payload))
                            "accept")))
@@ -1111,11 +1805,17 @@
             (search-forward "[decline]")
             (backward-char 1)
             (push-button))
-          (let* ((payload (json-parse-string
-                           (car (codex-ide-test-process-sent-strings process))
-                           :object-type 'alist
-                           :array-type 'list))
+          (let* ((payloads
+                  (mapcar (lambda (json)
+                            (json-parse-string json
+                                               :object-type 'alist
+                                               :array-type 'list))
+                          (codex-ide-test-process-sent-strings process)))
+                 (payload (seq-find (lambda (item)
+                                      (equal (alist-get 'id item) 43))
+                                    payloads))
                  (result (alist-get 'result payload)))
+            (should payload)
             (should (equal (alist-get 'id payload) 43))
             (should (equal (alist-get 'permissions result) nil))
             (should-not (alist-get 'scope result))))))))
@@ -1566,6 +2266,28 @@
              "\n\n> What is MyTable's primary key\\?")
             (buffer-string))))))))
 
+(ert-deftest codex-ide-restore-thread-read-transcript-renders-trailing-pipe-tables ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (session nil)
+         (thread-read
+          '((thread . ((id . "thread-restore-table-1")
+                       (turns . (((id . "turn-1")
+                                  (items . (((type . "userMessage")
+                                             (content . (((type . "text")
+                                                          (text . "Show a table")))))
+                                            ((type . "agentMessage")
+                                             (id . "item-1")
+                                             (text . "| Number | Square |\n| --- | ---: |\n| 1 | 1 |\n| 2 | 4 |\n"))))))))))))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (setq session (codex-ide--create-process-session))
+        (should (codex-ide--restore-thread-read-transcript session thread-read))
+        (with-current-buffer (codex-ide-session-buffer session)
+          (let ((buffer-text (buffer-string)))
+            (should (string-match-p "^| Number | Square |" buffer-text))
+            (should (string-match-p "^| 1      |      1 |$" buffer-text))
+            (should-not (string-match-p "^| 1 | 1 |$" buffer-text))))))))
+
 (ert-deftest codex-ide-restore-thread-read-transcript-preserves-multiline-user-prompts ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (session nil)
@@ -1625,7 +2347,9 @@
                        (_ (ert-fail (format "Unexpected method %s" method)))))))
           (let ((session (codex-ide--start-session 'resume)))
             (should (string= (codex-ide-session-thread-id session) "thread-resume-1"))
-            (should (equal (mapcar #'car (nreverse requests))
+            (should (equal (seq-remove (lambda (method)
+                                         (equal method "config/read"))
+                                       (mapcar #'car (nreverse requests)))
                            '("initialize" "thread/read" "thread/resume")))
             (with-current-buffer (codex-ide-session-buffer session)
               (let ((buffer-text (buffer-string)))
@@ -1722,7 +2446,9 @@
                 (should-not (eq new-session original-session))
                 (should (string= (codex-ide-session-thread-id new-session)
                                  "thread-resume-2"))
-                (should (equal (nreverse requests)
+                (should (equal (seq-remove (lambda (method)
+                                             (equal method "config/read"))
+                                           (nreverse requests))
                                '("initialize" "thread/read" "thread/resume")))
                 (with-current-buffer (codex-ide-session-buffer new-session)
                   (should (string-match-p "^> Switch threads"
@@ -1972,7 +2698,9 @@
             (with-current-buffer buffer
               (should (eq (codex-ide--session-for-current-buffer) new-session))
               (should-not (string-match-p "old transcript" (buffer-string))))
-            (should (equal requests
+            (should (equal (seq-remove (lambda (method)
+                                         (equal method "config/read"))
+                                       requests)
                            '("thread/unsubscribe"
                              "initialize"
                              "thread/start")))))))))
@@ -2247,6 +2975,83 @@
     (forward-line -1)
     (should (equal (get-text-property (point) 'display) ""))))
 
+(ert-deftest codex-ide-render-markdown-region-renders-pipe-tables ()
+  (with-temp-buffer
+    (insert "| Name | Age |\n| --- | ---: |\n| Bob | 3 |\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (let ((rendered (buffer-string)))
+      (should (string-match-p "^| Name | Age |" rendered))
+      (should (string-match-p "^|------|----:|$" rendered))
+      (should (string-match-p "^| Bob  |   3 |$" rendered)))
+    (should-not (get-text-property (point-min) 'display))
+    (should (get-text-property (point-min) 'codex-ide-markdown-table-original))))
+
+(ert-deftest codex-ide-render-markdown-region-renders-file-links-inside-pipe-tables ()
+  (with-temp-buffer
+    (insert "| File |\n| --- |\n| [`foo.el`](/tmp/foo.el#L3C2) |\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (let ((rendered (buffer-string)))
+      (should (string-match-p "^| File   |" rendered))
+      (should (string-match-p "^| foo\\.el |" rendered))
+      (should-not (string-match-p (regexp-quote "[`foo.el`](/tmp/foo.el#L3C2)")
+                                  rendered)))
+    (goto-char (point-min))
+    (search-forward "foo.el")
+    (let ((pos (match-beginning 0)))
+      (should (button-at pos))
+      (should (equal (get-text-property pos 'codex-ide-path) "/tmp/foo.el"))
+      (should (equal (get-text-property pos 'codex-ide-line) 3))
+      (should (equal (get-text-property pos 'codex-ide-column) 2)))))
+
+(ert-deftest codex-ide-render-markdown-region-defers-trailing-pipe-tables ()
+  (with-temp-buffer
+    (insert "| Name | Age |\n| --- | ---: |\n| Bob | 3 |\n")
+    (codex-ide--render-markdown-region (point-min) (point-max) nil)
+    (should (equal (buffer-string)
+                   "| Name | Age |\n| --- | ---: |\n| Bob | 3 |\n"))
+    (codex-ide--render-markdown-region (point-min) (point-max) t)
+    (should (string-match-p "^| Bob  |   3 |$" (buffer-string)))
+    (should-not (get-text-property (point-min) 'display))))
+
+(ert-deftest codex-ide-agent-message-completion-renders-trailing-pipe-tables ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (codex-ide--handle-notification
+           session
+           '((method . "turn/started")
+             (params . ((turn . ((id . "turn-1")))))))
+          (codex-ide--handle-notification
+           session
+           '((method . "item/agentMessage/delta")
+             (params . ((itemId . "msg-1")
+                        (delta . "| Name | Age |\n| --- | ---: |\n| Bob | 3 |\n")))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (string-match-p
+                     (regexp-quote "| Bob | 3 |")
+                     (buffer-string))))
+          (codex-ide--handle-notification
+           session
+           '((method . "item/completed")
+             (params . ((item . ((id . "msg-1")
+                                 (type . "agentMessage")
+                                 (status . "completed")))))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (let ((rendered (buffer-string)))
+              (should (string-match-p "^| Name | Age |" rendered))
+              (should (string-match-p "^| Bob  |   3 |$" rendered))
+              (should-not (text-property-any
+                           (point-min)
+                           (point-max)
+                           'display
+                           t))
+              (goto-char (point-min))
+              (search-forward "| Bob  |   3 |")
+              (should (get-text-property
+                       (match-beginning 0)
+                       'codex-ide-markdown-table-original)))))))))
+
 (ert-deftest codex-ide-render-file-change-diff-text-omits-detail-prefix ()
   (with-temp-buffer
     (codex-ide--render-file-change-diff-text
@@ -2295,6 +3100,75 @@
                                       contents)))))
       (delete-directory temp-dir t)))))
 
+(ert-deftest codex-ide-render-markdown-region-renders-emphasis ()
+  (with-temp-buffer
+    (insert "This is **bold** and *italic* plus __strong_with_underscores__ and _emphasis_.\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "This is bold and italic plus strong_with_underscores and emphasis.\n"))
+    (goto-char (point-min))
+    (search-forward "bold")
+    (should (eq (get-text-property (1- (point)) 'face) 'bold))
+    (search-forward "italic")
+    (should (eq (get-text-property (1- (point)) 'face) 'italic))
+    (search-forward "strong_with_underscores")
+    (should (eq (get-text-property (1- (point)) 'face) 'bold))
+    (search-forward "emphasis")
+    (should (eq (get-text-property (1- (point)) 'face) 'italic))))
+
+(ert-deftest codex-ide-render-markdown-region-keeps-emphasis-after-rerender ()
+  (with-temp-buffer
+    (insert "This is **bold** and _italic_.\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (should (equal (buffer-string) "This is bold and italic.\n"))
+    (goto-char (point-min))
+    (search-forward "bold")
+    (should (eq (get-text-property (1- (point)) 'face) 'bold))
+    (search-forward "italic")
+    (should (eq (get-text-property (1- (point)) 'face) 'italic))))
+
+(ert-deftest codex-ide-render-markdown-region-keeps-intraword-underscores-literal ()
+  (with-temp-buffer
+    (insert "Keep my_table_id literal.\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "Keep my_table_id literal.\n"))
+    (goto-char (point-min))
+    (search-forward "my_table_id")
+    (should-not (text-property-not-all (match-beginning 0) (match-end 0)
+                                       'face nil))))
+
+(ert-deftest codex-ide-render-markdown-region-renders-bold-with-internal-underscores ()
+  (with-temp-buffer
+    (insert "Render **bold_with_underscores** and __strong_with_underscores__.\n")
+    (codex-ide--render-markdown-region (point-min) (point-max))
+    (should (equal (buffer-string)
+                   "Render bold_with_underscores and strong_with_underscores.\n"))
+    (goto-char (point-min))
+    (search-forward "bold_with_underscores")
+    (should (eq (get-text-property (1- (point)) 'face) 'bold))
+    (search-forward "strong_with_underscores")
+    (should (eq (get-text-property (1- (point)) 'face) 'bold))))
+
+(ert-deftest codex-ide-render-markdown-region-renders-table-emphasis ()
+  (with-temp-buffer
+    (insert "| Kind | Value |\n| --- | --- |\n| **Bold** | _italic_ |\n| Star bold | **bold_with_underscores** |\n| Underscore bold | __strong_with_underscores__ |\n")
+    (codex-ide--render-markdown-region (point-min) (point-max) t)
+    (goto-char (point-min))
+    (search-forward "Bold")
+    (should (memq 'bold
+                  (ensure-list (get-text-property (1- (point)) 'face))))
+    (search-forward "italic")
+    (should (memq 'italic
+                  (ensure-list (get-text-property (1- (point)) 'face))))
+    (search-forward "bold_with_underscores")
+    (should (memq 'bold
+                  (ensure-list (get-text-property (1- (point)) 'face))))
+    (search-forward "strong_with_underscores")
+    (should (memq 'bold
+                  (ensure-list (get-text-property (1- (point)) 'face))))))
+
 (ert-deftest codex-ide-render-markdown-region-caches-code-block-font-lock-setup ()
   (let ((codex-ide--font-lock-spec-cache (make-hash-table :test 'eq))
         (mode-call-count 0))
@@ -2308,13 +3182,14 @@
                              '((("\\_<foo\\_>" . font-lock-keyword-face)))))))
       (with-temp-buffer
         (insert "```codex-ide-test-cached\nfoo\n```\n")
-        (codex-ide--render-markdown-region (point-min) (point-max))
-        (codex-ide--render-markdown-region (point-min) (point-max))
+        (codex-ide--render-markdown-region (point-min) (point-max) t)
+        (codex-ide--render-markdown-region (point-min) (point-max) t)
         (should (= mode-call-count 1))
         (goto-char (point-min))
         (search-forward "foo")
-        (should (eq (get-text-property (1- (point)) 'face)
-                    'font-lock-keyword-face))))))
+        (should (memq 'font-lock-keyword-face
+                      (ensure-list
+                       (get-text-property (1- (point)) 'face))))))))
 
 (provide 'codex-ide-tests)
 

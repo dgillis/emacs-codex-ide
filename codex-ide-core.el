@@ -34,6 +34,24 @@
 (defvar codex-ide--prompt-origin-buffer nil
   "Buffer to treat as the authoritative prompt context for one submission.")
 
+(defmacro codex-ide--without-undo-recording (&rest body)
+  "Run BODY without recording undo entries in the current buffer."
+  (declare (indent 0) (debug t))
+  `(let ((buffer-undo-list t))
+     ,@body))
+
+(defun codex-ide--discard-buffer-undo-history ()
+  "Discard undo history for the current buffer."
+  (unless (eq buffer-undo-list t)
+    (setq buffer-undo-list nil))
+  (when (boundp 'pending-undo-list)
+    (setq pending-undo-list nil))
+  (when (boundp 'undo-in-progress)
+    (setq undo-in-progress nil))
+  (when (fboundp 'undo-tree-clear-history)
+    (ignore-errors
+      (undo-tree-clear-history))))
+
 (defvar codex-ide-persisted-project-state (make-hash-table :test 'equal)
   "Hash table mapping project directories to persisted Codex IDE state.
 Each value is a plist reserved for state that should survive Emacs restarts.

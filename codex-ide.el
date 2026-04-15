@@ -67,10 +67,29 @@
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-reasoning-effort nil
+  "Optional reasoning effort for new Codex turns.
+When non-nil, codex-ide sends this as the `effort' override on `turn/start',
+which applies to the current turn and subsequent turns for the thread."
+  :type '(choice (const :tag "Default" nil)
+                 (const "none")
+                 (const "minimal")
+                 (const "low")
+                 (const "medium")
+                 (const "high")
+                 (const "xhigh"))
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-session-baseline-prompt "
 - You are a Codex server running inside Emacs.
 - You can use MCP tools to inspect and interact with the running Emacs session.
 - Interpret Emacs terminology as relevant context to the user's request: buffers, regions, windows, point, mark, current file, etc.
+- Responses are rendered as Markdown in an Emacs buffer.
+- Markdown pipe tables are rendered as visible tables.
+- In table cells, wrap code-like identifiers, filenames, paths, symbols, and expressions in backticks.
+- Use markdown links for file references when appropriate, for example [`foo.el`](/tmp/foo.el#L3C2).
+- Avoid bare underscores or asterisks for code-like text inside tables; use backticks instead.
 - Do not needlessly use Emacs commands to accomplish agent tasks."
   "Optionally baseline prompt injected into the first real prompt of a new thread.
 When set to a non-empty string, `codex-ide' prepends it once as an
@@ -90,6 +109,18 @@ brand-new thread. Resume and continue flows do not resend it."
 (defcustom codex-ide-focus-on-open t
   "Whether to focus the Codex window after showing it."
   :type 'boolean
+  :group 'codex-ide)
+
+;;;###autoload
+(defcustom codex-ide-new-session-split nil
+  "Window split direction to use when showing newly created Codex sessions.
+When nil, newly created sessions use the existing `codex-ide-display-buffer'
+behavior.  When `vertical', split the selected window left/right and show the
+session on the right.  When `horizontal', split the selected window top/bottom
+and show the session below."
+  :type '(choice (const :tag "Default display behavior" nil)
+                 (const :tag "Vertical split" vertical)
+                 (const :tag "Horizontal split" horizontal))
   :group 'codex-ide)
 
 ;;;###autoload
@@ -154,6 +185,15 @@ top of the buffer."
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-log-stream-deltas nil
+  "Whether to log every streamed output delta.
+
+When nil, high-frequency text deltas are omitted from the log buffer.  Item
+start, completion, errors, and other lifecycle events are still logged."
+  :type 'boolean
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-resume-summary-turn-limit 100
   "How many recent turns to summarize when resuming a stored thread."
   :type 'integer
@@ -207,9 +247,24 @@ top of the buffer."
       (unless (eq inside codex-ide-session-prompt-minor-mode)
         (codex-ide-session-prompt-minor-mode (if inside 1 -1))))))
 
+(defun codex-ide--disable-session-font-lock ()
+  "Disable buffer font-lock machinery for Codex transcript buffers."
+  (setq-local font-lock-defaults nil)
+  (setq-local font-lock-keywords nil)
+  (setq-local font-lock-function #'ignore)
+  (setq-local jit-lock-functions nil)
+  (when (boundp 'font-lock-extra-managed-props)
+    (setq-local font-lock-extra-managed-props nil))
+  (when (fboundp 'jit-lock-mode)
+    (jit-lock-mode -1))
+  (when (fboundp 'font-lock-mode)
+    (font-lock-mode -1))
+  (setq-local jit-lock-functions nil))
+
 ;;;###autoload
 (define-derived-mode codex-ide-session-mode text-mode "Codex-IDE"
   "Major mode for Codex app-server session buffers."
+  (codex-ide--disable-session-font-lock)
   (setq-local truncate-lines nil)
   (when codex-ide-session-enable-visual-line-mode
     (visual-line-mode 1))
@@ -219,6 +274,7 @@ top of the buffer."
 ;;;###autoload
 (define-derived-mode codex-ide-log-mode special-mode "Codex-IDE-Log"
   "Major mode for Codex IDE log buffers."
+  (buffer-disable-undo)
   (setq-local truncate-lines t))
 
 (defun codex-ide--initialize-log-buffer (buffer directory)
@@ -348,6 +404,61 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
           (when (not (string-empty-p codex-ide-cli-extra-flags))
             (split-string-shell-command codex-ide-cli-extra-flags))))
 
+(defun codex-ide--environment-variable-value (name environment)
+  "Return NAME's value in ENVIRONMENT, or nil when unset."
+  (let ((prefix (concat name "=")))
+    (when-let ((entry (cl-find-if
+                       (lambda (value)
+                         (string-prefix-p prefix value))
+                       environment)))
+      (substring entry (length prefix)))))
+
+(defun codex-ide--set-environment-variable (environment name value)
+  "Return ENVIRONMENT with NAME set to VALUE."
+  (let ((prefix (concat name "=")))
+    (cons (concat prefix value)
+          (cl-remove-if
+           (lambda (entry)
+             (string-prefix-p prefix entry))
+           environment))))
+
+(defun codex-ide--app-server-process-environment (&optional environment)
+  "Return ENVIRONMENT adjusted for color-capable app-server tools."
+  (let ((env (copy-sequence (or environment process-environment))))
+    (unless (codex-ide--environment-variable-value "NO_COLOR" env)
+      (let ((term (codex-ide--environment-variable-value "TERM" env)))
+        (when (or (null term)
+                  (string-empty-p term)
+                  (string= term "dumb"))
+          (setq env (codex-ide--set-environment-variable
+                     env
+                     "TERM"
+                     "xterm-256color"))))
+      (unless (codex-ide--environment-variable-value "COLORTERM" env)
+        (setq env (codex-ide--set-environment-variable
+                   env
+                   "COLORTERM"
+                   "truecolor")))
+      (unless (codex-ide--environment-variable-value "CLICOLOR" env)
+        (setq env (codex-ide--set-environment-variable
+                   env
+                   "CLICOLOR"
+                   "1"))))
+    env))
+
+(defun codex-ide--display-buffer-in-window (buffer window)
+  "Display BUFFER in WINDOW, preserving dedication when possible."
+  (when window
+    (let ((was-dedicated (window-dedicated-p window)))
+      (when was-dedicated
+        (set-window-dedicated-p window nil))
+      (set-window-buffer window buffer)
+      (when was-dedicated
+        (set-window-dedicated-p window was-dedicated))
+      (when codex-ide-focus-on-open
+        (select-window window))))
+  window)
+
 (defun codex-ide-display-buffer (buffer)
   "Display BUFFER according to Codex window selection preferences."
   (codex-ide--remember-buffer-context-before-switch)
@@ -369,16 +480,35 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
               (and (memq :new-window config)
                    (split-window-sensibly selected-window))
               selected-window)))
-    (when window
-      (let ((was-dedicated (window-dedicated-p window)))
-        (when was-dedicated
-          (set-window-dedicated-p window nil))
-        (set-window-buffer window buffer)
-        (when was-dedicated
-          (set-window-dedicated-p window was-dedicated))
-        (when codex-ide-focus-on-open
-          (select-window window))))
-    window))
+    (codex-ide--display-buffer-in-window buffer window)))
+
+(defun codex-ide--split-window-for-new-session (window)
+  "Return a split child of WINDOW for a new session, or nil.
+The split direction is controlled by `codex-ide-new-session-split'."
+  (pcase codex-ide-new-session-split
+    ('nil nil)
+    ((or 'vertical 'horizontal)
+     (condition-case nil
+         (save-selected-window
+           (select-window window)
+           (if (eq codex-ide-new-session-split 'vertical)
+               (split-window-right)
+             (split-window-below)))
+       (error nil)))
+    (_ (user-error "Invalid codex-ide-new-session-split: %S"
+                   codex-ide-new-session-split))))
+
+(defun codex-ide--display-new-session-buffer (buffer)
+  "Display BUFFER for a newly created Codex session."
+  (if codex-ide-new-session-split
+      (let ((window (codex-ide--split-window-for-new-session
+                     (selected-window))))
+        (if window
+            (progn
+              (codex-ide--remember-buffer-context-before-switch)
+              (codex-ide--display-buffer-in-window buffer window))
+          (codex-ide-display-buffer buffer)))
+    (codex-ide-display-buffer buffer)))
 
 
 (defun codex-ide--trim-log-buffer ()
@@ -405,18 +535,19 @@ FORMAT-STRING and ARGS are passed to `format'."
     (error "Invalid Codex session: %S" session))
   (when-let ((buffer (codex-ide--ensure-log-buffer session)))
     (with-current-buffer buffer
-      (let ((inhibit-read-only t)
-            (moving (= (point) (point-max)))
-            start)
-        (goto-char (point-max))
-        (setq start (point))
-        (insert (format-time-string "[%Y-%m-%d %H:%M:%S] "))
-        (insert (apply #'format format-string args))
-        (insert "\n")
-        (codex-ide--trim-log-buffer)
-        (when moving
-          (goto-char (point-max)))
-        (copy-marker start)))))
+      (codex-ide--without-undo-recording
+        (let ((inhibit-read-only t)
+              (moving (= (point) (point-max)))
+              start)
+          (goto-char (point-max))
+          (setq start (point))
+          (insert (format-time-string "[%Y-%m-%d %H:%M:%S] "))
+          (insert (apply #'format format-string args))
+          (insert "\n")
+          (codex-ide--trim-log-buffer)
+          (when moving
+            (goto-char (point-max)))
+          (copy-marker start))))))
 
 (defun codex-ide--freeze-region (start end)
   "Make the region from START to END read-only."
@@ -770,8 +901,27 @@ The result is an alist with `formatted' and `summary' entries."
       (codex-ide-log-message session "Request %s (id=%s) timed out" method id)
       (error "Timed out waiting for %s" method))
      (t
-      (codex-ide-log-message session "Request %s (id=%s) completed" method id)
+     (codex-ide-log-message session "Request %s (id=%s) completed" method id)
       result))))
+
+(defun codex-ide--request-async (session method params callback)
+  "Send METHOD with PARAMS to SESSION and invoke CALLBACK on response."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (let* ((id (codex-ide--next-request-id session))
+         (pending (codex-ide-session-pending-requests session)))
+    (codex-ide-log-message session "Starting asynchronous request %s (id=%s)" method id)
+    (puthash id
+             (lambda (response-result response-error)
+               (remhash id pending)
+               (funcall callback response-result response-error))
+             pending)
+    (codex-ide--jsonrpc-send session `((jsonrpc . "2.0")
+                                       (id . ,id)
+                                       (method . ,method)
+                                       (params . ,params)))
+    id))
 
 (defun codex-ide--thread-start-params ()
   "Build `thread/start` params for the current working directory."
@@ -821,6 +971,74 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
 (defun codex-ide--extract-thread-id (result)
   "Extract the thread id from RESULT."
   (alist-get 'id (alist-get 'thread result)))
+
+(defun codex-ide--extract-reasoning-effort (payload)
+  "Extract a reasoning effort string from PAYLOAD, if present."
+  (or (alist-get 'reasoningEffort payload)
+      (alist-get 'reasoningEffort (alist-get 'thread payload))
+      (alist-get 'reasoningEffort (alist-get 'turn payload))))
+
+(defun codex-ide--remember-reasoning-effort (session payload)
+  "Persist reasoning effort from PAYLOAD into SESSION metadata."
+  (when-let ((effort (codex-ide--extract-reasoning-effort payload)))
+    (codex-ide--session-metadata-put session :reasoning-effort effort)))
+
+(defun codex-ide--extract-model-name (payload)
+  "Extract a model string from PAYLOAD, if present."
+  (let* ((thread (and (listp payload) (alist-get 'thread payload)))
+         (turn (and (listp payload) (alist-get 'turn payload)))
+         (item (and (listp payload) (alist-get 'item payload)))
+         (result (and (listp payload) (alist-get 'result payload)))
+         (root (or (and (listp payload)
+                        (or (alist-get 'config payload)
+                            (alist-get 'effectiveConfig payload)))
+                   payload))
+         (settings (and (listp root)
+                        (or (codex-ide--alist-get-safe 'settings root)
+                            (codex-ide--alist-get-safe 'config root)))))
+    (seq-find
+     (lambda (value)
+       (and (stringp value)
+            (not (string-empty-p value))))
+     (list (and (listp payload) (alist-get 'model payload))
+           (and (listp payload) (alist-get 'modelName payload))
+           (and (listp thread) (alist-get 'model thread))
+           (and (listp thread) (alist-get 'modelName thread))
+           (and (listp turn) (alist-get 'model turn))
+           (and (listp turn) (alist-get 'modelName turn))
+           (and (listp item) (alist-get 'model item))
+           (and (listp item) (alist-get 'modelName item))
+           (and (listp result) (alist-get 'model result))
+           (and (listp result) (alist-get 'modelName result))
+           (and (listp root) (codex-ide--alist-get-safe 'model root))
+           (and (listp settings) (codex-ide--alist-get-safe 'model settings))))))
+
+(defun codex-ide--set-session-model-name (session model)
+  "Store MODEL as SESSION's effective model."
+  (codex-ide--session-metadata-put
+   session
+   :model-name
+   (and (stringp model)
+        (not (string-empty-p model))
+        model)))
+
+(defun codex-ide--clear-session-model-name (session)
+  "Clear SESSION's remembered model state."
+  (codex-ide--session-metadata-put session :model-name nil)
+  (codex-ide--session-metadata-put session :model-name-requested nil))
+
+(defun codex-ide--remember-model-name (session payload)
+  "Persist model information from PAYLOAD into SESSION metadata."
+  (when-let ((model (codex-ide--extract-model-name payload)))
+    (codex-ide--set-session-model-name session model)
+    t))
+
+(defun codex-ide--remember-or-request-model-name (session payload)
+  "Persist model from PAYLOAD, or request it if SESSION does not know it."
+  (or (codex-ide--remember-model-name session payload)
+      (progn
+        (codex-ide--request-server-model-name session)
+        nil)))
 
 (defun codex-ide--thread-read-turns (thread-read)
   "Return turn history from THREAD-READ."
@@ -984,6 +1202,136 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
          (data (alist-get 'data result)))
     (append data nil)))
 
+(defun codex-ide--list-models (&optional session)
+  "List available models using SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (let ((cursor nil)
+        (models nil)
+        (page nil))
+    (while
+        (progn
+          (setq page
+                (codex-ide--request-sync
+                 session
+                 "model/list"
+                 (delq nil
+                       `((limit . 100)
+                         ,@(when cursor
+                             `((cursor . ,cursor)))))))
+          (setq models (nconc models (append (alist-get 'data page) nil))
+                cursor (alist-get 'nextCursor page))
+          cursor))
+    models))
+
+(defun codex-ide--config-read-params (&optional session)
+  "Build `config/read' params for SESSION."
+  (let ((directory (and session (codex-ide-session-directory session))))
+    `((includeLayers . :json-false)
+      ,@(when directory
+          `((cwd . ,directory))))))
+
+(defun codex-ide--config-read (&optional session)
+  "Read the effective app-server configuration using SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (codex-ide--request-sync
+   session
+   "config/read"
+   (codex-ide--config-read-params session)))
+
+(defun codex-ide--default-model-name (&optional session)
+  "Return the server-recommended default model name using SESSION."
+  (when-let* ((models (codex-ide--list-models session))
+              (default-model (seq-find
+                              (lambda (model)
+                                (not (memq (alist-get 'isDefault model)
+                                           '(nil :json-false))))
+                              models))
+              (name (or (alist-get 'model default-model)
+                        (alist-get 'id default-model))))
+    (and (stringp name)
+         (not (string-empty-p name))
+         name)))
+
+(defun codex-ide--server-model-name (&optional session)
+  "Return the cached session model name for SESSION, if known."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (let ((cached (codex-ide--session-metadata-get session :model-name)))
+    (cond
+     ((eq cached :unknown) "unknown")
+     ((stringp cached) cached)
+     (t nil))))
+
+(defun codex-ide--session-model-needs-refresh-p (session)
+  "Return non-nil when SESSION should retry fetching its server model."
+  (not (stringp (codex-ide--session-metadata-get session :model-name))))
+
+(defun codex-ide--handle-server-model-name-resolved (session model)
+  "Store MODEL for SESSION and refresh the header line."
+  (codex-ide--session-metadata-put session :model-name (or model :unknown))
+  (codex-ide-log-message
+   session
+   "Server model resolved as %s"
+   (or model "unknown"))
+  (when (buffer-live-p (codex-ide-session-buffer session))
+    (codex-ide--update-header-line session)))
+
+(defun codex-ide--request-server-model-name (&optional session)
+  "Request SESSION's server-derived model name without blocking."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (let ((token (list 'model-name-request)))
+    (when (and session
+               (codex-ide--session-model-needs-refresh-p session)
+               (not (consp (codex-ide--session-metadata-get
+                            session
+                            :model-name-requested)))
+               (process-live-p (codex-ide-session-process session)))
+      (codex-ide--session-metadata-put session :model-name-requested token)
+      (codex-ide--request-async
+       session
+       "config/read"
+       (codex-ide--config-read-params session)
+       (lambda (result error)
+         (when (eq (codex-ide--session-metadata-get
+                    session
+                    :model-name-requested)
+                   token)
+           (codex-ide--session-metadata-put session :model-name-requested nil)
+           (when (codex-ide--session-model-needs-refresh-p session)
+             (let ((model (and (not error)
+                               (codex-ide--extract-model-name result))))
+               (codex-ide--handle-server-model-name-resolved session model)))))))))
+
+(defun codex-ide--ensure-server-model-name (&optional session)
+  "Request SESSION's server-derived model name once, without blocking."
+  (codex-ide--request-server-model-name session))
+
+(defun codex-ide--available-model-names ()
+  "Return visible model names for the current workspace, or nil on failure."
+  (condition-case nil
+      (progn
+        (unless (codex-ide--ensure-cli)
+          (error "Codex CLI not available"))
+        (codex-ide--cleanup-dead-sessions)
+        (codex-ide--ensure-active-buffer-tracking)
+        (let* ((working-dir (codex-ide--get-working-directory))
+               (session (or (codex-ide--query-session-for-thread-selection working-dir)
+                            (codex-ide--ensure-query-session-for-thread-selection
+                             working-dir)))
+               (models (codex-ide--list-models session)))
+          (delete-dups
+           (delq nil
+                 (mapcar (lambda (model)
+                           (or (alist-get 'model model)
+                               (alist-get 'id model)))
+                         models)))))
+    (error nil)))
+
 (defun codex-ide--thread-list-data (&optional session omit-thread-id)
   "Return thread list data using SESSION.
 When OMIT-THREAD-ID is non-nil, exclude that thread from the result."
@@ -1040,11 +1388,16 @@ ACTION is a short past-tense label used in log messages, such as
              (downcase action)
              (error-message-string err))
             nil))))
-    (codex-ide--request-sync
-     session
-     "thread/resume"
-     (with-current-buffer (codex-ide-session-buffer session)
-       (codex-ide--thread-resume-params thread-id)))
+    (codex-ide--clear-session-model-name session)
+    (codex-ide--remember-model-name session thread-read)
+    (let ((result
+           (codex-ide--request-sync
+            session
+            "thread/resume"
+            (with-current-buffer (codex-ide-session-buffer session)
+              (codex-ide--thread-resume-params thread-id)))))
+      (codex-ide--remember-reasoning-effort session result)
+      (codex-ide--remember-model-name session result))
     (setf (codex-ide-session-thread-id session) thread-id)
     (codex-ide--mark-session-thread-attached session)
     (codex-ide--session-metadata-put session :session-context-sent t)
@@ -1075,7 +1428,9 @@ ACTION is a short past-tense label used in log messages, such as
 When REUSE-BUFFER is non-nil, use it as the session buffer and keep
 REUSE-NAME-SUFFIX as the session name suffix."
   (let ((working-dir (codex-ide--get-working-directory)))
-    (let* ((name-suffix (if reuse-buffer
+    (let* ((process-environment
+            (codex-ide--app-server-process-environment process-environment))
+           (name-suffix (if reuse-buffer
                             reuse-name-suffix
                           (codex-ide--next-session-name-suffix working-dir)))
            (buffer (or reuse-buffer
@@ -1167,9 +1522,12 @@ REUSE-NAME-SUFFIX as the session name suffix."
                     (codex-ide--app-server-command))
                    "Codex startup failed"))))))))
 
-(defun codex-ide--show-session-buffer (session)
-  "Display SESSION's buffer and return SESSION."
-  (codex-ide-display-buffer (codex-ide-session-buffer session))
+(defun codex-ide--show-session-buffer (session &optional newly-created)
+  "Display SESSION's buffer and return SESSION.
+When NEWLY-CREATED is non-nil, honor `codex-ide-new-session-split'."
+  (if newly-created
+      (codex-ide--display-new-session-buffer (codex-ide-session-buffer session))
+    (codex-ide-display-buffer (codex-ide-session-buffer session)))
   (codex-ide--ensure-input-prompt session)
   session)
 
@@ -1262,7 +1620,7 @@ REUSE-NAME-SUFFIX as the session name suffix."
       (codex-ide--initialize-session session)
       (codex-ide--resume-thread-into-session session thread-id "Resumed")
       (codex-ide--update-header-line session)
-      (codex-ide--show-session-buffer session)
+      (codex-ide--show-session-buffer session t)
       (codex-ide--ensure-input-prompt session)
       session)))
 
@@ -1320,11 +1678,14 @@ MODE can be nil or `new', `continue', or `resume'."
               (codex-ide--reset-session-buffer session))
             (pcase mode
               ('new
+               (codex-ide--clear-session-model-name session)
                (let ((result (codex-ide--request-sync
                               session
                               "thread/start"
                               (with-current-buffer (codex-ide-session-buffer session)
                                 (codex-ide--thread-start-params)))))
+                 (codex-ide--remember-reasoning-effort session result)
+                 (codex-ide--remember-model-name session result)
                  (setf (codex-ide-session-thread-id session)
                        (codex-ide--extract-thread-id result))
                  (codex-ide--mark-session-thread-attached session)
@@ -1340,7 +1701,7 @@ MODE can be nil or `new', `continue', or `resume'."
                 (if (eq mode 'continue) "Continued" "Resumed"))))
             (setf (codex-ide-session-status session) "idle")
             (codex-ide--update-header-line session)
-            (codex-ide--show-session-buffer session)
+            (codex-ide--show-session-buffer session created-session)
             (codex-ide--track-active-buffer)
             (unless (codex-ide-session-output-prefix-inserted session)
               (codex-ide--ensure-input-prompt session))
@@ -1578,6 +1939,7 @@ PARAMS describe the request."
         start-marker
         status-marker
         end-marker)
+    (codex-ide--clear-pending-output-indicator session)
     (with-current-buffer buffer
       (let ((inhibit-read-only t)
             (moving (= (point) (point-max))))
@@ -1845,6 +2207,8 @@ PARAMS describe the request."
     (codex-ide-log-message session "Received notification %s" method)
     (pcase method
       ("thread/started"
+       (codex-ide--remember-reasoning-effort session params)
+       (codex-ide--remember-model-name session params)
        (when-let ((thread-id (alist-get 'id (alist-get 'thread params))))
          (setf (codex-ide-session-thread-id session) thread-id)
          (codex-ide--mark-session-thread-attached session))
@@ -1885,6 +2249,8 @@ PARAMS describe the request."
           (or (alist-get 'planType rate-limits) "unknown"))
          (codex-ide--update-header-line session)))
       ("turn/started"
+       (codex-ide--remember-reasoning-effort session params)
+       (codex-ide--remember-or-request-model-name session params)
        (setf (codex-ide-session-current-turn-id session)
              (or (alist-get 'id (alist-get 'turn params))
                  (alist-get 'turnId params))
@@ -1906,6 +2272,8 @@ PARAMS describe the request."
          (codex-ide--begin-turn-display session)))
       ("item/started"
        (when-let ((item (alist-get 'item params)))
+         (when (codex-ide--remember-or-request-model-name session item)
+           (codex-ide--update-header-line session))
          (codex-ide-log-message
           session
           "Item started: %s (%s)"
@@ -1916,7 +2284,8 @@ PARAMS describe the request."
        (let ((item-id (alist-get 'itemId params))
              (delta (or (alist-get 'delta params) "")))
          (let ((codex-ide--current-agent-item-type "agentMessage"))
-           (unless (string-empty-p delta)
+           (when (and codex-ide-log-stream-deltas
+                      (not (string-empty-p delta)))
              (codex-ide-log-message
               session
               "Agent delta for item %s (%d chars)"
@@ -1924,24 +2293,27 @@ PARAMS describe the request."
               (length delta)))
            (codex-ide--ensure-agent-message-prefix session item-id)
            (codex-ide--append-agent-text buffer delta)
-           (when-let ((start (codex-ide-session-current-message-start-marker session)))
-             (with-current-buffer buffer
-               (codex-ide--render-markdown-region start (point-max)))))))
+           (when codex-ide-render-markdown-during-streaming
+             (codex-ide--render-current-agent-message-markdown-streaming
+              session
+              item-id)))))
       ("item/commandExecution/outputDelta"
        (let ((item-id (alist-get 'itemId params)))
-         (codex-ide-log-message
-          session
-          "Command output delta for item %s (%d chars)"
-          item-id
-          (length (or (alist-get 'delta params) "")))))
+         (when codex-ide-log-stream-deltas
+           (codex-ide-log-message
+            session
+            "Command output delta for item %s (%d chars)"
+            item-id
+            (length (or (alist-get 'delta params) ""))))))
       ("item/fileChange/outputDelta"
        (let ((item-id (alist-get 'itemId params))
              (delta (or (alist-get 'delta params) "")))
-         (codex-ide-log-message
-          session
-          "File-change delta for item %s (%d chars)"
-          item-id
-          (length delta))
+         (when codex-ide-log-stream-deltas
+           (codex-ide-log-message
+            session
+            "File-change delta for item %s (%d chars)"
+            item-id
+            (length delta)))
          (when-let ((state (codex-ide--item-state session item-id)))
            (codex-ide--put-item-state
             session
@@ -1949,21 +2321,25 @@ PARAMS describe the request."
             (plist-put state :diff-text
                        (concat (or (plist-get state :diff-text) "") delta))))))
       ("item/plan/delta"
-       (codex-ide-log-message
-        session
-        "Plan delta (%d chars)"
-        (length (or (alist-get 'delta params) "")))
+       (when codex-ide-log-stream-deltas
+         (codex-ide-log-message
+          session
+          "Plan delta (%d chars)"
+          (length (or (alist-get 'delta params) ""))))
        (codex-ide--render-plan-delta session params))
       ("item/reasoning/summaryTextDelta"
-       (codex-ide-log-message
-        session
-        "Reasoning summary delta (%d chars)"
-        (length (or (alist-get 'delta params)
-                    (alist-get 'text params)
-                    "")))
+       (when codex-ide-log-stream-deltas
+         (codex-ide-log-message
+          session
+          "Reasoning summary delta (%d chars)"
+          (length (or (alist-get 'delta params)
+                      (alist-get 'text params)
+                      ""))))
        (codex-ide--render-reasoning-delta session params))
       ("item/completed"
        (when-let ((item (alist-get 'item params)))
+         (when (codex-ide--remember-or-request-model-name session item)
+           (codex-ide--update-header-line session))
          (codex-ide-log-message
           session
           "Item completed: %s (%s, status=%s)"
@@ -2249,6 +2625,7 @@ If no live session exists, prompt to start one."
                          "thread/start"
                          (with-current-buffer buffer
                            (codex-ide--thread-start-params)))))
+            (codex-ide--remember-reasoning-effort new-session result)
             (setf (codex-ide-session-thread-id new-session)
                   (codex-ide--extract-thread-id result))
             (codex-ide--mark-session-thread-attached new-session)
@@ -2401,11 +2778,27 @@ If no live session exists for the current buffer, prompt to start one first."
     (redisplay)
     (condition-case err
         (progn
+          (when codex-ide-reasoning-effort
+            (codex-ide--session-metadata-put
+             session
+             :reasoning-effort
+             codex-ide-reasoning-effort))
           (codex-ide--request-sync
            session
            "turn/start"
            `((threadId . ,thread-id)
+             ,@(when codex-ide-model
+                 `((model . ,codex-ide-model)))
+             ,@(when codex-ide-reasoning-effort
+                 `((effort . ,codex-ide-reasoning-effort)))
              (input . ,(alist-get 'input payload))))
+          (when codex-ide-model
+            (codex-ide--set-session-model-name session codex-ide-model)
+            (codex-ide--update-header-line session))
+          (codex-ide--mark-session-prompt-submitted session)
+          (when codex-ide-model
+            (codex-ide--set-session-model-name session codex-ide-model)
+            (codex-ide--update-header-line session))
           (codex-ide--mark-session-prompt-submitted session)
           (when (alist-get 'included-session-context payload)
             (codex-ide--session-metadata-put session :session-context-sent t)))

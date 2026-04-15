@@ -9,7 +9,6 @@
 (require 'cl-lib)
 
 (setq load-prefer-newer t)
-(setq load-suffixes '(".el"))
 
 (add-to-list 'load-path
              (file-name-directory
@@ -58,6 +57,9 @@
 	          (codex-ide-persisted-project-state (make-hash-table :test 'equal))
           (codex-ide--session-metadata (make-hash-table :test 'eq))
           (codex-ide-session-baseline-prompt nil)
+          (codex-ide-new-session-split nil)
+          (codex-ide-want-mcp-bridge 'prompt)
+          (codex-ide-new-session-split nil)
           (codex-ide-want-mcp-bridge 'prompt)
           (codex-ide-enable-emacs-tool-bridge nil))
      (unwind-protect
