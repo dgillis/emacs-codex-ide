@@ -52,41 +52,49 @@
                      (lambda (format-string &rest args)
                        (setq message-text (apply #'format format-string args)))))
             (codex-ide-show-debug-info))
-          (should (equal
-                   message-text
-                   (format
-                    (concat
-                     "Codex IDE Debug Info\n\n"
-                     "Project: %s\n"
-                     "  - 2 active sessions\n"
-                     "  - Active session: %S\n"
-                     "  - Active buffer: %S\n"
-                     "  - Active buffer context:\n"
-                     "    - file: %s\n"
-                     "    - display-file: %s\n"
-                     "    - line: %s\n"
-                     "    - column: %s\n"
-                     "    - project-dir: %s\n"
-                     "    - custom-field: %s\n\n"
-                     "Project: %s\n"
-                     "  - 1 active session\n"
-                     "  - Active session: %S\n"
-                     "  - Active buffer: %S\n"
-                     "  - Active buffer context:\n"
-                     "    - buffer-name: %s")
-                    (codex-ide--project-name project-a)
-                    (buffer-name (codex-ide-session-buffer session-a-2))
-                    (buffer-name active-buffer-a)
-                    (expand-file-name "a.txt" project-a)
-                    "a.txt"
-                    "7"
-                    "2"
-                    (codex-ide--normalize-directory project-a)
-                    "custom-value"
-                    (codex-ide--project-name project-b)
-                    (buffer-name (codex-ide-session-buffer session-b))
-                    (buffer-name active-buffer-b)
-                    (buffer-name active-buffer-b)))))))))
+          (let ((project-a-block
+                 (format
+                  (concat
+                   "Project: %s\n"
+                   "  - 2 active sessions\n"
+                   "  - Active session: %S\n"
+                   "  - Active buffer: %S\n"
+                   "  - Active buffer context:\n"
+                   "    - file: %s\n"
+                   "    - display-file: %s\n"
+                   "    - line: %s\n"
+                   "    - column: %s\n"
+                   "    - project-dir: %s\n"
+                   "    - custom-field: %s")
+                  (codex-ide--project-name project-a)
+                  (buffer-name (codex-ide-session-buffer session-a-2))
+                  (buffer-name active-buffer-a)
+                  (expand-file-name "a.txt" project-a)
+                  "a.txt"
+                  "7"
+                  "2"
+                  (codex-ide--normalize-directory project-a)
+                  "custom-value"))
+                (project-b-block
+                 (format
+                  (concat
+                   "Project: %s\n"
+                   "  - 1 active session\n"
+                   "  - Active session: %S\n"
+                   "  - Active buffer: %S\n"
+                   "  - Active buffer context:\n"
+                   "    - buffer-name: %s")
+                  (codex-ide--project-name project-b)
+                  (buffer-name (codex-ide-session-buffer session-b))
+                  (buffer-name active-buffer-b)
+                  (buffer-name active-buffer-b))))
+            (should (equal
+                     message-text
+                     (concat
+                      "Codex IDE Debug Info\n\n"
+                      (string-join
+                       (sort (list project-a-block project-b-block) #'string-lessp)
+                       "\n\n"))))))))))
 
 (ert-deftest codex-ide-show-debug-info-renders-nil-active-buffer-context ()
   (let ((project-dir (codex-ide-test--make-temp-project))

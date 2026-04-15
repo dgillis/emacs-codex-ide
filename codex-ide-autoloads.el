@@ -340,6 +340,27 @@ that session and then remove the persisted thread data from disk.
 (autoload 'codex-ide-show-debug-info "codex-ide-debug-info" "\
 Show a minibuffer summary of live Codex IDE session state." t)
 (register-definition-prefixes "codex-ide-debug-info" '("codex-ide-debug-info--"))
+
+
+
+;;; Generated autoloads from codex-ide-section.el
+
+(register-definition-prefixes "codex-ide-section" '("codex-ide-section-"))
+
+
+;;; Generated autoloads from codex-ide-status-mode.el
+
+(defvar codex-ide-status-mode-preview-max-width 120 "\
+Maximum width for preview text shown in status section headings.")
+(custom-autoload 'codex-ide-status-mode-preview-max-width "codex-ide-status-mode" t)
+(autoload 'codex-ide-status-mode-refresh "codex-ide-status-mode" "\
+Refresh the current Codex status buffer.
+
+(fn &optional IGNORE-AUTO NOCONFIRM)" t)
+(autoload 'codex-ide-status "codex-ide-status-mode" "\
+Show the Codex status buffer for the current project." t)
+(register-definition-prefixes "codex-ide-status-mode" '("codex-ide-status-mode"))
+
 
 ;;; End of scraped data
 
