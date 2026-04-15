@@ -1843,13 +1843,11 @@ CHOICES is an alist of labels to returned values."
 
 (defun codex-ide--insert-approval-choice-button (session id label value)
   "Insert an approval button for SESSION request ID with LABEL and VALUE."
-  (make-text-button
-   (point)
-   (progn (insert (format "[%s]" label)) (point))
-   'follow-link t
-   'help-echo (format "Resolve Codex approval as %s" label)
-   'action (lambda (_button)
-             (codex-ide--resolve-buffer-approval session id value label))))
+  (codex-ide--insert-approval-action-button
+   label
+   (lambda ()
+     (codex-ide--resolve-buffer-approval session id value label))
+   (format "Resolve Codex approval as %s" label)))
 
 (defun codex-ide--insert-approval-label (label)
   "Insert an emphasized approval field LABEL."
@@ -1924,27 +1922,23 @@ CHOICES is an alist of labels to returned values."
      (insert (or (plist-get detail :text) ""))
      (insert "\n"))))
 
-(defun codex-ide--notify-approval-required (session)
-  "Notify the user that SESSION requires approval."
+(defun codex-ide--notify-interactive-request (session message-text)
+  "Notify the user that SESSION requires attention with MESSAGE-TEXT."
   (let ((buffer (codex-ide-session-buffer session)))
-    (message "Codex approval required in %s" (buffer-name buffer))
+    (message message-text (buffer-name buffer))
     (when (or codex-ide-buffer-display-when-approval-required
               (get-buffer-window buffer 0))
       (codex-ide--show-session-buffer session))))
 
-(defun codex-ide--notify-elicitation-required (session)
-  "Notify the user that SESSION requires elicitation input."
-  (let ((buffer (codex-ide-session-buffer session)))
-    (message "Codex input required in %s" (buffer-name buffer))
-    (when (or codex-ide-buffer-display-when-approval-required
-              (get-buffer-window buffer 0))
-      (codex-ide--show-session-buffer session))))
-
-(defun codex-ide--render-buffer-approval (session id kind title details choices params)
-  "Render an inline approval block for SESSION request ID.
-KIND identifies the approval result shape.  TITLE, DETAILS, CHOICES, and
-PARAMS describe the request."
+(defun codex-ide--render-interactive-request (session id kind params title notify-message
+                                                      render-body &optional metadata)
+  "Render an inline interactive request block for SESSION request ID.
+KIND and PARAMS describe the response shape.  TITLE and NOTIFY-MESSAGE control
+the shared block chrome.  RENDER-BODY inserts request-specific content and
+returns a plist with optional `:writable-ranges' and extra metadata.  METADATA
+is merged into the stored pending request state."
   (let ((buffer (codex-ide-session-buffer session))
+        (render-state nil)
         start-marker
         status-marker
         end-marker)
@@ -1961,39 +1955,72 @@ PARAMS describe the request."
         (insert "\n")
         (insert (propertize title 'face 'codex-ide-approval-header-face))
         (insert "\n\n")
-        (dolist (detail details)
-          (codex-ide--insert-approval-detail detail))
-        (dolist (choice choices)
-          (codex-ide--insert-approval-choice-button
-           session id (car choice) (cdr choice))
-          (insert "\n"))
-        (insert "\n")
+        (setq render-state (funcall render-body))
         (setq status-marker (copy-marker (point)))
         (setq end-marker (copy-marker (point) t))
         (codex-ide--freeze-region (marker-position start-marker)
                                   (marker-position end-marker))
+        (dolist (range (plist-get render-state :writable-ranges))
+          (codex-ide--make-region-writable (marker-position (car range))
+                                           (marker-position (cdr range))))
         (when moving
           (goto-char (point-max)))))
     (puthash id
-             (list :kind kind
-                   :params params
-                   :start-marker start-marker
-                   :status-marker status-marker
-                   :end-marker end-marker)
+             (append
+              (list :kind kind
+                    :params params
+                    :start-marker start-marker
+                    :status-marker status-marker
+                    :end-marker end-marker)
+              metadata
+              (plist-get render-state :metadata))
              (codex-ide--pending-approvals session))
     (setf (codex-ide-session-status session) "approval")
     (codex-ide--update-header-line session)
-    (codex-ide--notify-approval-required session)))
+    (codex-ide--notify-interactive-request session notify-message)))
 
-(defun codex-ide--insert-approval-action-button (label callback)
+(defun codex-ide--render-buffer-approval (session id kind title details choices params)
+  "Render an inline approval block for SESSION request ID.
+KIND identifies the approval result shape.  TITLE, DETAILS, CHOICES, and
+PARAMS describe the request."
+  (codex-ide--render-interactive-request
+   session
+   id
+   kind
+   params
+   title
+   "Codex approval required in %s"
+   (lambda ()
+     (dolist (detail details)
+       (codex-ide--insert-approval-detail detail))
+     (dolist (choice choices)
+       (codex-ide--insert-approval-choice-button
+        session id (car choice) (cdr choice))
+       (insert "\n"))
+     (insert "\n")
+     nil)))
+
+(defun codex-ide--insert-approval-action-button (label callback &optional help-echo)
   "Insert a button labeled LABEL that invokes CALLBACK."
   (make-text-button
    (point)
    (progn (insert (format "[%s]" label)) (point))
    'follow-link t
-   'help-echo label
+   'help-echo (or help-echo label)
    'action (lambda (_button)
              (funcall callback))))
+
+(defun codex-ide--schedule-interactive-request (session body on-quit on-error)
+  "Run BODY for SESSION on the next tick with shared quit/error handling."
+  (run-at-time
+   0 nil
+   (lambda ()
+     (condition-case err
+         (funcall body)
+       (quit
+        (funcall on-quit))
+       (error
+        (funcall on-error err))))))
 
 (defun codex-ide--elicitation-choice-options (field)
   "Return button options for elicitation FIELD."
@@ -2168,95 +2195,69 @@ regions that should remain editable after rendering."
          (fields (and schema
                       (codex-ide-mcp-elicitation-field-specs schema)))
          (writable-ranges nil)
-         rendered-fields
-         start-marker
-         status-marker
-         end-marker)
-    (codex-ide--clear-pending-output-indicator session)
-    (with-current-buffer buffer
-      (let ((inhibit-read-only t)
-            (moving (= (point) (point-max))))
-        (codex-ide--ensure-output-spacing buffer)
-        (setq start-marker (copy-marker (point)))
-        (insert (propertize
-                 (codex-ide--output-separator-string)
-                 'face
-                 'codex-ide-output-separator-face))
-        (insert "\n")
-        (insert (propertize "[Input required]" 'face 'codex-ide-approval-header-face))
-        (insert "\n\n")
-        (codex-ide--insert-approval-label "Request: ")
-        (insert (codex-ide-mcp-elicitation-format-request request))
-        (insert "\n")
-        (unless (string-empty-p message)
-          (codex-ide--insert-approval-label "Message: ")
-          (insert message)
+         rendered-fields)
+    (codex-ide--render-interactive-request
+     session
+     id
+     'elicitation
+     request
+     "[Input required]"
+     "Codex input required in %s"
+     (lambda ()
+       (codex-ide--insert-approval-label "Request: ")
+       (insert (codex-ide-mcp-elicitation-format-request request))
+       (insert "\n")
+       (unless (string-empty-p message)
+         (codex-ide--insert-approval-label "Message: ")
+         (insert message)
+         (insert "\n"))
+       (when-let ((url (alist-get 'url request)))
+         (codex-ide--insert-approval-label "URL: ")
+         (insert url)
+         (insert "\n"))
+       (insert "\n")
+       (dolist (field fields)
+         (pcase-let ((`(,rendered-field ,new-ranges)
+                      (codex-ide--insert-elicitation-field
+                       session id field writable-ranges)))
+           (push rendered-field rendered-fields)
+           (setq writable-ranges new-ranges)))
+       (setq rendered-fields (nreverse rendered-fields))
+       (pcase mode
+         ("url"
+          (codex-ide--insert-approval-action-button
+           "open and continue"
+           (lambda ()
+             (browse-url (alist-get 'url request))
+             (codex-ide--resolve-buffer-approval
+              session id '((action . "accept")) "open and continue")))
+          (insert "\n")
+          (codex-ide--insert-approval-action-button
+           "continue"
+           (lambda ()
+             (codex-ide--resolve-buffer-approval
+              session id '((action . "accept")) "continue")))
           (insert "\n"))
-        (when-let ((url (alist-get 'url request)))
-          (codex-ide--insert-approval-label "URL: ")
-          (insert url)
-          (insert "\n"))
-        (insert "\n")
-        (dolist (field fields)
-          (pcase-let ((`(,rendered-field ,new-ranges)
-                       (codex-ide--insert-elicitation-field
-                        session id field writable-ranges)))
-            (push rendered-field rendered-fields)
-            (setq writable-ranges new-ranges)))
-        (setq rendered-fields (nreverse rendered-fields))
-        (pcase mode
-          ("url"
-           (codex-ide--insert-approval-action-button
-            "open and continue"
-            (lambda ()
-              (browse-url (alist-get 'url request))
-              (codex-ide--resolve-buffer-approval
-               session id '((action . "accept")) "open and continue")))
-           (insert "\n")
-           (codex-ide--insert-approval-action-button
-            "continue"
-            (lambda ()
-              (codex-ide--resolve-buffer-approval
-               session id '((action . "accept")) "continue")))
-           (insert "\n"))
-          (_
-           (codex-ide--insert-approval-action-button
-            "submit"
-            (lambda ()
-              (codex-ide--submit-buffer-elicitation session id)))
-           (insert "\n")))
-        (codex-ide--insert-approval-action-button
-         "decline"
-         (lambda ()
-           (codex-ide--resolve-buffer-approval
-            session id '((action . "decline")) "decline")))
-        (insert "\n")
-        (codex-ide--insert-approval-action-button
-         "cancel"
-         (lambda ()
-           (codex-ide--resolve-buffer-approval
-            session id '((action . "cancel")) "cancel")))
-        (insert "\n\n")
-        (setq status-marker (copy-marker (point)))
-        (setq end-marker (copy-marker (point) t))
-        (codex-ide--freeze-region (marker-position start-marker)
-                                  (marker-position end-marker))
-        (dolist (range writable-ranges)
-          (codex-ide--make-region-writable (marker-position (car range))
-                                           (marker-position (cdr range))))
-        (when moving
-          (goto-char (point-max)))))
-    (puthash id
-             (list :kind 'elicitation
-                   :params request
-                   :fields rendered-fields
-                   :start-marker start-marker
-                   :status-marker status-marker
-                   :end-marker end-marker)
-             (codex-ide--pending-approvals session))
-    (setf (codex-ide-session-status session) "approval")
-    (codex-ide--update-header-line session)
-    (codex-ide--notify-elicitation-required session)))
+         (_
+          (codex-ide--insert-approval-action-button
+           "submit"
+           (lambda ()
+             (codex-ide--submit-buffer-elicitation session id)))
+          (insert "\n")))
+       (codex-ide--insert-approval-action-button
+        "decline"
+        (lambda ()
+          (codex-ide--resolve-buffer-approval
+           session id '((action . "decline")) "decline")))
+       (insert "\n")
+       (codex-ide--insert-approval-action-button
+        "cancel"
+        (lambda ()
+          (codex-ide--resolve-buffer-approval
+           session id '((action . "cancel")) "cancel")))
+       (insert "\n\n")
+       (list :writable-ranges writable-ranges
+             :metadata (list :fields rendered-fields))))))
 
 (defun codex-ide--auto-approve-emacs-bridge-request-p (params)
   "Return non-nil when PARAMS should bypass user approval for the Emacs bridge."
@@ -2295,159 +2296,158 @@ regions that should remain editable after rendering."
 (defun codex-ide--handle-command-approval (&optional session id params)
   "Handle a command approval request for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
-  (run-at-time
-   0 nil
+  (codex-ide--schedule-interactive-request
+   session
    (lambda ()
-     (condition-case err
-         (let* ((command (or (alist-get 'command params) "unknown command"))
-                (choices (codex-ide--command-approval-choices params)))
-           (if (codex-ide--auto-approve-emacs-bridge-request-p params)
-               (let ((decision "acceptForSession"))
-                 (codex-ide-log-message
-                  session
-                  "Command approval for %s resolved as %s"
-                  command
-                  decision)
-                 (codex-ide--jsonrpc-send-response
-                  session id `((decision . ,decision))))
-             (codex-ide--render-buffer-approval
+     (let* ((command (or (alist-get 'command params) "unknown command"))
+            (choices (codex-ide--command-approval-choices params)))
+       (if (codex-ide--auto-approve-emacs-bridge-request-p params)
+           (let ((decision "acceptForSession"))
+             (codex-ide-log-message
               session
-              id
-              'command
-              "[Approval required]"
-              (delq nil
-                    (list
-                     (list :kind 'command :text command)
-                     (when-let ((reason (alist-get 'reason params)))
-                       (list :label "Reason" :text reason))))
-              choices
-              params)))
-       (quit
-        (codex-ide-log-message session "Command approval prompt quit; canceling turn")
-        (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))
-       (error
-        (codex-ide-log-message
-         session
-         "Command approval failed: %s"
-         (error-message-string err))
-        (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))))))
+              "Command approval for %s resolved as %s"
+              command
+              decision)
+             (codex-ide--jsonrpc-send-response
+              session id `((decision . ,decision))))
+         (codex-ide--render-buffer-approval
+          session
+          id
+          'command
+          "[Approval required]"
+          (delq nil
+                (list
+                 (list :kind 'command :text command)
+                 (when-let ((reason (alist-get 'reason params)))
+                   (list :label "Reason" :text reason))))
+          choices
+          params))))
+   (lambda ()
+     (codex-ide-log-message session "Command approval prompt quit; canceling turn")
+     (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))
+   (lambda (err)
+     (codex-ide-log-message
+      session
+      "Command approval failed: %s"
+      (error-message-string err))
+     (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))))
 
 (defun codex-ide--handle-file-change-approval (&optional session id params)
   "Handle a file-change approval request for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
-  (run-at-time
-   0 nil
+  (codex-ide--schedule-interactive-request
+   session
    (lambda ()
-     (condition-case err
-         (let* ((reason (or (alist-get 'reason params) "approve file changes"))
-                (choices '(("accept" . "accept")
-                           ("accept for session" . "acceptForSession")
-                           ("decline" . "decline")
-                           ("cancel turn" . "cancel"))))
-           (if (codex-ide--auto-approve-emacs-bridge-request-p params)
-               (let ((decision "acceptForSession"))
-                 (codex-ide-log-message
-                  session
-                  "File-change approval for %s resolved as %s"
-                  reason
-                  decision)
-                 (codex-ide--jsonrpc-send-response
-                  session id `((decision . ,decision))))
-             (codex-ide--render-buffer-approval
+     (let* ((reason (or (alist-get 'reason params) "approve file changes"))
+            (choices '(("accept" . "accept")
+                       ("accept for session" . "acceptForSession")
+                       ("decline" . "decline")
+                       ("cancel turn" . "cancel"))))
+       (if (codex-ide--auto-approve-emacs-bridge-request-p params)
+           (let ((decision "acceptForSession"))
+             (codex-ide-log-message
               session
-              id
-              'file-change
-              "[Approval required]"
-             (delq nil
-                   (list
-                    (list :label "Approve file changes" :text reason)
-                     (when-let ((diff-text
-                                 (codex-ide--approval-file-change-diff-text
-                                  session
-                                  params)))
-                       (codex-ide--mark-approval-file-change-diff-rendered
-                        session
-                        params)
-                       (list :kind 'diff :text diff-text))))
-              choices
-              params)))
-       (quit
-        (codex-ide-log-message session "File-change approval prompt quit; canceling turn")
-        (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))
-       (error
-        (codex-ide-log-message
-         session
-         "File-change approval failed: %s"
-         (error-message-string err))
-        (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))))))
+              "File-change approval for %s resolved as %s"
+              reason
+              decision)
+             (codex-ide--jsonrpc-send-response
+              session id `((decision . ,decision))))
+         (codex-ide--render-buffer-approval
+          session
+          id
+          'file-change
+          "[Approval required]"
+          (delq nil
+                (list
+                 (list :label "Approve file changes" :text reason)
+                 (when-let ((diff-text
+                             (codex-ide--approval-file-change-diff-text
+                              session
+                              params)))
+                   (codex-ide--mark-approval-file-change-diff-rendered
+                    session
+                    params)
+                   (list :kind 'diff :text diff-text))))
+          choices
+          params))))
+   (lambda ()
+     (codex-ide-log-message session "File-change approval prompt quit; canceling turn")
+     (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))
+   (lambda (err)
+     (codex-ide-log-message
+      session
+      "File-change approval failed: %s"
+      (error-message-string err))
+     (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))))
 
 (defun codex-ide--handle-permissions-approval (&optional session id params)
   "Handle a permissions approval request for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
-  (run-at-time
-   0 nil
+  (codex-ide--schedule-interactive-request
+   session
    (lambda ()
-     (condition-case err
-         (let* ((permissions (or (alist-get 'permissions params) '()))
-                (choices '(("grant for turn" . turn)
-                           ("grant for session" . session)
-                           ("decline" . decline))))
-           (if (codex-ide--auto-approve-emacs-bridge-request-p params)
-               (let ((choice 'session))
-                 (codex-ide-log-message
-                  session
-                  "Permissions approval resolved as %s for %S"
-                  choice
-                  permissions)
-                 (codex-ide--jsonrpc-send-response
-                  session id
-                  `((permissions . ,permissions)
-                    (scope . ,(symbol-name choice)))))
-             (codex-ide--render-buffer-approval
-             session
-             id
-             'permissions
-              "[Approval required]"
-              (append
-               (when-let ((reason (alist-get 'reason params)))
-                 (list (list :label "Reason" :text reason)))
-               (when permissions
-                 (list (list :label "Permissions"
-                             :text (format "%S" permissions)))))
-              choices
-              params)))
-       (quit
-        (codex-ide-log-message session "Permissions approval prompt quit; declining")
-        (codex-ide--jsonrpc-send-response session id '((permissions . []))))
-       (error
-        (codex-ide-log-message
-         session
-         "Permissions approval failed: %s"
-         (error-message-string err))
-        (codex-ide--jsonrpc-send-response session id '((permissions . []))))))))
+     (let* ((permissions (or (alist-get 'permissions params) '()))
+            (choices '(("grant for turn" . turn)
+                       ("grant for session" . session)
+                       ("decline" . decline))))
+       (if (codex-ide--auto-approve-emacs-bridge-request-p params)
+           (let ((choice 'session))
+             (codex-ide-log-message
+              session
+              "Permissions approval resolved as %s for %S"
+              choice
+              permissions)
+             (codex-ide--jsonrpc-send-response
+              session id
+              `((permissions . ,permissions)
+                (scope . ,(symbol-name choice)))))
+         (codex-ide--render-buffer-approval
+          session
+          id
+          'permissions
+          "[Approval required]"
+          (append
+           (when-let ((reason (alist-get 'reason params)))
+             (list (list :label "Reason" :text reason)))
+           (when permissions
+             (list (list :label "Permissions"
+                         :text (format "%S" permissions)))))
+          choices
+          params))))
+   (lambda ()
+     (codex-ide-log-message session "Permissions approval prompt quit; declining")
+     (codex-ide--jsonrpc-send-response session id '((permissions . []))))
+   (lambda (err)
+     (codex-ide-log-message
+      session
+      "Permissions approval failed: %s"
+      (error-message-string err))
+     (codex-ide--jsonrpc-send-response session id '((permissions . []))))))
 
 (defun codex-ide--handle-elicitation-request (&optional session id params)
   "Handle an MCP elicitation request for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
-  (run-at-time
-   0 nil
+  (codex-ide--schedule-interactive-request
+   session
    (lambda ()
-     (condition-case err
-         (if (codex-ide--auto-approve-emacs-bridge-request-p params)
-             (let ((result '((action . "accept"))))
-               (codex-ide-log-message
-                session
-                "Elicitation request resolved as %s"
-                (alist-get 'action result))
-               (codex-ide--jsonrpc-send-response session id result))
-           (codex-ide--render-buffer-elicitation session id params))
-       (error
-        (codex-ide-log-message
-         session
-         "Elicitation request failed: %s"
-         (error-message-string err))
-        (codex-ide--jsonrpc-send-error session id -32603
-                                       (error-message-string err)))))))
+     (if (codex-ide--auto-approve-emacs-bridge-request-p params)
+         (let ((result '((action . "accept"))))
+           (codex-ide-log-message
+            session
+            "Elicitation request resolved as %s"
+            (alist-get 'action result))
+           (codex-ide--jsonrpc-send-response session id result))
+       (codex-ide--render-buffer-elicitation session id params)))
+   (lambda ()
+     (codex-ide-log-message session "Elicitation request quit; canceling")
+     (codex-ide--jsonrpc-send-response session id '((action . "cancel"))))
+   (lambda (err)
+     (codex-ide-log-message
+      session
+      "Elicitation request failed: %s"
+      (error-message-string err))
+     (codex-ide--jsonrpc-send-error session id -32603
+                                    (error-message-string err)))))
 
 (defun codex-ide--handle-server-request (&optional session message)
   "Handle a server-initiated request MESSAGE for SESSION."
