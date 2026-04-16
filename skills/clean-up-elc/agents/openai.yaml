@@ -1,0 +1,3 @@
+interface:
+  display_name: "Clean Up Elc"
+  short_description: "Remove generated `.elc` files"

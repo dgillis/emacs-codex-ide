@@ -1,0 +1,3 @@
+interface:
+  display_name: "Elisp Compile"
+  short_description: "Compile one `.el` file cleanly"

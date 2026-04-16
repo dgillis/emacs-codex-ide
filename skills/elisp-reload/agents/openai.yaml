@@ -1,0 +1,3 @@
+interface:
+  display_name: "Elisp Reload"
+  short_description: "Reload `.el` files in Emacs"

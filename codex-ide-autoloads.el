@@ -29,6 +29,12 @@ Optional reasoning effort for new Codex turns.
 When non-nil, codex-ide sends this as the `effort' override on `turn/start',
 which applies to the current turn and subsequent turns for the thread.")
 (custom-autoload 'codex-ide-reasoning-effort "codex-ide" t)
+(defvar codex-ide-running-submit-action 'steer "\
+Action used by `codex-ide-submit' while a Codex turn is running.
+When set to `steer', submit additional input to the active turn with
+`turn/steer'.  When set to `queue', queue the prompt and submit it as the next
+turn after the current turn completes.")
+(custom-autoload 'codex-ide-running-submit-action "codex-ide" t)
 (defvar codex-ide-session-baseline-prompt "\n- You are a Codex server running inside Emacs.\n- You can use MCP tools to inspect and interact with the running Emacs session.\n- Interpret Emacs terminology as relevant context to the user's request: buffers, regions, windows, point, mark, current file, etc.\n- Responses are rendered as Markdown in an Emacs buffer.\n- Markdown pipe tables are rendered as visible tables.\n- In table cells, wrap code-like identifiers, filenames, paths, symbols, and expressions in backticks.\n- Use markdown links for file references when appropriate, for example [`foo.el`](/tmp/foo.el#L3C2).\n- Avoid bare underscores or asterisks for code-like text inside tables; use backticks instead.\n- Do not needlessly use Emacs commands to accomplish agent tasks." "\
 Optionally baseline prompt injected into the first real prompt of a new thread.
 When set to a non-empty string, `codex-ide' prepends it once as an
@@ -88,6 +94,10 @@ start, completion, errors, and other lifecycle events are still logged.")
 (defvar codex-ide-resume-summary-turn-limit 100 "\
 How many recent turns to summarize when resuming a stored thread.")
 (custom-autoload 'codex-ide-resume-summary-turn-limit "codex-ide" t)
+(autoload 'codex-ide-session-mode-nav-forward "codex-ide" "\
+Move point to the next focal point in a Codex session buffer." t)
+(autoload 'codex-ide-session-mode-nav-backward "codex-ide" "\
+Move point to the previous focal point in a Codex session buffer." t)
 (autoload 'codex-ide-session-mode "codex-ide" "\
 Major mode for Codex app-server session buffers.
 
@@ -122,7 +132,12 @@ Jump to the previous user prompt line in the session buffer." t)
 (autoload 'codex-ide-next-prompt-line "codex-ide" "\
 Jump to the next user prompt line in the session buffer." t)
 (autoload 'codex-ide-submit "codex-ide" "\
-Submit the current in-buffer prompt to Codex." t)
+Submit the current in-buffer prompt to Codex.
+When a turn is running, use `codex-ide-running-submit-action'." t)
+(autoload 'codex-ide-steer "codex-ide" "\
+Submit the current prompt as steering input to the active Codex turn." t)
+(autoload 'codex-ide-queue "codex-ide" "\
+Queue the current prompt as the next Codex turn." t)
 (register-definition-prefixes "codex-ide" '("codex-ide-"))
 
 
@@ -372,6 +387,16 @@ Show a minibuffer summary of live Codex IDE session state." t)
 (defvar codex-ide-status-mode-preview-max-width 120 "\
 Maximum width for preview text shown in status section headings.")
 (custom-autoload 'codex-ide-status-mode-preview-max-width "codex-ide-status-mode" t)
+(defvar codex-ide-status-mode-transcript-preview-max-lines 40 "\
+Maximum number of transcript lines shown in expanded buffer sections.")
+(custom-autoload 'codex-ide-status-mode-transcript-preview-max-lines "codex-ide-status-mode" t)
+(defvar codex-ide-status-mode-auto-refresh-delay 0.1 "\
+Idle delay in seconds before status buffers auto-refresh after session events.")
+(custom-autoload 'codex-ide-status-mode-auto-refresh-delay "codex-ide-status-mode" t)
+(autoload 'codex-ide-status-mode-nav-forward "codex-ide-status-mode" "\
+Move point to the next focal point in a Codex status buffer." t)
+(autoload 'codex-ide-status-mode-nav-backward "codex-ide-status-mode" "\
+Move point to the previous focal point in a Codex status buffer." t)
 (autoload 'codex-ide-status-mode-refresh "codex-ide-status-mode" "\
 Refresh the current Codex status buffer.
 
@@ -379,6 +404,19 @@ Refresh the current Codex status buffer.
 (autoload 'codex-ide-status "codex-ide-status-mode" "\
 Show the Codex status buffer for the current project." t)
 (register-definition-prefixes "codex-ide-status-mode" '("codex-ide-status-mode"))
+
+
+;;; Generated autoloads from codex-ide-nav.el
+
+(autoload 'codex-ide-nav-button-forward "codex-ide-nav" "\
+Move to the next focal point from a Codex-owned button." t)
+(autoload 'codex-ide-nav-button-backward "codex-ide-nav" "\
+Move to the previous focal point from a Codex-owned button." t)
+(autoload 'codex-ide-nav-forward "codex-ide-nav" "\
+Move point to the next focal point in the current buffer." t)
+(autoload 'codex-ide-nav-backward "codex-ide-nav" "\
+Move point to the previous focal point in the current buffer." t)
+(register-definition-prefixes "codex-ide-nav" '("codex-ide-nav-"))
 
 
 ;;; End of scraped data
