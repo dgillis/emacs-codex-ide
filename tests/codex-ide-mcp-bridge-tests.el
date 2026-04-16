@@ -145,12 +145,12 @@
             (codex-ide-emacs-bridge-require-approval nil))
         (should
          (codex-ide-mcp-bridge-request-exempt-from-approval-p
-          '((message . "Allow editor to run get_diagnostics")
-            (tool . "get_diagnostics"))))
+          '((serverName . "editor")
+            (message . "Allow the editor MCP server to run tool \"get_diagnostics\"?"))))
         (should-not
          (codex-ide-mcp-bridge-request-exempt-from-approval-p
-          '((message . "Allow another server to run search_web")
-            (tool . "search_web"))))))))
+          '((serverName . "another-server")
+            (message . "Allow another server to run search_web"))))))))
 
 (ert-deftest codex-ide-mcp-bridge-request-exempt-from-approval-respects-require-approval ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -159,41 +159,73 @@
             (codex-ide-emacs-bridge-require-approval t))
         (should-not
          (codex-ide-mcp-bridge-request-exempt-from-approval-p
-          '((message . "Allow editor to run get_diagnostics")
-            (tool . "get_diagnostics"))))))))
+          '((serverName . "editor")
+            (message . "Allow the editor MCP server to run tool \"get_diagnostics\"?"))))))))
 
-(ert-deftest codex-ide-mcp-bridge-permissions-approval-auto-accepts-bridge-requests ()
-  (let ((project-dir (codex-ide-test--make-temp-project))
-        (response nil)
-        (captured-prompt nil))
+(ert-deftest codex-ide-mcp-bridge-request-exempt-from-approval-ignores-shell-requests-from-emacs-paths ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
-      (let ((codex-ide-emacs-tool-bridge-name "editor")
+      (let ((codex-ide-emacs-tool-bridge-name "emacs")
             (codex-ide-emacs-bridge-require-approval nil))
-        (cl-letf (((symbol-function 'run-at-time)
-                   (lambda (_time _repeat function)
-                     (funcall function)))
-                  ((symbol-function 'codex-ide-log-message)
-                   (lambda (&rest _args) nil))
-                  ((symbol-function 'codex-ide--jsonrpc-send-response)
-                   (lambda (_session id payload)
-                     (setq response (list id payload))))
-                  ((symbol-function 'codex-ide--approval-decision)
-                   (lambda (&rest args)
-                     (setq captured-prompt args)
-                     'decline)))
-          (codex-ide--handle-permissions-approval
-           nil
-           17
-           '((reason . "Allow MCP server editor to run get_diagnostics")
-             (permissions . (((tool . "get_diagnostics"))
-                             ((server . "editor"))))))
-          (should-not captured-prompt)
-          (should (equal (car response) 17))
-          (should (equal (alist-get 'scope (cadr response)) "session"))
-          (should
-           (equal (alist-get 'permissions (cadr response))
-                  '(((tool . "get_diagnostics"))
-                    ((server . "editor"))))))))))
+        (should-not
+         (codex-ide-mcp-bridge-request-exempt-from-approval-p
+          '((threadId . "019d93c2-1e36-7e00-a71d-760a9b2fdba5")
+            (turnId . "019d93c3-5bc0-7910-b092-50b4a99fec66")
+            (itemId . "call_KZFC1pPstKLWXaXy0AiDcVvZ")
+            (reason . "Do you want me to overwrite your ~/.zshrc with random text as requested?")
+            (command . "/bin/zsh -lc \"printf '%s\n' 'J8vQ2mLp7Xc9rNt4Hb6K' > ~/.zshrc\"")
+            (cwd . "/Users/dgillis/.emacs.d/lib/local/codex-ide")
+            (commandActions ((type . "unknown")
+                             (command . "printf '%s\n' 'J8vQ2mLp7Xc9rNt4Hb6K' > ~/.zshrc")))
+            (proposedExecpolicyAmendment "/bin/zsh"
+                                         "-lc"
+                                         "printf '%s\n' 'J8vQ2mLp7Xc9rNt4Hb6K' > ~/.zshrc")
+            (availableDecisions "accept"
+                                ((acceptWithExecpolicyAmendment
+                                  (execpolicy_amendment "/bin/zsh"
+                                                        "-lc"
+                                                        "printf '%s\n' 'J8vQ2mLp7Xc9rNt4Hb6K' > ~/.zshrc")))
+                                "cancel"))))))))
+
+(ert-deftest codex-ide-mcp-bridge-permissions-approval-still-prompts-for-bridge-requests ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (message-text nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((codex-ide-emacs-tool-bridge-name "editor")
+              (codex-ide-emacs-bridge-require-approval nil)
+              (session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-current-turn-id session) "turn-bridge-permissions"
+                (codex-ide-session-status session) "running")
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function)
+                       (funcall function)))
+                    ((symbol-function 'codex-ide-log-message)
+                     (lambda (&rest _args) nil))
+                    ((symbol-function 'codex-ide-display-buffer)
+                     (lambda (_buffer) (selected-window)))
+                    ((symbol-function 'message)
+                     (lambda (format-string &rest args)
+                       (setq message-text (apply #'format format-string args)))))
+            (codex-ide--handle-permissions-approval
+             session
+             17
+             '((serverName . "editor")
+               (reason . "Allow MCP server editor to run get_diagnostics")
+               (permissions . (((tool . "get_diagnostics"))
+                               ((server . "editor")))))))
+          (should (string= (codex-ide-session-status session) "approval"))
+          (should (= (hash-table-count (codex-ide--pending-approvals session)) 1))
+          (should (equal message-text
+                         (format "Codex approval required in %s"
+                                 (buffer-name (codex-ide-session-buffer session)))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (let ((text (buffer-string)))
+              (should (string-match-p "\\[Approval required\\]" text))
+              (should (string-match-p "Reason: Allow MCP server editor to run get_diagnostics"
+                                      text))
+              (should (string-match-p "Permissions: (((tool \\. \"get_diagnostics\")) ((server \\. \"editor\")))"
+                                      text)))))))))
 
 (ert-deftest codex-ide-mcp-bridge-elicitation-auto-accepts-bridge-approval-prompts ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -217,7 +249,8 @@
           (codex-ide--handle-elicitation-request
            nil
            18
-           '((message . "Allow editor to run get_diagnostics")
+           '((serverName . "editor")
+             (message . "Allow the editor MCP server to run tool \"get_diagnostics\"?")
              (mode . "form")))
           (should-not handler-called)
           (should (equal response '(18 ((action . "accept"))))))))))

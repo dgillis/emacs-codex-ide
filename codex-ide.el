@@ -2259,11 +2259,6 @@ regions that should remain editable after rendering."
        (list :writable-ranges writable-ranges
              :metadata (list :fields rendered-fields))))))
 
-(defun codex-ide--auto-approve-emacs-bridge-request-p (params)
-  "Return non-nil when PARAMS should bypass user approval for the Emacs bridge."
-  (and (fboundp 'codex-ide-mcp-bridge-request-exempt-from-approval-p)
-       (codex-ide-mcp-bridge-request-exempt-from-approval-p params)))
-
 (defun codex-ide--format-command-approval-prompt (command params)
   "Build a command approval prompt for COMMAND using PARAMS."
   (let ((reason (alist-get 'reason params))
@@ -2301,27 +2296,18 @@ regions that should remain editable after rendering."
    (lambda ()
      (let* ((command (or (alist-get 'command params) "unknown command"))
             (choices (codex-ide--command-approval-choices params)))
-       (if (codex-ide--auto-approve-emacs-bridge-request-p params)
-           (let ((decision "acceptForSession"))
-             (codex-ide-log-message
-              session
-              "Command approval for %s resolved as %s"
-              command
-              decision)
-             (codex-ide--jsonrpc-send-response
-              session id `((decision . ,decision))))
-         (codex-ide--render-buffer-approval
-          session
-          id
-          'command
-          "[Approval required]"
-          (delq nil
-                (list
-                 (list :kind 'command :text command)
-                 (when-let ((reason (alist-get 'reason params)))
-                   (list :label "Reason" :text reason))))
-          choices
-          params))))
+       (codex-ide--render-buffer-approval
+        session
+        id
+        'command
+        "[Approval required]"
+        (delq nil
+              (list
+               (list :kind 'command :text command)
+               (when-let ((reason (alist-get 'reason params)))
+                 (list :label "Reason" :text reason))))
+        choices
+        params)))
    (lambda ()
      (codex-ide-log-message session "Command approval prompt quit; canceling turn")
      (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))
@@ -2343,33 +2329,24 @@ regions that should remain editable after rendering."
                        ("accept for session" . "acceptForSession")
                        ("decline" . "decline")
                        ("cancel turn" . "cancel"))))
-       (if (codex-ide--auto-approve-emacs-bridge-request-p params)
-           (let ((decision "acceptForSession"))
-             (codex-ide-log-message
-              session
-              "File-change approval for %s resolved as %s"
-              reason
-              decision)
-             (codex-ide--jsonrpc-send-response
-              session id `((decision . ,decision))))
-         (codex-ide--render-buffer-approval
-          session
-          id
-          'file-change
-          "[Approval required]"
-          (delq nil
-                (list
-                 (list :label "Approve file changes" :text reason)
-                 (when-let ((diff-text
-                             (codex-ide--approval-file-change-diff-text
-                              session
-                              params)))
-                   (codex-ide--mark-approval-file-change-diff-rendered
-                    session
-                    params)
-                   (list :kind 'diff :text diff-text))))
-          choices
-          params))))
+       (codex-ide--render-buffer-approval
+        session
+        id
+        'file-change
+        "[Approval required]"
+        (delq nil
+              (list
+               (list :label "Approve file changes" :text reason)
+               (when-let ((diff-text
+                           (codex-ide--approval-file-change-diff-text
+                            session
+                            params)))
+                 (codex-ide--mark-approval-file-change-diff-rendered
+                  session
+                  params)
+                 (list :kind 'diff :text diff-text))))
+        choices
+        params)))
    (lambda ()
      (codex-ide-log-message session "File-change approval prompt quit; canceling turn")
      (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))
@@ -2390,30 +2367,19 @@ regions that should remain editable after rendering."
             (choices '(("grant for turn" . turn)
                        ("grant for session" . session)
                        ("decline" . decline))))
-       (if (codex-ide--auto-approve-emacs-bridge-request-p params)
-           (let ((choice 'session))
-             (codex-ide-log-message
-              session
-              "Permissions approval resolved as %s for %S"
-              choice
-              permissions)
-             (codex-ide--jsonrpc-send-response
-              session id
-              `((permissions . ,permissions)
-                (scope . ,(symbol-name choice)))))
-         (codex-ide--render-buffer-approval
-          session
-          id
-          'permissions
-          "[Approval required]"
-          (append
-           (when-let ((reason (alist-get 'reason params)))
-             (list (list :label "Reason" :text reason)))
-           (when permissions
-             (list (list :label "Permissions"
-                         :text (format "%S" permissions)))))
-          choices
-          params))))
+       (codex-ide--render-buffer-approval
+        session
+        id
+        'permissions
+        "[Approval required]"
+        (append
+         (when-let ((reason (alist-get 'reason params)))
+           (list (list :label "Reason" :text reason)))
+         (when permissions
+           (list (list :label "Permissions"
+                       :text (format "%S" permissions)))))
+        choices
+        params)))
    (lambda ()
      (codex-ide-log-message session "Permissions approval prompt quit; declining")
      (codex-ide--jsonrpc-send-response session id '((permissions . []))))
@@ -2430,7 +2396,8 @@ regions that should remain editable after rendering."
   (codex-ide--schedule-interactive-request
    session
    (lambda ()
-     (if (codex-ide--auto-approve-emacs-bridge-request-p params)
+     (if (and (fboundp 'codex-ide-mcp-bridge-request-exempt-from-approval-p)
+              (codex-ide-mcp-bridge-request-exempt-from-approval-p params))
          (let ((result '((action . "accept"))))
            (codex-ide-log-message
             session

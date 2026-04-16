@@ -141,7 +141,7 @@ When nil, do not start the bridge.  When t, start the bridge without prompting.
 When `prompt', ask before enabling the bridge, matching the historical startup
 behavior.")
 (custom-autoload 'codex-ide-want-mcp-bridge "codex-ide-mcp-bridge" t)
-(defvar codex-ide-emacs-tool-bridge-name "emacs" "\
+(defvar codex-ide-emacs-tool-bridge-name "codex-ide-emacs-mcp" "\
 Name used when registering the Emacs MCP bridge with Codex.")
 (custom-autoload 'codex-ide-emacs-tool-bridge-name "codex-ide-mcp-bridge" t)
 (defvar codex-ide-emacs-bridge-python-command "python3" "\
@@ -176,15 +176,14 @@ Tool-call timeout in seconds for the Emacs MCP bridge.")
 (defvar codex-ide-emacs-bridge-require-approval nil "\
 Whether Emacs MCP bridge tool calls should require user approval.
 
-When nil, `codex-ide' auto-accepts approval requests and approval-like MCP
-elicitations that clearly refer to the configured Emacs MCP bridge server or
-one of its tools.")
+When nil, `codex-ide' auto-accepts approval-like MCP elicitations that clearly
+refer to the configured Emacs MCP bridge server or one of its tools.")
 (custom-autoload 'codex-ide-emacs-bridge-require-approval "codex-ide-mcp-bridge" t)
 (autoload 'codex-ide-mcp-bridge-request-exempt-from-approval-p "codex-ide-mcp-bridge" "\
 Return non-nil when PARAMS describe an Emacs MCP bridge request.
 
-This is used to bypass user confirmation for bridge-originated approval
-requests when `codex-ide-emacs-bridge-require-approval' is nil.
+This is used to bypass bridge-originated elicitation prompts when
+`codex-ide-emacs-bridge-require-approval' is nil.
 
 (fn PARAMS)")
 (autoload 'codex-ide-mcp-bridge-enabled-p "codex-ide-mcp-bridge" "\

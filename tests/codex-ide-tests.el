@@ -2872,25 +2872,21 @@
             (forward-line 0)
             (should (looking-at-p "> "))))))))
 
-(ert-deftest codex-ide-mcp-bridge-request-exempt-from-approval-detects-nested-bridge-mentions ()
+(ert-deftest codex-ide-mcp-bridge-request-exempt-from-approval-matches-server-name ()
   (let ((codex-ide-emacs-bridge-require-approval nil)
         (codex-ide-emacs-tool-bridge-name "emacs"))
     (should
      (codex-ide-mcp-bridge-request-exempt-from-approval-p
-      `((tool . "shell")
-        (metadata . ((server . "mcp_servers.emacs")
-                     (arguments . [((name . "view_file_buffer"))
-                                   ((path . "/tmp/example.el"))]))))))
+      '((serverName . "emacs")
+        (message . "Allow the emacs MCP server to run tool \"view_file_buffer\"?"))))
     (let ((codex-ide-emacs-bridge-require-approval t))
       (should-not
        (codex-ide-mcp-bridge-request-exempt-from-approval-p
-        '((metadata . ((server . "mcp_servers.emacs")))))))
+        '((serverName . "emacs")))))
     (let ((codex-ide-emacs-bridge-require-approval nil))
       (should-not
        (codex-ide-mcp-bridge-request-exempt-from-approval-p
-        '((tool . "shell")
-          (metadata . ((server . "mcp_servers.other")
-                       (arguments . [((name . "different_tool"))])))))))))
+        '((serverName . "other")))))))
 
 (ert-deftest codex-ide-clear-markdown-properties-preserves-non-markdown-faces ()
   (with-temp-buffer
