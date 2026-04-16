@@ -2537,13 +2537,34 @@ regions that should remain editable after rendering."
               session
               item-id)))))
       ("item/commandExecution/outputDelta"
-       (let ((item-id (alist-get 'itemId params)))
+       (let ((item-id (alist-get 'itemId params))
+             (delta (or (alist-get 'delta params) "")))
          (when codex-ide-log-stream-deltas
            (codex-ide-log-message
             session
             "Command output delta for item %s (%d chars)"
             item-id
-            (length (or (alist-get 'delta params) ""))))))
+            (length delta)))
+         (unless (string-empty-p delta)
+           (let* ((state (or (codex-ide--item-state session item-id) '()))
+                  (state (plist-put
+                          state
+                          :output-text
+                          (concat (or (plist-get state :output-text) "")
+                                  delta))))
+             (if (or (plist-get state :summary)
+                     (plist-get state :command-output-overlay))
+                 (progn
+                   (codex-ide--put-item-state session item-id state)
+                   (codex-ide--render-command-output-delta session item-id delta))
+               (codex-ide--put-item-state
+                session
+                item-id
+                (plist-put
+                 state
+                 :pending-output-text
+                 (concat (or (plist-get state :pending-output-text) "")
+                         delta))))))))
       ("item/fileChange/outputDelta"
        (let ((item-id (alist-get 'itemId params))
              (delta (or (alist-get 'delta params) "")))

@@ -55,6 +55,14 @@ rich markdown rendering."
                  (integer :tag "Maximum characters"))
   :group 'codex-ide)
 
+(defcustom codex-ide-command-output-fold-on-start nil
+  "When non-nil, command output blocks start folded while output streams.
+
+Streaming output is still collected and the output header line count updates.
+Press RET on the output header to expand or fold the block."
+  :type 'boolean
+  :group 'codex-ide)
+
 (defface codex-ide-user-prompt-face
   '((((class color) (background light))
      :background "#f4f1e8")
@@ -79,6 +87,21 @@ rich markdown rendering."
 (defface codex-ide-item-detail-face
   '((t :inherit shadow))
   "Face used for item detail lines."
+  :group 'codex-ide)
+
+(defface codex-ide-command-output-face
+  '((((class color) (background light))
+     :inherit fixed-pitch
+     :background "#ece8dd"
+     :extend t)
+    (((class color) (background dark))
+     :inherit fixed-pitch
+     :background "#1f2324"
+     :extend t)
+    (t
+     :inherit fixed-pitch
+     :extend t))
+  "Face used for command output blocks."
   :group 'codex-ide)
 
 (defface codex-ide-approval-header-face
@@ -146,6 +169,16 @@ rich markdown rendering."
 
 (defconst codex-ide-agent-item-type-property 'codex-ide-agent-item-type
   "Text property storing the originating agent item type for transcript text.")
+
+(defconst codex-ide-command-output-overlay-property
+  'codex-ide-command-output-overlay
+  "Text property storing a command output block overlay.")
+
+(defvar codex-ide-command-output-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'codex-ide-toggle-command-output-at-point)
+    map)
+  "Keymap active on command output headers and expanded output.")
 
 (defvar codex-ide--current-transcript-log-marker nil
   "Marker for the log line associated with the transcript text being inserted.")
@@ -1928,13 +1961,263 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
 
 (defun codex-ide--search-summary (pattern paths)
   "Format a semantic search summary for PATTERN across PATHS."
-  (cond
-   ((null paths)
-    (format "Searched for %s" pattern))
-   ((null (cdr paths))
-    (format "Searched %s for %s" (car paths) pattern))
-   (t
-    (format "Searched %d paths for %s" (length paths) pattern))))
+  (format "Searched %s for %s"
+          (codex-ide--search-locations-summary paths)
+          (codex-ide--quote-summary-string pattern)))
+
+(defun codex-ide--quote-summary-string (value)
+  "Return VALUE quoted for a summary line."
+  (format "\"%s\""
+          (replace-regexp-in-string "\"" "\\\\\"" (or value "") t t)))
+
+(defun codex-ide--search-locations-summary (paths)
+  "Return a human-readable location summary for PATHS."
+  (let ((paths (mapcar (lambda (path)
+                         (if (string= path ".")
+                             "current directory"
+                           path))
+                       paths)))
+    (cond
+     ((null paths) "current directory")
+     ((null (cdr paths)) (car paths))
+     ((<= (length paths) 3)
+      (concat (string-join (butlast paths) ", ")
+              " and "
+              (car (last paths))))
+     (t
+      (format "%d locations" (length paths))))))
+
+(defun codex-ide--count-search-output-hits (output)
+  "Return a best-effort ripgrep hit count from OUTPUT."
+  (when (stringp output)
+    (let* ((lines (seq-filter
+                   (lambda (line) (not (string-empty-p line)))
+                   (split-string output "\n")))
+           (numbered-lines
+            (seq-filter
+             (lambda (line)
+               (string-match-p "\\(?:\\`\\|:\\)[0-9]+:" line))
+             lines)))
+      (length (or numbered-lines lines)))))
+
+(defun codex-ide--format-hit-count (count)
+  "Return a short summary for COUNT search hits."
+  (format "found %d hit%s" count (if (= count 1) "" "s")))
+
+(defun codex-ide--command-output-line-count (output)
+  "Return the display line count for command OUTPUT."
+  (if (or (null output) (string-empty-p output))
+      0
+    (length (split-string (string-trim-right output) "\n"))))
+
+(defun codex-ide--format-command-output-text (output)
+  "Return prefixed display text for raw command OUTPUT."
+  (when (and (stringp output) (not (string-empty-p output)))
+    (let* ((ends-with-newline (string-suffix-p "\n" output))
+           (body (if ends-with-newline
+                     (substring output 0 -1)
+                   output))
+           (lines (split-string body "\n")))
+      (concat
+       (mapconcat (lambda (line) (concat "    " line)) lines "\n")
+       (if ends-with-newline "\n" "")))))
+
+(defun codex-ide--command-output-header-text (overlay)
+  "Return the header text for command output OVERLAY."
+  (let* ((line-count (overlay-get overlay :line-count))
+         (line-label (if (= line-count 1) "line" "lines"))
+         (folded (overlay-get overlay :folded))
+         (complete (overlay-get overlay :complete)))
+    (format "  └ output: %d %s%s (RET to %s)\n"
+            line-count
+            line-label
+            (if complete "" ", streaming")
+            (if folded "expand" "fold"))))
+
+(defun codex-ide--set-command-output-header (overlay)
+  "Refresh the visible header for command output OVERLAY."
+  (let ((buffer (overlay-buffer overlay))
+        (header-start (overlay-get overlay :header-start))
+        (header-end (overlay-get overlay :header-end))
+        (body-start (overlay-get overlay :body-start))
+        (body-end (overlay-get overlay :body-end)))
+    (when (and (buffer-live-p buffer)
+               (markerp header-start)
+               (markerp header-end)
+               (markerp body-start)
+               (markerp body-end))
+      (with-current-buffer buffer
+        (codex-ide--without-undo-recording
+          (let ((inhibit-read-only t)
+                (moving (= (point) (point-max)))
+                (start (marker-position header-start)))
+            (goto-char start)
+            (delete-region start (marker-position header-end))
+            (insert
+             (propertize
+              (codex-ide--command-output-header-text overlay)
+              'face 'codex-ide-item-detail-face
+              'keymap codex-ide-command-output-map
+              'help-echo "RET toggles command output"
+              codex-ide-command-output-overlay-property overlay))
+            (set-marker header-start start)
+            (set-marker header-end (point))
+            (set-marker body-start (point))
+            (move-overlay overlay
+                          (marker-position body-start)
+                          (marker-position body-end))
+            (codex-ide--freeze-region (marker-position header-start)
+                                      (marker-position header-end))
+            (when moving
+              (goto-char (point-max)))))))))
+
+(defun codex-ide--ensure-command-output-block (session item-id)
+  "Return the command output overlay for ITEM-ID in SESSION, creating it."
+  (let* ((state (codex-ide--item-state session item-id))
+         (existing (plist-get state :command-output-overlay)))
+    (if (and (overlayp existing) (buffer-live-p (overlay-buffer existing)))
+        existing
+      (let ((buffer (codex-ide-session-buffer session))
+            overlay)
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (let ((codex-ide--current-agent-item-type "commandExecution"))
+              (codex-ide--without-undo-recording
+                (let ((inhibit-read-only t)
+                      (moving (= (point) (point-max)))
+                      (initial-folded codex-ide-command-output-fold-on-start)
+                      header-start
+                      header-end
+                      body-start
+                      body-end)
+                  (goto-char (point-max))
+                  (setq header-start (copy-marker (point)))
+                  (setq overlay (make-overlay (point) (point) buffer nil nil))
+                  (overlay-put overlay 'face 'codex-ide-command-output-face)
+                  (overlay-put overlay codex-ide-command-output-overlay-property overlay)
+                  (overlay-put overlay :header-start header-start)
+                  (overlay-put overlay :output-text "")
+                  (overlay-put overlay :line-count 0)
+                  (overlay-put overlay :folded initial-folded)
+                  (overlay-put overlay :complete nil)
+                  (overlay-put overlay 'invisible (and initial-folded t))
+                  (insert (codex-ide--command-output-header-text overlay))
+                  (setq header-end (copy-marker (point)))
+                  (setq body-start (copy-marker (point)))
+                  (setq body-end (copy-marker (point)))
+                  (overlay-put overlay :header-end header-end)
+                  (overlay-put overlay :body-start body-start)
+                  (overlay-put overlay :body-end body-end)
+                  (add-text-properties
+                   (marker-position header-start)
+                   (marker-position header-end)
+                   (list 'face 'codex-ide-item-detail-face
+                         'keymap codex-ide-command-output-map
+                         'help-echo "RET toggles command output"
+                         codex-ide-command-output-overlay-property overlay))
+                  (codex-ide--freeze-region (marker-position header-start)
+                                            (marker-position header-end))
+                  (when moving
+                    (goto-char (point-max)))))))
+          (codex-ide--put-item-state
+           session
+           item-id
+           (plist-put state :command-output-overlay overlay))
+          overlay)))))
+
+(defun codex-ide--append-command-output-text (session item-id text)
+  "Append command output TEXT for ITEM-ID in SESSION."
+  (when (and (stringp text) (not (string-empty-p text)))
+    (when-let ((overlay (codex-ide--ensure-command-output-block session item-id)))
+      (let ((buffer (overlay-buffer overlay))
+            (body-start (overlay-get overlay :body-start))
+            (body-end (overlay-get overlay :body-end))
+            (previous (or (overlay-get overlay :output-text) ""))
+            output-text
+            display-text)
+        (setq output-text (concat previous text)
+              display-text (codex-ide--format-command-output-text output-text))
+        (overlay-put overlay :output-text output-text)
+        (overlay-put overlay
+                     :line-count
+                     (codex-ide--command-output-line-count output-text))
+        (when (and (buffer-live-p buffer)
+                   (markerp body-start)
+                   (markerp body-end))
+          (with-current-buffer buffer
+            (let ((codex-ide--current-agent-item-type "commandExecution"))
+              (codex-ide--without-undo-recording
+                (let ((inhibit-read-only t)
+                      (moving (= (point) (point-max)))
+                      start)
+                  (delete-region (marker-position body-start)
+                                 (marker-position body-end))
+                  (goto-char (marker-position body-start))
+                  (setq start (point))
+                  (insert display-text)
+                  (set-marker body-end (point))
+                  (add-text-properties
+                   start
+                   (point)
+                   (append
+                    (list 'face 'codex-ide-command-output-face
+                          'keymap codex-ide-command-output-map
+                          'help-echo "RET toggles command output"
+                          codex-ide-command-output-overlay-property overlay)
+                    (codex-ide--current-agent-text-properties)))
+                  (move-overlay overlay
+                                (marker-position body-start)
+                                (marker-position body-end))
+                  (codex-ide--freeze-region start (point))
+                  (when moving
+                    (goto-char (point-max))))))))
+        (codex-ide--set-command-output-header overlay)))))
+
+(defun codex-ide--render-command-output-delta (session item-id delta)
+  "Render streamed command output DELTA for ITEM-ID in SESSION."
+  (codex-ide--append-command-output-text session item-id delta))
+
+(defun codex-ide--complete-command-output-block (session item-id output)
+  "Ensure command output for ITEM-ID is rendered and folded after completion."
+  (let* ((state (codex-ide--item-state session item-id))
+         (overlay (plist-get state :command-output-overlay)))
+    (when (and (stringp output)
+               (not (string-empty-p output))
+               (not (and (overlayp overlay)
+                         (buffer-live-p (overlay-buffer overlay)))))
+      (codex-ide--append-command-output-text session item-id output)
+      (setq state (codex-ide--item-state session item-id)
+            overlay (plist-get state :command-output-overlay)))
+    (when (and (overlayp overlay)
+               (buffer-live-p (overlay-buffer overlay)))
+      (overlay-put overlay :complete t)
+      (overlay-put overlay :folded t)
+      (overlay-put overlay 'invisible t)
+      (codex-ide--set-command-output-header overlay))))
+
+(defun codex-ide--command-output-overlay-at-point (&optional pos)
+  "Return the command output overlay at POS, or nil."
+  (let* ((pos (or pos (point)))
+         (overlay (get-char-property pos codex-ide-command-output-overlay-property)))
+    (cond
+     ((overlayp overlay) overlay)
+     ((and (> pos (point-min))
+           (overlayp (get-char-property
+                      (1- pos)
+                      codex-ide-command-output-overlay-property)))
+      (get-char-property (1- pos) codex-ide-command-output-overlay-property))
+     (t nil))))
+
+(defun codex-ide-toggle-command-output-at-point (&optional pos)
+  "Toggle a command output block at POS.
+Return non-nil when a command output block was found."
+  (interactive)
+  (when-let ((overlay (codex-ide--command-output-overlay-at-point pos)))
+    (let ((folded (not (overlay-get overlay :folded))))
+      (overlay-put overlay :folded folded)
+      (overlay-put overlay 'invisible (and folded t))
+      (codex-ide--set-command-output-header overlay)
+      t)))
 
 (defun codex-ide--command-search-summary (command)
   "Return a semantic search summary for COMMAND, or nil."
@@ -2176,7 +2459,9 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
   (let* ((buffer (codex-ide-session-buffer session))
          (item-id (alist-get 'id item))
          (item-type (alist-get 'type item))
-         (summary (codex-ide--summarize-item-start item)))
+         (summary (codex-ide--summarize-item-start item))
+         (existing-state (copy-sequence
+                          (or (codex-ide--item-state session item-id) '()))))
     (let ((codex-ide--current-agent-item-type item-type))
       (when summary
         (unless (codex-ide-session-output-prefix-inserted session)
@@ -2188,14 +2473,30 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
          (format "* %s\n" summary)
          'codex-ide-item-summary-face)
         (codex-ide--render-item-start-details session item)
-        (codex-ide--put-item-state
-         session
-         item-id
-         (list :type item-type
-               :item item
-               :summary summary
-               :details-rendered t
-               :saw-output nil)))
+        (let ((state existing-state))
+          (setq state (plist-put state :type item-type))
+          (setq state (plist-put state :item item))
+          (setq state (plist-put state :summary summary))
+          (setq state
+                (plist-put
+                 state
+                 :search-request
+                 (and (equal item-type "commandExecution")
+                      (codex-ide--rg-search-request
+                       (codex-ide--display-command-argv
+                        (alist-get 'command item))))))
+          (setq state (plist-put state :details-rendered t))
+          (setq state (plist-put state :saw-output nil))
+          (codex-ide--put-item-state session item-id state))
+        (when-let ((pending-output
+                    (plist-get (codex-ide--item-state session item-id)
+                               :pending-output-text)))
+          (codex-ide--render-command-output-delta session item-id pending-output)
+          (codex-ide--put-item-state
+           session
+           item-id
+           (plist-put (codex-ide--item-state session item-id)
+                      :pending-output-text nil))))
       (when (and (not summary)
                  (equal item-type "reasoning"))
         (unless (codex-ide-session-output-prefix-inserted session)
@@ -2251,21 +2552,45 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
         ("agentMessage"
          (codex-ide--render-current-agent-message-markdown session item-id t))
         ("commandExecution"
-         (cond
-          ((equal status "failed")
+         (let* ((search-request (plist-get state :search-request))
+                (output-text (or (plist-get state :output-text)
+                                 (alist-get 'aggregatedOutput item)))
+                (exit-code (alist-get 'exitCode item)))
+           (codex-ide--complete-command-output-block session item-id output-text)
+           (cond
+            (search-request
+             (when-let ((hit-count (or (codex-ide--count-search-output-hits
+                                        output-text)
+                                       (and (equal exit-code 1) 0))))
+               (codex-ide--append-agent-text
+                buffer
+                (codex-ide--item-detail-line
+                 (codex-ide--format-hit-count hit-count))
+                'codex-ide-item-detail-face))
+             (when (and (equal status "failed")
+                        (not (equal exit-code 1)))
+               (codex-ide--append-agent-text
+                buffer
+                (codex-ide--item-detail-line
+                 (format "failed%s"
+                         (if exit-code
+                             (format " with exit code %s" exit-code)
+                           "")))
+                'error)))
+            ((equal status "failed")
            (codex-ide--append-agent-text
             buffer
             (codex-ide--item-detail-line
              (format "failed%s"
-                     (if-let ((exit-code (alist-get 'exitCode item)))
+                     (if exit-code
                          (format " with exit code %s" exit-code)
                        "")))
             'error))
-          ((equal status "declined")
+            ((equal status "declined")
            (codex-ide--append-agent-text
             buffer
             (codex-ide--item-detail-line "declined")
-            'warning))))
+            'warning)))))
         ("mcpToolCall"
          (when-let ((error-info (alist-get 'error item)))
            (codex-ide--append-agent-text
