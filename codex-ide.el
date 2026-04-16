@@ -2753,7 +2753,7 @@ If no live session exists, prompt to start one."
   (codex-ide--start-session 'continue))
 
 ;;;###autoload
-(defun codex-ide-check-status ()
+(defun codex-ide-show-cli-info ()
   "Report Codex CLI availability and version."
   (interactive)
   (codex-ide--detect-cli)

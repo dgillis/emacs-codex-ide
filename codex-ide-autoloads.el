@@ -100,7 +100,7 @@ Major mode for Codex IDE log buffers.
 Start Codex for the current project or directory." t)
 (autoload 'codex-ide-continue "codex-ide" "\
 Resume the most recent Codex session for the current directory." t)
-(autoload 'codex-ide-check-status "codex-ide" "\
+(autoload 'codex-ide-show-cli-info "codex-ide" "\
 Report Codex CLI availability and version." t)
 (autoload 'codex-ide-stop "codex-ide" "\
 Stop the Codex session associated with the current session buffer." t)

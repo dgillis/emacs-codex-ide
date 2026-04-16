@@ -115,7 +115,7 @@ emacsclient --eval '(codex-ide-mcp-bridge-status)'
 Run an Emacs command over the bridge:
 
 ```bash
-emacsclient --eval '(codex-ide-check-status)'
+emacsclient --eval '(codex-ide-show-cli-info)'
 ```
 
 Open the Codex menu over the bridge:

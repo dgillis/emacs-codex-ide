@@ -18,7 +18,7 @@
 (declare-function codex-ide-reset-current-session "codex-ide" ())
 (declare-function codex-ide-stop "codex-ide" ())
 (declare-function codex-ide-switch-to-buffer "codex-ide" ())
-(declare-function codex-ide-check-status "codex-ide" ())
+(declare-function codex-ide-show-cli-info "codex-ide" ())
 (autoload 'codex-ide-show-debug-info "codex-ide-debug-info"
   "Show a minibuffer summary of live Codex IDE session state." t)
 (declare-function codex-ide--get-working-directory "codex-ide-core" ())
@@ -28,6 +28,8 @@
   "Show a tabulated list of live Codex session buffers." t)
 (autoload 'codex-ide-session-thread-list "codex-ide-session-thread-list"
   "Show a tabulated list of stored Codex threads for the current workspace." t)
+(autoload 'codex-ide-status "codex-ide-status-mode"
+  "Show the Codex status buffer for the current project." t)
 
 (defvar codex-ide-cli-path)
 (defvar codex-ide-cli-extra-flags)
@@ -242,7 +244,8 @@
      :if codex-ide--in-session-buffer-p)
     ("q" "Stop current" codex-ide-stop
      :if codex-ide--in-session-buffer-p)]
-   ["View"
+   ["Manage"
+    ("m" "Manage sessions" codex-ide-status)
     ("t" "Previous sessions" codex-ide-session-thread-list)
     ("l" "Live session buffers" codex-ide-session-buffer-list)]
    ["Submenus"
@@ -292,7 +295,7 @@
   "Open a small debug/status menu for Codex IDE."
   ["Codex IDE Debug"
    ["Status"
-    ("s" "Check CLI status" codex-ide-check-status)
+    ("s" "Check CLI status" codex-ide-show-cli-info)
     ("i" "Show debug info" codex-ide-show-debug-info)]])
 
 (provide 'codex-ide-transient)
