@@ -37,6 +37,7 @@
 
 (require 'codex-ide-core)
 (require 'codex-ide-mcp-elicitation)
+(require 'codex-ide-nav)
 (require 'codex-ide-renderer)
 (require 'codex-ide-transient)
 (require 'codex-ide-mcp-bridge)
@@ -212,6 +213,12 @@ start, completion, errors, and other lifecycle events are still logged."
 (defvar codex-ide--cli-available nil
   "Whether the Codex CLI has been detected successfully.")
 
+(defvar codex-ide-session-event-hook nil
+  "Hook run when a Codex session changes.
+Each hook function receives three arguments: EVENT, SESSION, and PAYLOAD.
+EVENT is a symbol naming the lifecycle change, SESSION is the affected
+`codex-ide-session' object, and PAYLOAD is a plist with event-specific data.")
+
 (defvar codex-ide-session-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map text-mode-map)
@@ -227,8 +234,8 @@ start, completion, errors, and other lifecycle events are still logged."
 (define-key codex-ide-session-mode-map (kbd "C-c C-k") #'codex-ide-interrupt)
 (define-key codex-ide-session-mode-map (kbd "C-M-p") #'codex-ide-previous-prompt-line)
 (define-key codex-ide-session-mode-map (kbd "C-M-n") #'codex-ide-next-prompt-line)
-(define-key codex-ide-session-mode-map (kbd "TAB") #'forward-button)
-(define-key codex-ide-session-mode-map (kbd "<backtab>") #'backward-button)
+(define-key codex-ide-session-mode-map (kbd "TAB") #'codex-ide-session-mode-nav-forward)
+(define-key codex-ide-session-mode-map (kbd "<backtab>") #'codex-ide-session-mode-nav-backward)
 (define-key codex-ide-session-prompt-minor-mode-map (kbd "M-p") #'codex-ide-previous-prompt-history)
 (define-key codex-ide-session-prompt-minor-mode-map (kbd "M-n") #'codex-ide-next-prompt-history)
 
@@ -236,6 +243,25 @@ start, completion, errors, and other lifecycle events are still logged."
   "Minor mode enabled only while point is in the active Codex prompt."
   :lighter " Prompt"
   :keymap codex-ide-session-prompt-minor-mode-map)
+
+(defun codex-ide--run-session-event (event session &rest payload)
+  "Notify listeners that SESSION changed with EVENT and PAYLOAD."
+  (when (codex-ide-session-p session)
+    (run-hook-with-args 'codex-ide-session-event-hook event session payload)))
+
+(defun codex-ide--set-session-status (session status &optional reason)
+  "Set SESSION status to STATUS and emit an event when it changes.
+REASON is stored in the emitted payload when non-nil."
+  (let ((old-status (and session (codex-ide-session-status session))))
+    (setf (codex-ide-session-status session) status)
+    (unless (equal old-status status)
+      (codex-ide--run-session-event
+       'status-changed
+       session
+       :old-status old-status
+       :status status
+       :reason reason)))
+  status)
 
 (defun codex-ide--point-in-active-prompt-p (&optional session pos)
   "Return non-nil when POS is inside SESSION's active prompt region."
@@ -257,6 +283,29 @@ start, completion, errors, and other lifecycle events are still logged."
       (unless (eq inside codex-ide-session-prompt-minor-mode)
         (codex-ide-session-prompt-minor-mode (if inside 1 -1))))))
 
+(defun codex-ide-session-mode--focal-points ()
+  "Return focal points for the current session buffer."
+  (let ((session (and (boundp 'codex-ide--session) codex-ide--session)))
+    (append (codex-ide-nav-collect-buttons)
+            (and session
+                 (codex-ide-nav-collect-session-input session)))))
+
+;;;###autoload
+(defun codex-ide-session-mode-nav-forward ()
+  "Move point to the next focal point in a Codex session buffer."
+  (interactive)
+  (unless (derived-mode-p 'codex-ide-session-mode)
+    (user-error "Not in a Codex session buffer"))
+  (codex-ide-nav-forward))
+
+;;;###autoload
+(defun codex-ide-session-mode-nav-backward ()
+  "Move point to the previous focal point in a Codex session buffer."
+  (interactive)
+  (unless (derived-mode-p 'codex-ide-session-mode)
+    (user-error "Not in a Codex session buffer"))
+  (codex-ide-nav-backward))
+
 (defun codex-ide--disable-session-font-lock ()
   "Disable buffer font-lock machinery for Codex transcript buffers."
   (when (fboundp 'jit-lock-mode)
@@ -273,6 +322,8 @@ start, completion, errors, and other lifecycle events are still logged."
   (when codex-ide-session-enable-visual-line-mode
     (visual-line-mode 1))
   (setq-local mode-line-process '((:eval (codex-ide--mode-line-status))))
+  (setq-local codex-ide-nav-focal-point-functions
+              '(codex-ide-session-mode--focal-points))
   (add-hook 'post-command-hook #'codex-ide--sync-prompt-minor-mode nil t))
 
 ;;;###autoload
@@ -361,12 +412,23 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
   (when session
     (let ((process (codex-ide-session-process session))
           (stderr-process (codex-ide-session-stderr-process session))
-          (log-buffer (codex-ide-session-log-buffer session)))
+          (log-buffer (codex-ide-session-log-buffer session))
+          (directory (codex-ide-session-directory session))
+          (buffer (codex-ide-session-buffer session))
+          (thread-id (codex-ide-session-thread-id session))
+          (status (codex-ide-session-status session)))
       (when (process-live-p process)
         (codex-ide-log-message session "Stopping process during session teardown")
         (delete-process process))
       (when (process-live-p stderr-process)
         (delete-process stderr-process))
+      (codex-ide--run-session-event
+       'destroyed
+       session
+       :directory directory
+       :buffer buffer
+       :thread-id thread-id
+       :status status)
       (codex-ide--cleanup-session session)
       (when (and kill-log-buffer
                  (buffer-live-p log-buffer))
@@ -1404,6 +1466,11 @@ ACTION is a short past-tense label used in log messages, such as
       (codex-ide--remember-model-name session result))
     (setf (codex-ide-session-thread-id session) thread-id)
     (codex-ide--mark-session-thread-attached session)
+    (codex-ide--run-session-event
+     'thread-attached
+     session
+     :thread-id thread-id
+     :action action)
     (codex-ide--session-metadata-put session :session-context-sent t)
     (codex-ide-log-message session "%s thread %s" action thread-id)
     (when thread-read
@@ -1423,7 +1490,7 @@ ACTION is a short past-tense label used in log messages, such as
                     (version . "0.2.0")))
      (capabilities . ((experimentalApi . t)
                       ,@(codex-ide-mcp-elicitation-capabilities)))))
-  (setf (codex-ide-session-status session) "idle")
+  (codex-ide--set-session-status session "idle" 'initialized)
   (codex-ide-log-message session "Initialization complete")
   (codex-ide--update-header-line session))
 
@@ -1493,6 +1560,12 @@ REUSE-NAME-SUFFIX as the session name suffix."
               (setq-local codex-ide--session session)
               (add-hook 'kill-buffer-hook #'codex-ide--handle-session-buffer-killed nil t)
               (let ((inhibit-read-only t))
+                ;; Buffer reuse during session reset must clear zero-length prompt
+                ;; overlays explicitly; `erase-buffer' alone can leave them at
+                ;; `point-min'.
+                (mapc #'delete-overlay
+                      (append (car (overlay-lists))
+                              (cdr (overlay-lists))))
                 (erase-buffer)
                 (insert (format "Codex session for %s\n\n"
                                 (abbreviate-file-name working-dir)))
@@ -1511,6 +1584,12 @@ REUSE-NAME-SUFFIX as the session name suffix."
              session
              "Starting process: %s"
              (string-join (codex-ide--app-server-command) " "))
+            (codex-ide--run-session-event
+             'created
+             session
+             :directory working-dir
+             :buffer buffer
+             :status (codex-ide-session-status session))
             session)
         (error
          (when (process-live-p stderr-process)
@@ -1591,6 +1670,7 @@ When NEWLY-CREATED is non-nil, honor `codex-ide-new-session-split'."
         (setq session (codex-ide--create-process-session)))
       (codex-ide-log-message session "Initializing background query session")
       (codex-ide--initialize-session session))
+    (codex-ide--ensure-input-prompt session)
     session))
 
 (defun codex-ide--reusable-idle-session-for-directory (&optional directory)
@@ -1703,7 +1783,7 @@ MODE can be nil or `new', `continue', or `resume'."
                 session
                 thread-id
                 (if (eq mode 'continue) "Continued" "Resumed"))))
-            (setf (codex-ide-session-status session) "idle")
+            (codex-ide--set-session-status session "idle" 'started)
             (codex-ide--update-header-line session)
             (codex-ide--show-session-buffer session created-session)
             (codex-ide--track-active-buffer)
@@ -1838,8 +1918,10 @@ CHOICES is an alist of labels to returned values."
        (capitalize (symbol-name (plist-get approval :kind)))
        (codex-ide--approval-display-value value))
       (codex-ide--mark-approval-resolved approval label)
-      (setf (codex-ide-session-status session)
-            (if (codex-ide-session-current-turn-id session) "running" "idle"))
+      (codex-ide--set-session-status
+       session
+       (if (codex-ide-session-current-turn-id session) "running" "idle")
+       'approval-resolved)
       (codex-ide--update-header-line session)
       (codex-ide--jsonrpc-send-response
        session
@@ -1993,8 +2075,14 @@ is merged into the stored pending request state."
               metadata
               (plist-get render-state :metadata))
              (codex-ide--pending-approvals session))
-    (setf (codex-ide-session-status session) "approval")
+    (codex-ide--set-session-status session "approval" 'approval-requested)
     (codex-ide--update-header-line session)
+    (codex-ide--run-session-event
+     'approval-requested
+     session
+     :id id
+     :kind kind
+     :params params)
     (codex-ide--notify-interactive-request session notify-message)))
 
 (defun codex-ide--render-buffer-approval (session id kind title details choices params)
@@ -2024,6 +2112,7 @@ PARAMS describe the request."
    (point)
    (progn (insert (format "[%s]" label)) (point))
    'follow-link t
+   'keymap (codex-ide-nav-button-keymap)
    'help-echo (or help-echo label)
    'action (lambda (_button)
              (funcall callback))))
@@ -2474,12 +2563,17 @@ regions that should remain editable after rendering."
        (codex-ide--remember-model-name session params)
        (when-let ((thread-id (alist-get 'id (alist-get 'thread params))))
          (setf (codex-ide-session-thread-id session) thread-id)
-         (codex-ide--mark-session-thread-attached session))
+         (codex-ide--mark-session-thread-attached session)
+         (codex-ide--run-session-event
+          'thread-attached
+          session
+          :thread-id thread-id
+          :action "Started"))
        (codex-ide-log-message
         session
         "Thread started: %s"
         (codex-ide-session-thread-id session))
-       (setf (codex-ide-session-status session) "idle")
+       (codex-ide--set-session-status session "idle" 'thread-started)
        (codex-ide--update-header-line session))
       ("thread/status/changed"
        (let* ((thread (alist-get 'thread params))
@@ -2487,7 +2581,10 @@ regions that should remain editable after rendering."
                           (alist-get 'status thread)))
               (normalized-status (codex-ide--normalize-session-status status)))
          (when normalized-status
-           (setf (codex-ide-session-status session) normalized-status)))
+           (codex-ide--set-session-status
+            session
+            normalized-status
+            'thread-status-changed)))
        (codex-ide-log-message
         session
         "Thread status changed to %s"
@@ -2520,8 +2617,8 @@ regions that should remain editable after rendering."
              (codex-ide-session-current-message-item-id session) nil
              (codex-ide-session-current-message-prefix-inserted session) nil
              (codex-ide-session-current-message-start-marker session) nil
-             (codex-ide-session-item-states session) (make-hash-table :test 'equal)
-             (codex-ide-session-status session) "running")
+             (codex-ide-session-item-states session) (make-hash-table :test 'equal))
+       (codex-ide--set-session-status session "running" 'turn-started)
        (codex-ide--session-metadata-put
         session
         :approval-file-change-diff-rendered-items
@@ -2530,6 +2627,10 @@ regions that should remain editable after rendering."
         session
         "Turn started: %s"
         (codex-ide-session-current-turn-id session))
+       (codex-ide--run-session-event
+        'turn-started
+        session
+        :turn-id (codex-ide-session-current-turn-id session))
        (codex-ide--update-header-line session)
        (unless (codex-ide-session-output-prefix-inserted session)
          (codex-ide--begin-turn-display session)))
@@ -2734,7 +2835,10 @@ regions that should remain editable after rendering."
       (codex-ide-log-message session "Process event: %s" (string-trim event))
       (if (process-live-p process)
           (progn
-            (setf (codex-ide-session-status session) (string-trim event))
+            (codex-ide--set-session-status
+             session
+             (string-trim event)
+             'process-event)
             (codex-ide--update-header-line session)
             (codex-ide--append-to-buffer
              buffer
@@ -2919,8 +3023,9 @@ If no live session exists, prompt to start one."
              new-session
              "Started new thread %s after reset"
              (codex-ide-session-thread-id new-session)))
-          (setf (codex-ide-session-status new-session) "idle")
+          (codex-ide--set-session-status new-session "idle" 'reset)
           (codex-ide--update-header-line new-session)
+          (codex-ide--run-session-event 'reset new-session)
           (codex-ide--show-session-buffer new-session)
           (codex-ide--track-active-buffer)
           (message "Reset Codex in %s"
@@ -2969,8 +3074,8 @@ If no live session exists, prompt to start one."
     (if-let ((turn-id (codex-ide-session-current-turn-id session)))
         (progn
           (codex-ide-log-message session "Sending interrupt for turn %s" turn-id)
-          (setf (codex-ide-session-interrupt-requested session) t
-                (codex-ide-session-status session) "interrupting")
+          (setf (codex-ide-session-interrupt-requested session) t)
+          (codex-ide--set-session-status session "interrupting" 'interrupt-requested)
           (codex-ide--update-header-line session)
           (condition-case err
               (codex-ide--request-sync
@@ -2979,8 +3084,8 @@ If no live session exists, prompt to start one."
                `((threadId . ,(codex-ide-session-thread-id session))
                  (turnId . ,turn-id)))
             (error
-             (setf (codex-ide-session-interrupt-requested session) nil
-                   (codex-ide-session-status session) "running")
+             (setf (codex-ide-session-interrupt-requested session) nil)
+             (codex-ide--set-session-status session "running" 'interrupt-failed)
              (codex-ide--update-header-line session)
              (signal (car err) (cdr err))))
           (message "Sent interrupt to Codex"))

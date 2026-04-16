@@ -40,6 +40,54 @@
              (concat (mapconcat (lambda (line) (or line "")) response-lines "\n") "\n"))))))
     (codex-ide--insert-input-prompt session (or active-prompt ""))))
 
+(defun codex-ide-status-mode-test--preview-text (text max-lines)
+  "Return transcript preview text for TEXT using MAX-LINES."
+  (with-temp-buffer
+    (insert text)
+    (let ((codex-ide-status-mode-transcript-preview-max-lines max-lines))
+      (when-let ((range (codex-ide-status-mode--transcript-preview-range
+                         (point-min)
+                         (point-max))))
+        (buffer-substring-no-properties (car range) (cdr range))))))
+
+(defun codex-ide-status-mode-test--transcript-text (&rest blocks)
+  "Return transcript text containing BLOCKS separated like session output."
+  (mapconcat
+   (lambda (block-lines)
+     (concat
+      (codex-ide--output-separator-string)
+      "\n"
+      (mapconcat #'identity block-lines "\n")
+      "\n"))
+   blocks
+   ""))
+
+(defun codex-ide-status-mode-test--face-includes-p (value face)
+  "Return non-nil when face VALUE includes FACE."
+  (if (listp value)
+      (memq face value)
+    (eq value face)))
+
+(ert-deftest codex-ide-status-transcript-preview-expands-to-full-current-block ()
+  (let* ((text (codex-ide-status-mode-test--transcript-text
+                '("alpha 1" "alpha 2")
+                '("beta 1" "beta 2" "beta 3")))
+         (preview (codex-ide-status-mode-test--preview-text text 1)))
+    (should (equal preview
+                   (concat "beta 1\nbeta 2\nbeta 3")))))
+
+(ert-deftest codex-ide-status-transcript-preview-starts-at-containing-block ()
+  (let* ((text (codex-ide-status-mode-test--transcript-text
+                '("alpha 1" "alpha 2")
+                '("beta 1" "beta 2" "beta 3")
+                '("gamma 1" "gamma 2")))
+         (preview (codex-ide-status-mode-test--preview-text text 5)))
+    (should (equal preview
+                   (concat
+                    "beta 1\nbeta 2\nbeta 3\n"
+                    "------------------------------------------------------------------------\n\n"
+                    "gamma 1\ngamma 2")))))
+
 (ert-deftest codex-ide-status-renders-project-sections-and-collapsed-entries ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
          (project-dir (expand-file-name "alpha" root-dir))
@@ -88,28 +136,64 @@
                                  (codex-ide--normalize-directory project-dir)))
                                "$")
                        (buffer-string)))
-              (should (string-match-p "Buffers (1)" (buffer-string)))
-              (should (string-match-p "Threads (2)" (buffer-string)))
+              (should (string-match-p "Sessions (2)" (buffer-string)))
               (should (string-match-p
                        (regexp-quote
-                        (format "Running  %s  Explain↵failure"
+                        (format "Running  %s  Earlier prompt"
                                 (buffer-name (codex-ide-session-buffer session))))
                        (buffer-string)))
-              (should (string-match-p "Stored  thread-s  Stored preview" (buffer-string)))
+              (should (string-match-p "Running  .*  Earlier prompt" (buffer-string)))
+              (should (string-match-p "Stored  none  Stored preview" (buffer-string)))
               (should-not (string-match-p (regexp-quote (buffer-name (codex-ide-session-buffer other-session)))
                                           (buffer-string)))
               (goto-char (point-min))
               (search-forward
-               (format "Running  %s  Explain↵failure"
+               (format "Running  %s  Earlier prompt"
                        (buffer-name (codex-ide-session-buffer session))))
               (beginning-of-line)
               (forward-line 1)
               (should (invisible-p (point)))
               (goto-char (point-min))
-              (search-forward "Stored  thread-s  Stored preview")
+              (search-forward "Stored  none  Stored preview")
               (beginning-of-line)
               (forward-line 1)
               (should (invisible-p (point))))))))))
+
+(ert-deftest codex-ide-status-cold-start-creates-query-session-buffer-header-and-prompt ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (requests nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
+                   (lambda () nil))
+                  ((symbol-function 'codex-ide--request-sync)
+                   (lambda (_session method _params)
+                     (push method requests)
+                     (pcase method
+                       ("initialize" '((ok . t)))
+                       (_ (ert-fail (format "Unexpected method %s" method))))))
+                  ((symbol-function 'codex-ide--thread-list-data)
+                   (lambda (&optional _session _omit-thread-id) nil)))
+          (let ((default-directory project-dir))
+            (codex-ide-status))
+          (should (equal (seq-remove (lambda (method)
+                                       (equal method "config/read"))
+                                     (nreverse requests))
+                         '("initialize")))
+          (should (= (length codex-ide--sessions) 1))
+          (let ((session (car codex-ide--sessions)))
+            (should (codex-ide--input-prompt-active-p session))
+            (with-current-buffer (codex-ide-session-buffer session)
+              (should (string-match-p
+                       (concat "^Codex session for "
+                               (regexp-quote
+                                 (abbreviate-file-name
+                                 (codex-ide--normalize-directory project-dir))))
+                       (buffer-string)))
+              (should (markerp
+                       (codex-ide-session-input-prompt-start-marker session)))
+              (should (markerp
+                       (codex-ide-session-input-start-marker session))))))))))
 
 (ert-deftest codex-ide-status-keeps-all-sibling-headings-visible-when-entries-are-collapsed ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -152,18 +236,12 @@
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward "Buffers (2)")
+              (search-forward "Sessions (2)")
+              (beginning-of-line)
+              (should-not (invisible-p (point)))
               (forward-line 1)
               (should-not (invisible-p (point)))
               (search-forward "Second prompt")
-              (beginning-of-line)
-              (should-not (invisible-p (point)))
-              (search-forward "Threads (2)")
-              (beginning-of-line)
-              (should-not (invisible-p (point)))
-              (forward-line 1)
-              (should-not (invisible-p (point)))
-              (search-forward "Beta thread")
               (beginning-of-line)
               (should-not (invisible-p (point))))))))))
 
@@ -207,15 +285,17 @@
                   (search-backward (buffer-name (codex-ide-session-buffer session)) (line-beginning-position) t)
                   (should (eq (get-text-property (point) 'face) 'shadow)))
                 (goto-char (point-min))
-                (search-forward "thread-a")
+                (search-forward (buffer-name (codex-ide-session-buffer session)))
                 (let ((line-end (line-end-position)))
                   (search-forward truncated-preview line-end t)
-                  (search-backward "thread-a" (line-beginning-position) t)
-                  (should (not (null (get-text-property (point) 'face)))))
+                  (search-backward (buffer-name (codex-ide-session-buffer session))
+                                   (line-beginning-position)
+                                   t)
+                  (should (eq (get-text-property (point) 'face) 'shadow)))
                 (should-not (string-match-p (regexp-quote long-preview)
                                             (buffer-string)))))))))))
 
-(ert-deftest codex-ide-status-buffer-heading-uses-last-submitted-prompt-text ()
+(ert-deftest codex-ide-status-buffer-heading-uses-first-submitted-prompt-text ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
          (project-dir (expand-file-name "alpha" root-dir))
          (threads `(((id . "thread-alpha")
@@ -230,7 +310,7 @@
             (setq session (codex-ide--create-process-session)))
           (codex-ide-status-mode-test--set-session-buffer-prompts
            session
-           '("Submitted prompt")
+           '("First prompt" "Submitted prompt")
            "I am the real active prompt")
           (setf (codex-ide-session-thread-id session) "thread-alpha"
                 (codex-ide-session-status session) "idle")
@@ -248,11 +328,169 @@
               (goto-char (point-min))
               (search-forward (buffer-name (codex-ide-session-buffer session)))
               (let ((line-end (line-end-position)))
-                (should (search-forward "Submitted prompt" line-end t))
+                (should (search-forward "First prompt" line-end t))
+                (goto-char (line-beginning-position))
+                (should-not (search-forward "Submitted prompt" line-end t))
                 (goto-char (line-beginning-position))
                 (should-not (search-forward "I am the real active prompt" line-end t))))))))))
 
-(ert-deftest codex-ide-status-tab-toggles-section-at-point ()
+(ert-deftest codex-ide-status-buffer-expanded-view-shows-last-prompt-and-last-response ()
+  (let* ((root-dir (codex-ide-test--make-temp-project))
+         (project-dir (expand-file-name "alpha" root-dir))
+         (threads `(((id . "thread-alpha")
+                     (preview . "Alpha thread")
+                     (createdAt . 10)
+                     (updatedAt . 20)))))
+    (make-directory project-dir t)
+    (codex-ide-test-with-fixture root-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session nil))
+          (let ((default-directory project-dir))
+            (setq session (codex-ide--create-process-session)))
+          (codex-ide-status-mode-test--set-session-buffer-with-response
+           session
+           '("First prompt"
+             "Explain\nfailure")
+           '("Assistant reply"))
+          (setf (codex-ide-session-thread-id session) "thread-alpha"
+                (codex-ide-session-status session) "idle")
+          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
+                     (lambda () nil))
+                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
+                     (lambda (_directory) session))
+                    ((symbol-function 'codex-ide--thread-list-data)
+                     (lambda (&optional _session _omit-thread-id)
+                       threads)))
+            (let ((default-directory project-dir)
+                  (codex-ide-status-mode-preview-max-width 120))
+              (codex-ide-status))
+            (with-current-buffer "codex-ide: alpha"
+              (goto-char (point-min))
+              (search-forward (format "Idle  %s  First prompt"
+                                      (buffer-name (codex-ide-session-buffer session))))
+              (beginning-of-line)
+              (codex-ide-section-toggle-at-point)
+              (let ((buffer-section-end (point-max)))
+                (should (search-forward "└ Last Prompt: Explain↵failure" buffer-section-end t))
+                (should (codex-ide-status-mode-test--face-includes-p
+                         (get-text-property (match-beginning 0) 'face)
+                         'shadow))
+                (should (codex-ide-status-mode-test--face-includes-p
+                         (get-text-property (match-beginning 0) 'face)
+                         'codex-ide-status-expanded-content-face))
+                (should (search-forward "└ Last Response:" buffer-section-end t))
+                (should (codex-ide-status-mode-test--face-includes-p
+                         (get-text-property (match-beginning 0) 'face)
+                         'shadow))
+                (should (codex-ide-status-mode-test--face-includes-p
+                         (get-text-property (match-beginning 0) 'face)
+                         'codex-ide-status-expanded-content-face))
+                (should (search-forward "  Assistant reply" buffer-section-end t))))))))))
+
+(ert-deftest codex-ide-status-thread-expanded-view-shows-buffer-details-when-linked ()
+  (let* ((root-dir (codex-ide-test--make-temp-project))
+         (project-dir (expand-file-name "alpha" root-dir))
+         (threads `(((id . "thread-alpha")
+                     (preview . "Stored preview")
+                     (createdAt . 10)
+                     (updatedAt . 20)))))
+    (make-directory project-dir t)
+    (codex-ide-test-with-fixture root-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session nil))
+          (let ((default-directory project-dir))
+            (setq session (codex-ide--create-process-session)))
+          (codex-ide-status-mode-test--set-session-buffer-with-response
+           session
+           '("First prompt"
+             "Explain\nfailure")
+           '("Assistant reply"))
+          (setf (codex-ide-session-thread-id session) "thread-alpha"
+                (codex-ide-session-status session) "idle")
+          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
+                     (lambda () nil))
+                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
+                     (lambda (_directory) session))
+                    ((symbol-function 'codex-ide--thread-list-data)
+                     (lambda (&optional _session _omit-thread-id)
+                       threads)))
+            (let ((default-directory project-dir)
+                  (codex-ide-status-mode-preview-max-width 120))
+              (codex-ide-status))
+            (with-current-buffer "codex-ide: alpha"
+              (goto-char (point-min))
+              (search-forward "Sessions (1)")
+              (forward-line 1)
+              (let ((line-end (line-end-position)))
+                (should (search-forward
+                         (format "Idle  %s  First prompt"
+                                 (buffer-name (codex-ide-session-buffer session)))
+                         line-end
+                         t)))
+              (codex-ide-section-toggle-at-point)
+              (forward-line 1)
+              (should (looking-at-p (regexp-quote "└ Thread ID: thread-alpha")))
+              (should (search-forward
+                       (format "└ Created: %s"
+                               (codex-ide--format-thread-updated-at 10))
+                       nil t))
+              (should (search-forward
+                       (format "└ Updated: %s"
+                               (codex-ide--format-thread-updated-at 20))
+                       nil t))
+              (should (search-forward "└ Last Prompt: Explain↵failure" nil t))
+              (should (search-forward "└ Last Response:" nil t))
+              (should (search-forward "    Assistant reply" nil t)))))))))
+
+(ert-deftest codex-ide-status-thread-expanded-view-omits-buffer-details-when-unlinked ()
+  (let* ((root-dir (codex-ide-test--make-temp-project))
+         (project-dir (expand-file-name "alpha" root-dir))
+         (threads `(((id . "thread-stored")
+                     (preview . "Stored preview")
+                     (createdAt . 30)
+                     (updatedAt . 40)))))
+    (make-directory project-dir t)
+    (codex-ide-test-with-fixture root-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session nil))
+          (let ((default-directory project-dir))
+            (setq session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
+                     (lambda () nil))
+                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
+                     (lambda (_directory) session))
+                    ((symbol-function 'codex-ide--thread-list-data)
+                     (lambda (&optional _session _omit-thread-id)
+                       threads)))
+            (let ((default-directory project-dir)
+                  (codex-ide-status-mode-preview-max-width 120))
+              (codex-ide-status))
+            (with-current-buffer "codex-ide: alpha"
+              (goto-char (point-min))
+              (search-forward "Stored  none  Stored preview")
+              (beginning-of-line)
+              (codex-ide-section-toggle-at-point)
+              (let ((thread-text
+                     (buffer-substring-no-properties
+                      (line-beginning-position 2)
+                      (save-excursion
+                        (forward-line 4)
+                        (line-beginning-position)))))
+                (should (string-match-p "└ Thread ID: thread-stored" thread-text))
+                (should (string-match-p
+                         (regexp-quote
+                          (format "└ Created: %s"
+                                  (codex-ide--format-thread-updated-at 30)))
+                         thread-text))
+                (should (string-match-p
+                         (regexp-quote
+                          (format "└ Updated: %s"
+                                  (codex-ide--format-thread-updated-at 40)))
+                         thread-text))
+                (should-not (string-match-p "Last Prompt:" thread-text))
+                (should-not (string-match-p "Last Response:" thread-text))))))))))
+
+(ert-deftest codex-ide-status-tab-toggles-session-section-at-point ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
          (project-dir (expand-file-name "alpha" root-dir))
          (threads `(((id . "thread-alpha")
@@ -278,7 +516,7 @@
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward "Buffers (1)")
+              (search-forward "Sessions (1)")
               (beginning-of-line)
               (forward-line 1)
               (should-not (invisible-p (point)))
@@ -295,7 +533,13 @@
   (should (eq (lookup-key codex-ide-status-mode-map (kbd "+"))
               #'codex-ide)))
 
-(ert-deftest codex-ide-status-refresh-preserves-expanded-and-collapsed-sections ()
+(ert-deftest codex-ide-status-mode-binds-tab-to-focal-point-navigation ()
+  (should (eq (lookup-key codex-ide-status-mode-map (kbd "TAB"))
+              #'codex-ide-status-mode-nav-forward))
+  (should (eq (lookup-key codex-ide-status-mode-map (kbd "<backtab>"))
+              #'codex-ide-status-mode-nav-backward)))
+
+(ert-deftest codex-ide-status-refresh-preserves-expanded-sections ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
          (project-dir (expand-file-name "alpha" root-dir))
          (threads `(((id . "thread-alpha")
@@ -328,20 +572,12 @@
               (search-forward "Idle  *codex[alpha]*")
               (beginning-of-line)
               (codex-ide-section-toggle-at-point)
-              (search-forward "Threads (1)")
-              (beginning-of-line)
-              (codex-ide-section-toggle-at-point)
               (codex-ide-status-mode-refresh)
               (goto-char (point-min))
               (search-forward "Idle  *codex[alpha]*")
               (beginning-of-line)
               (forward-line 1)
-              (should-not (invisible-p (point)))
-              (goto-char (point-min))
-              (search-forward "Threads (1)")
-              (beginning-of-line)
-              (forward-line 1)
-              (should (invisible-p (point))))))))))
+              (should-not (invisible-p (point))))))))))
 
 (ert-deftest codex-ide-status-refresh-preserves-point-relative-to-section ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -384,9 +620,9 @@
                        (codex-ide-section-heading-start
                         (codex-ide-status-mode--section-containing-point))))
               (codex-ide-status-mode-refresh)
-              (should (eq (codex-ide-section-value
-                           (codex-ide-status-mode--section-containing-point))
-                          session))
+              (should (equal (codex-ide-section-value
+                              (codex-ide-status-mode--section-containing-point))
+                             (car threads)))
               (should (= (- (point)
                             (codex-ide-section-heading-start
                              (codex-ide-status-mode--section-containing-point)))
@@ -396,43 +632,6 @@
                        (buffer-substring-no-properties
                         (line-beginning-position)
                         (line-end-position)))))))))))
-
-(ert-deftest codex-ide-status-ret-visits-buffer-section-at-point ()
-  (let* ((root-dir (codex-ide-test--make-temp-project))
-         (project-dir (expand-file-name "alpha" root-dir))
-         (threads nil))
-    (make-directory project-dir t)
-    (codex-ide-test-with-fixture root-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session nil)
-              (visited nil)
-              (display-options nil))
-          (let ((default-directory project-dir))
-            (setq session (codex-ide--create-process-session)))
-          (codex-ide-status-mode-test--set-session-buffer-prompts
-           session
-           '("Submitted prompt"))
-          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
-                     (lambda () nil))
-                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
-                     (lambda (_directory) session))
-                    ((symbol-function 'codex-ide--thread-list-data)
-                     (lambda (&optional _session _omit-thread-id)
-                       threads))
-                    ((symbol-function 'codex-ide--show-session-buffer)
-                     (lambda (arg)
-                       (setq visited arg
-                             display-options codex-ide-display-buffer-options))))
-            (let ((default-directory project-dir))
-              (codex-ide-status))
-            (with-current-buffer "codex-ide: alpha"
-              (goto-char (point-min))
-              (search-forward (buffer-name (codex-ide-session-buffer session)))
-              (beginning-of-line)
-              (call-interactively #'codex-ide-status-mode-visit-thing-at-point)
-              (should (eq visited session))
-              (should (equal display-options '(:reuse-buffer-window
-                                              :reuse-mode-window))))))))))
 
 (ert-deftest codex-ide-status-ret-visits-thread-section-at-point ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -477,41 +676,6 @@
               (should (= prepare-count 2))
               (should (equal display-options '(:reuse-buffer-window
                                               :reuse-mode-window))))))))))
-
-(ert-deftest codex-ide-status-delete-kills-buffer-section-at-point ()
-  (let* ((root-dir (codex-ide-test--make-temp-project))
-         (project-dir (expand-file-name "alpha" root-dir))
-         (threads nil))
-    (make-directory project-dir t)
-    (codex-ide-test-with-fixture root-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session nil))
-          (let ((default-directory project-dir))
-            (setq session (codex-ide--create-process-session)))
-          (codex-ide-status-mode-test--set-session-buffer-prompts
-           session
-           '("Submitted prompt"))
-          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
-                     (lambda () nil))
-                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
-                     (lambda (_directory) session))
-                    ((symbol-function 'codex-ide--thread-list-data)
-                     (lambda (&optional _session _omit-thread-id)
-                       threads))
-                    ((symbol-function 'y-or-n-p)
-                     (lambda (_prompt) t)))
-            (let ((default-directory project-dir))
-              (codex-ide-status))
-            (with-current-buffer "codex-ide: alpha"
-              (goto-char (point-min))
-              (search-forward (buffer-name (codex-ide-session-buffer session)))
-              (beginning-of-line)
-              (call-interactively #'codex-ide-status-mode-delete-thing-at-point)
-              (should-not (buffer-live-p (codex-ide-session-buffer session)))
-              (should-not (string-match-p
-                           (regexp-quote "Buffers (1)")
-                           (buffer-string)))
-              (should (string-match-p "Buffers (0)" (buffer-string))))))))))
 
 (ert-deftest codex-ide-status-delete-removes-thread-section-at-point ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -561,8 +725,8 @@
               (should (equal deleted-thread-id "thread-alpha"))
               (should skip-confirmation)
               (should (= prepare-count 3))
-              (should-not (string-match-p "Threads (1)" (buffer-string)))
-              (should (string-match-p "Threads (0)" (buffer-string))))))))))
+              (should-not (string-match-p "Sessions (1)" (buffer-string)))
+              (should (string-match-p "Sessions (0)" (buffer-string))))))))))
 
 (ert-deftest codex-ide-status-delete-removes-thread-sections-in-region ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -634,85 +798,11 @@
                              '("thread-alpha" "thread-beta")))
               (should (equal skip-confirmations '(t t)))
               (should (= prepare-count 3))
-              (should-not (string-match-p "Threads (3)" (buffer-string)))
-              (should (string-match-p "Threads (1)" (buffer-string)))
+              (should-not (string-match-p "Sessions (3)" (buffer-string)))
+              (should (string-match-p "Sessions (1)" (buffer-string)))
               (should-not (string-match-p "thread-a" (buffer-string)))
               (should-not (string-match-p "thread-b" (buffer-string)))
               (should (string-match-p "thread-g" (buffer-string))))))))))
-
-(ert-deftest codex-ide-status-delete-removes-mixed-sections-in-region ()
-  (let* ((root-dir (codex-ide-test--make-temp-project))
-         (project-dir (expand-file-name "alpha" root-dir))
-         (threads '(((id . "thread-alpha")
-                     (preview . "Alpha thread")
-                     (createdAt . 10)
-                     (updatedAt . 20)))))
-    (make-directory project-dir t)
-    (codex-ide-test-with-fixture root-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session nil)
-              (other-session nil)
-              (deleted-thread-ids nil)
-              (confirmation-count 0)
-              (prepare-count 0)
-              (session-buffer-name nil)
-              (other-session-buffer-name nil))
-          (let ((default-directory project-dir))
-            (setq session (codex-ide--create-process-session))
-            (setq other-session (codex-ide--create-process-session)))
-          (setq session-buffer-name
-                (buffer-name (codex-ide-session-buffer session))
-                other-session-buffer-name
-                (buffer-name (codex-ide-session-buffer other-session)))
-          (codex-ide-status-mode-test--set-session-buffer-prompts
-           session
-           '("Submitted prompt"))
-          (codex-ide-status-mode-test--set-session-buffer-prompts
-           other-session
-           '("Follow-up prompt"))
-          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
-                     (lambda ()
-                       (setq prepare-count (1+ prepare-count))))
-                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
-                     (lambda (_directory) session))
-                    ((symbol-function 'codex-ide--thread-list-data)
-                     (lambda (&optional _session _omit-thread-id)
-                       (if deleted-thread-ids nil threads)))
-                    ((symbol-function 'codex-ide-delete-session-thread)
-                     (lambda (thread-id &optional _skip-confirm)
-                       (push thread-id deleted-thread-ids)))
-                    ((symbol-function 'y-or-n-p)
-                     (lambda (prompt)
-                       (setq confirmation-count (1+ confirmation-count))
-                       (should (equal prompt "Delete 3 Codex status entries? "))
-                       t)))
-            (let ((default-directory project-dir))
-              (codex-ide-status))
-            (with-current-buffer "codex-ide: alpha"
-              (goto-char (point-min))
-              (search-forward (buffer-name (codex-ide-session-buffer session)))
-              (beginning-of-line)
-              (push-mark (save-excursion
-                           (search-forward "thread-a")
-                           (line-end-position))
-                         t t)
-              (activate-mark)
-              (call-interactively #'codex-ide-status-mode-delete-thing-at-point)
-              (should (= confirmation-count 1))
-              (should (equal deleted-thread-ids '("thread-alpha")))
-              (should-not (buffer-live-p (codex-ide-session-buffer session)))
-              (should-not (buffer-live-p (codex-ide-session-buffer other-session)))
-              (should (= prepare-count 3))
-              (should (string-match-p "Buffers (0)" (buffer-string)))
-              (should (string-match-p "Threads (0)" (buffer-string)))
-              (should-not (string-match-p
-                           (regexp-quote
-                            session-buffer-name)
-                           (buffer-string)))
-              (should-not (string-match-p
-                           (regexp-quote
-                            other-session-buffer-name)
-                           (buffer-string))))))))))
 
 (ert-deftest codex-ide-status-actions-reject-parent-sections ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -735,7 +825,7 @@
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward "Buffers (1)")
+              (search-forward "Sessions (0)")
               (beginning-of-line)
               (should-error
                (call-interactively #'codex-ide-status-mode-visit-thing-at-point)
@@ -743,241 +833,6 @@
               (should-error
                (call-interactively #'codex-ide-status-mode-delete-thing-at-point)
                :type 'user-error))))))))
-
-(ert-deftest codex-ide-status-buffer-section-renders-last-agent-output-block-only ()
-  (let* ((root-dir (codex-ide-test--make-temp-project))
-         (project-dir (expand-file-name "alpha" root-dir))
-         (threads `(((id . "thread-alpha")
-                     (preview . "Alpha thread")
-                     (createdAt . 10)
-                     (updatedAt . 20)))))
-    (make-directory project-dir t)
-    (codex-ide-test-with-fixture root-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session nil))
-          (let ((default-directory project-dir))
-            (setq session (codex-ide--create-process-session)))
-          (with-current-buffer (codex-ide-session-buffer session)
-            (let ((inhibit-read-only t))
-              (erase-buffer)
-              (let ((first-start (point)))
-                (insert "> First prompt")
-                (codex-ide--style-user-prompt-region first-start (point))
-                (insert "\n\n")
-                (let ((codex-ide--current-agent-item-type "agentMessage"))
-                  (codex-ide--append-output-separator (current-buffer))
-                  (codex-ide--append-agent-text (current-buffer) "\nold response\n")))
-              (let ((second-start (point)))
-                (insert "> Latest prompt")
-                (codex-ide--style-user-prompt-region second-start (point))
-                (insert "\n\n")
-                (let ((codex-ide--current-agent-item-type "agentMessage"))
-                  (codex-ide--append-output-separator (current-buffer))
-                  (codex-ide--append-agent-text (current-buffer) "\nolder block in latest reply\n")
-                  (codex-ide--append-output-separator (current-buffer))
-                  (codex-ide--append-agent-text (current-buffer) "\nlatest response\n")))))
-          (codex-ide--insert-input-prompt session "draft follow-up")
-          (setf (codex-ide-session-thread-id session) "thread-alpha"
-                (codex-ide-session-status session) "idle")
-          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
-                     (lambda () nil))
-                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
-                     (lambda (_directory) session))
-                    ((symbol-function 'codex-ide--thread-list-data)
-                     (lambda (&optional _session _omit-thread-id)
-                       threads)))
-            (let ((default-directory project-dir))
-              (codex-ide-status))
-            (with-current-buffer "codex-ide: alpha"
-              (goto-char (point-min))
-              (search-forward "Idle  *codex[alpha]*")
-              (beginning-of-line)
-              (codex-ide-section-toggle-at-point)
-              (let ((buffer-section-end (save-excursion
-                                          (search-forward "Threads (1)")
-                                          (match-beginning 0))))
-                (should (search-forward "  latest response" buffer-section-end t))
-                (should (eq (get-text-property (match-beginning 0) 'face) 'shadow))
-                (goto-char (line-beginning-position))
-                (should-not (search-forward
-                             (string-trim-right (codex-ide--output-separator-string))
-                             buffer-section-end t))
-                (should-not (search-forward "Latest prompt" buffer-section-end t))
-                (should-not (search-forward "draft follow-up" buffer-section-end t))
-                (should-not (search-forward "First prompt" buffer-section-end t))
-                (should-not (search-forward "old response" buffer-section-end t))
-                (should-not (search-forward "older block in latest reply" buffer-section-end t))
-                (goto-char (line-beginning-position))
-                (should-not (search-forward "Buffer:" buffer-section-end t))))))))))
-
-(ert-deftest codex-ide-status-buffer-section-renders-in-progress-agent-output ()
-  (let* ((root-dir (codex-ide-test--make-temp-project))
-         (project-dir (expand-file-name "alpha" root-dir))
-         (threads `(((id . "thread-alpha")
-                     (preview . "Alpha thread")
-                     (createdAt . 10)
-                     (updatedAt . 20)))))
-    (make-directory project-dir t)
-    (codex-ide-test-with-fixture root-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session nil))
-          (let ((default-directory project-dir))
-            (setq session (codex-ide--create-process-session)))
-          (codex-ide-status-mode-test--set-session-buffer-with-response
-           session
-           '("Earlier prompt")
-           '("completed response")
-           "Current prompt")
-          (codex-ide--begin-turn-display session)
-          (with-current-buffer (codex-ide-session-buffer session)
-            (let ((codex-ide--current-agent-item-type "agentMessage"))
-              (codex-ide--append-agent-text
-               (current-buffer)
-               "in-progress preface\n")
-              (codex-ide--append-output-separator (current-buffer))
-              (codex-ide--append-agent-text
-               (current-buffer)
-               "\nin-progress response\n")))
-          (setf (codex-ide-session-thread-id session) "thread-alpha"
-                (codex-ide-session-status session) "running")
-          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
-                     (lambda () nil))
-                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
-                     (lambda (_directory) session))
-                    ((symbol-function 'codex-ide--thread-list-data)
-                     (lambda (&optional _session _omit-thread-id)
-                       threads)))
-            (let ((default-directory project-dir))
-              (codex-ide-status))
-            (with-current-buffer "codex-ide: alpha"
-              (goto-char (point-min))
-              (search-forward "Running  *codex[alpha]*")
-              (beginning-of-line)
-              (codex-ide-section-toggle-at-point)
-              (let ((buffer-section-end (save-excursion
-                                          (search-forward "Threads (1)")
-                                          (match-beginning 0))))
-                (should (search-forward "  in-progress response" buffer-section-end t))
-                (goto-char (line-beginning-position))
-                (should-not (search-forward "in-progress preface" buffer-section-end t))
-                (goto-char (line-beginning-position))
-                (should-not (search-forward "completed response" buffer-section-end t))
-                (should-not (search-forward "Current prompt" buffer-section-end t))))))))))
-
-(ert-deftest codex-ide-status-buffer-section-renders-first-in-progress-agent-output ()
-  (let* ((root-dir (codex-ide-test--make-temp-project))
-         (project-dir (expand-file-name "alpha" root-dir))
-         (threads `(((id . "thread-alpha")
-                     (preview . "Alpha thread")
-                     (createdAt . 10)
-                     (updatedAt . 20)))))
-    (make-directory project-dir t)
-    (codex-ide-test-with-fixture root-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session nil))
-          (let ((default-directory project-dir))
-            (setq session (codex-ide--create-process-session)))
-          (codex-ide-status-mode-test--set-session-buffer-prompts
-           session
-           nil
-           "First prompt")
-          (codex-ide--begin-turn-display session)
-          (with-current-buffer (codex-ide-session-buffer session)
-            (let ((codex-ide--current-agent-item-type "agentMessage"))
-              (codex-ide--append-output-separator (current-buffer))
-              (codex-ide--append-agent-text
-               (current-buffer)
-               "\nfirst live response\n")))
-          (setf (codex-ide-session-thread-id session) "thread-alpha"
-                (codex-ide-session-status session) "running")
-          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
-                     (lambda () nil))
-                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
-                     (lambda (_directory) session))
-                    ((symbol-function 'codex-ide--thread-list-data)
-                     (lambda (&optional _session _omit-thread-id)
-                       threads)))
-            (let ((default-directory project-dir))
-              (codex-ide-status))
-            (with-current-buffer "codex-ide: alpha"
-              (goto-char (point-min))
-              (search-forward "Running  *codex[alpha]*")
-              (beginning-of-line)
-              (codex-ide-section-toggle-at-point)
-              (let ((buffer-section-end (save-excursion
-                                          (search-forward "Threads (1)")
-                                          (match-beginning 0))))
-                (should (search-forward "  first live response" buffer-section-end t))
-                (goto-char (line-beginning-position))
-                (should-not (search-forward "First prompt" buffer-section-end t))))))))))
-
-(ert-deftest codex-ide-status-buffer-section-renders-approval-block ()
-  (let* ((root-dir (codex-ide-test--make-temp-project))
-         (project-dir (expand-file-name "alpha" root-dir))
-         (threads `(((id . "thread-alpha")
-                     (preview . "Alpha thread")
-                     (createdAt . 10)
-                     (updatedAt . 20)))))
-    (make-directory project-dir t)
-    (codex-ide-test-with-fixture root-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session nil))
-          (let ((default-directory project-dir))
-            (setq session (codex-ide--create-process-session)))
-          (codex-ide-status-mode-test--set-session-buffer-prompts
-           session
-           nil
-           "Approval prompt")
-          (codex-ide--begin-turn-display session)
-          (with-current-buffer (codex-ide-session-buffer session)
-            (let ((codex-ide--current-agent-item-type "agentMessage"))
-              (codex-ide--append-agent-text
-               (current-buffer)
-               "Need approval before I continue.\n")))
-          (codex-ide--render-item-start
-           session
-           '((id . "cmd-1")
-             (type . "commandExecution")
-             (callId . "call-1")
-             (command . "/bin/zsh -lc \"printf foo\"")
-             (cwd . "/tmp")))
-          (codex-ide--render-buffer-approval
-           session
-           42
-           'command
-           "[Approval required]"
-           '((:kind command :text "/bin/zsh -lc \"printf foo\"")
-             (:label "Reason" :text "Need to write a file"))
-           '(("accept" . "accept")
-             ("decline" . "decline"))
-           '((command . "/bin/zsh -lc \"printf foo\"")))
-          (setf (codex-ide-session-thread-id session) "thread-alpha")
-          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
-                     (lambda () nil))
-                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
-                     (lambda (_directory) session))
-                    ((symbol-function 'codex-ide--thread-list-data)
-                     (lambda (&optional _session _omit-thread-id)
-                       threads)))
-            (let ((default-directory project-dir))
-              (codex-ide-status))
-            (with-current-buffer "codex-ide: alpha"
-              (goto-char (point-min))
-              (search-forward "Approval  *codex[alpha]*")
-              (beginning-of-line)
-              (codex-ide-section-toggle-at-point)
-              (let ((buffer-section-end (save-excursion
-                                          (search-forward "Threads (1)")
-                                          (match-beginning 0))))
-                (should (search-forward "  [Approval required]" buffer-section-end t))
-                (should (search-forward "  Run the following command?" buffer-section-end t))
-                (should (search-forward "      /bin/zsh -lc \"printf foo\"" buffer-section-end t))
-                (should (search-forward "  Reason: Need to write a file" buffer-section-end t))
-                (should (search-forward "  [accept]" buffer-section-end t))
-                (goto-char (line-beginning-position))
-                (should-not (search-forward "Need approval before I continue." buffer-section-end t))
-                (should-not (search-forward "* Ran /bin/zsh -lc \"printf foo\"" buffer-section-end t))
-                (should-not (search-forward "cwd: /tmp" buffer-section-end t))))))))))
 
 (ert-deftest codex-ide-status-thread-section-renders-dimmed-metadata-and-full-preview ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -1011,142 +866,107 @@
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward "Threads (1)")
-              (search-forward "thread-a")
+              (search-forward "Sessions (1)")
+              (search-forward "*codex[alpha]*")
               (beginning-of-line)
               (codex-ide-section-toggle-at-point)
-              (should (search-forward "└ Thread: thread-alpha" nil t))
-              (should (eq (get-text-property (match-beginning 0) 'face) 'shadow))
-              (should (search-forward "└ Buffer: *codex[alpha]*" nil t))
-              (should (eq (get-text-property (match-beginning 0) 'face) 'shadow))
+              (should (search-forward "└ Thread ID: thread-alpha" nil t))
+              (should (codex-ide-status-mode-test--face-includes-p
+                       (get-text-property (match-beginning 0) 'face)
+                       'shadow))
+              (should (codex-ide-status-mode-test--face-includes-p
+                       (get-text-property (match-beginning 0) 'face)
+                       'codex-ide-status-expanded-content-face))
               (should (search-forward
                        (format "└ Created: %s"
                                (codex-ide--format-thread-updated-at 10))
                        nil t))
-              (should (eq (get-text-property (match-beginning 0) 'face) 'shadow))
+              (should (codex-ide-status-mode-test--face-includes-p
+                       (get-text-property (match-beginning 0) 'face)
+                       'shadow))
+              (should (codex-ide-status-mode-test--face-includes-p
+                       (get-text-property (match-beginning 0) 'face)
+                       'codex-ide-status-expanded-content-face))
               (should (search-forward
                        (format "└ Updated: %s"
                                (codex-ide--format-thread-updated-at 20))
                        nil t))
-              (should (eq (get-text-property (match-beginning 0) 'face) 'shadow))
-              (should-not (search-forward "Preview:" nil t))
+              (should (codex-ide-status-mode-test--face-includes-p
+                       (get-text-property (match-beginning 0) 'face)
+                       'shadow))
+              (should (codex-ide-status-mode-test--face-includes-p
+                       (get-text-property (match-beginning 0) 'face)
+                       'codex-ide-status-expanded-content-face))
+              (should-not (search-forward "Last Prompt:" nil t))
+              (should-not (search-forward "Last Response:" nil t))
               (should-not (search-forward "Thread preview first line" nil t))
               (should-not (search-forward "Thread preview second line" nil t))
               (should-not (search-forward "Buffer: sample.el" nil t)))))))))
 
-(ert-deftest codex-ide-status-buffer-section-preserves-source-faces ()
+(ert-deftest codex-ide-status-auto-refresh-subscribes-and-filters-session-events ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
          (project-dir (expand-file-name "alpha" root-dir))
-         (response-lines (list (propertize "highlighted line"
-                                           'face 'font-lock-keyword-face)))
-         (threads `(((id . "thread-alpha")
-                     (preview . "Alpha thread")
-                     (createdAt . 10)
-                     (updatedAt . 20)))))
+         (other-dir (expand-file-name "beta" root-dir))
+         (scheduled-callback nil)
+         (scheduled-args nil)
+         (refresh-count 0))
     (make-directory project-dir t)
+    (make-directory other-dir t)
     (codex-ide-test-with-fixture root-dir
       (codex-ide-test-with-fake-processes
-        (let ((session nil))
+        (let ((session nil)
+              (other-session nil))
           (let ((default-directory project-dir))
             (setq session (codex-ide--create-process-session)))
-          (codex-ide-status-mode-test--set-session-buffer-with-response
-           session
-           '("Prompt")
-           response-lines)
-          (setf (codex-ide-session-thread-id session) "thread-alpha"
-                (codex-ide-session-status session) "idle")
+          (let ((default-directory other-dir))
+            (setq other-session (codex-ide--create-process-session)))
           (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
                      (lambda () nil))
                     ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
                      (lambda (_directory) session))
                     ((symbol-function 'codex-ide--thread-list-data)
                      (lambda (&optional _session _omit-thread-id)
-                       threads)))
+                       nil))
+                    ((symbol-function 'run-with-idle-timer)
+                     (lambda (_delay _repeat function &rest args)
+                       (setq scheduled-callback function
+                             scheduled-args args)
+                       'codex-ide-status-test-timer))
+                    ((symbol-function 'timerp)
+                     (lambda (object)
+                       (eq object 'codex-ide-status-test-timer)))
+                    ((symbol-function 'cancel-timer)
+                     (lambda (_timer)
+                       nil))
+                    ((symbol-function 'codex-ide-status-mode-refresh)
+                     (lambda (&optional _ignore-auto _noconfirm)
+                       (setq refresh-count (1+ refresh-count)))))
             (let ((default-directory project-dir))
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
-              (goto-char (point-min))
-              (search-forward "Idle  *codex[alpha]*")
-              (beginning-of-line)
-              (codex-ide-section-toggle-at-point)
-              (search-forward "  highlighted line")
-              (should (eq (get-text-property (match-beginning 0) 'face) 'shadow))
-              (should (eq (get-text-property (+ (match-beginning 0) 2) 'face)
-                          'font-lock-keyword-face)))))))))
-
-(ert-deftest codex-ide-status-buffer-section-renders-nothing-without-agent-reply ()
-  (let* ((root-dir (codex-ide-test--make-temp-project))
-         (project-dir (expand-file-name "alpha" root-dir))
-         (threads `(((id . "thread-alpha")
-                     (preview . "Alpha thread")
-                     (createdAt . 10)
-                     (updatedAt . 20)))))
-    (make-directory project-dir t)
-    (codex-ide-test-with-fixture root-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session nil))
-          (let ((default-directory project-dir))
-            (setq session (codex-ide--create-process-session)))
-          (codex-ide-status-mode-test--set-session-buffer-prompts
-           session
-           nil
-           "Later prompt")
-          (setf (codex-ide-session-thread-id session) "thread-alpha"
-                (codex-ide-session-status session) "idle")
-          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
-                     (lambda () nil))
-                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
-                     (lambda (_directory) session))
-                    ((symbol-function 'codex-ide--thread-list-data)
-                     (lambda (&optional _session _omit-thread-id)
-                       threads)))
-            (let ((default-directory project-dir))
-              (codex-ide-status))
-            (with-current-buffer "codex-ide: alpha"
-              (goto-char (point-min))
-              (search-forward "Idle  *codex[alpha]*")
-              (beginning-of-line)
-              (codex-ide-section-toggle-at-point)
-              (let ((buffer-section-end (save-excursion
-                                          (search-forward "Threads (1)")
-                                          (match-beginning 0))))
-                (should-not (search-forward "└ Preview:" buffer-section-end t))))))))))
-
-(ert-deftest codex-ide-status-buffer-section-renders-nothing-when-empty ()
-  (let* ((root-dir (codex-ide-test--make-temp-project))
-         (project-dir (expand-file-name "alpha" root-dir))
-         (threads `(((id . "thread-alpha")
-                     (preview . "Alpha thread")
-                     (createdAt . 10)
-                     (updatedAt . 20)))))
-    (make-directory project-dir t)
-    (codex-ide-test-with-fixture root-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session nil))
-          (let ((default-directory project-dir))
-            (setq session (codex-ide--create-process-session)))
-          (codex-ide-status-mode-test--set-session-buffer-prompts session nil "")
-          (setf (codex-ide-session-thread-id session) "thread-alpha"
-                (codex-ide-session-status session) "idle")
-          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
-                     (lambda () nil))
-                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
-                     (lambda (_directory) session))
-                    ((symbol-function 'codex-ide--thread-list-data)
-                     (lambda (&optional _session _omit-thread-id)
-                       threads)))
-            (let ((default-directory project-dir))
-              (codex-ide-status))
-            (with-current-buffer "codex-ide: alpha"
-              (goto-char (point-min))
-              (search-forward "Idle  *codex[alpha]*")
-              (beginning-of-line)
-              (codex-ide-section-toggle-at-point)
-              (let ((buffer-section-end (save-excursion
-                                          (search-forward "Threads (1)")
-                                          (match-beginning 0))))
-                (should-not (search-forward "└ Last Prompt:" buffer-section-end t))
-                (should-not (search-forward "└ Preview:" buffer-section-end t))))))))))
+              (run-hook-with-args 'codex-ide-session-event-hook
+                                  'status-changed
+                                  other-session
+                                  '(:status "running"))
+              (should-not scheduled-callback)
+              (run-hook-with-args 'codex-ide-session-event-hook
+                                  'status-changed
+                                  session
+                                  '(:status "running"))
+              (should (eq scheduled-callback
+                          #'codex-ide-status-mode--run-scheduled-refresh))
+              (should (equal scheduled-args (list (current-buffer))))
+              (run-hook-with-args 'codex-ide-session-event-hook
+                                  'status-changed
+                                  session
+                                  '(:status "idle"))
+              (should (= refresh-count 0))
+              (apply scheduled-callback scheduled-args)
+              (should (= refresh-count 1))
+              (should-not codex-ide-status-mode--refresh-timer)
+              (let ((listener codex-ide-status-mode--event-listener))
+                (kill-buffer (current-buffer))
+                (should-not (member listener codex-ide-session-event-hook))))))))))
 
 (provide 'codex-ide-status-mode-tests)
 

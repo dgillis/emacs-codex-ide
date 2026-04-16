@@ -17,6 +17,27 @@
 (require 'codex-ide-session-buffer-list-tests)
 (require 'codex-ide-session-thread-list-tests)
 
+(defun codex-ide-test--prompt-prefix-at-line ()
+  "Return the visible prompt prefix overlay string at the current line."
+  (save-excursion
+    (beginning-of-line)
+    (when-let ((overlay (codex-ide--prompt-prefix-overlay-at (point))))
+      (overlay-get overlay 'before-string))))
+
+(defun codex-ide-test--line-has-prompt-start ()
+  "Return non-nil when the current line is marked as a prompt line."
+  (save-excursion
+    (beginning-of-line)
+    (codex-ide--line-has-prompt-start-p)))
+
+(defun codex-ide-test--prompt-prefix-overlay-count ()
+  "Return the number of prompt prefix overlays in the current buffer."
+  (seq-count
+   (lambda (overlay)
+     (overlay-get overlay codex-ide-prompt-prefix-overlay-property))
+   (append (car (overlay-lists))
+           (cdr (overlay-lists)))))
+
 (ert-deftest codex-ide-app-server-command-includes-bridge-and-extra-flags ()
   (let ((codex-ide-cli-path "/tmp/codex")
         (codex-ide-cli-extra-flags "--model test-model --debug")
@@ -85,6 +106,45 @@
                               (codex-ide-session-process session))
                              'codex-session)
                   session)))))))
+
+(ert-deftest codex-ide-create-process-session-emits-created-event ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (events nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((codex-ide-session-event-hook
+               (list (lambda (event session payload)
+                       (push (list event session payload) events)))))
+          (let ((session (codex-ide--create-process-session)))
+            (should (= (length events) 1))
+            (pcase-let ((`(,event ,emitted-session ,payload) (car events)))
+              (should (eq event 'created))
+              (should (eq emitted-session session))
+              (should (equal (plist-get payload :directory)
+                             (codex-ide-session-directory session)))
+              (should (eq (plist-get payload :buffer)
+                          (codex-ide-session-buffer session)))
+              (should (equal (plist-get payload :status) "starting")))))))))
+
+(ert-deftest codex-ide-set-session-status-emits-only-on-change ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (events nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((codex-ide-session-event-hook
+               (list (lambda (event session payload)
+                       (push (list event session payload) events)))))
+          (let ((session (codex-ide--create-process-session)))
+            (setq events nil)
+            (codex-ide--set-session-status session "idle" 'test-transition)
+            (codex-ide--set-session-status session "idle" 'test-transition)
+            (should (= (length events) 1))
+            (pcase-let ((`(,event ,emitted-session ,payload) (car events)))
+              (should (eq event 'status-changed))
+              (should (eq emitted-session session))
+              (should (equal (plist-get payload :old-status) "starting"))
+              (should (equal (plist-get payload :status) "idle"))
+              (should (eq (plist-get payload :reason) 'test-transition)))))))))
 
 (ert-deftest codex-ide-create-process-session-errors-gracefully-when-executable-is-missing ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -421,7 +481,8 @@
       (undo-boundary)
       (should buffer-undo-list)
       (primitive-undo 1 (cdr buffer-undo-list))
-      (should (string= (buffer-string) "> ")))))
+      (should (string-empty-p (buffer-string)))
+      (should (equal (codex-ide-test--prompt-prefix-at-line) "> ")))))
 
 (ert-deftest codex-ide-insert-input-prompt-clears-stale-undo-history ()
   (with-temp-buffer
@@ -453,8 +514,9 @@
       (should buffer-undo-list)
       (codex-ide--begin-turn-display session)
       (should-not buffer-undo-list)
-      (should (string-match-p "^> submitted prompt\n\nWorking\\.\\.\\.\n\n> \\'"
-                              (buffer-string))))))
+      (should (string-match-p "submitted prompt\n\nWorking\\.\\.\\.\n"
+                              (buffer-string)))
+      (should (codex-ide--input-prompt-active-p session)))))
 
 (ert-deftest codex-ide-running-input-stays-below-streamed-items ()
   (with-temp-buffer
@@ -474,14 +536,14 @@
          (command . "echo hi")
          (cwd . "/tmp")))
       (should (string-match-p
-               (rx "> submitted prompt"
+               (rx "submitted prompt"
                    (* anything)
-                   "* Ran command"
-                   (* anything)
-                   "\n> steer me"
-                   string-end)
+                   "* Ran command")
                (buffer-string)))
-      (should (equal (codex-ide--current-input session) "steer me")))))
+      (should (equal (codex-ide--current-input session) "steer me"))
+      (goto-char (marker-position
+                  (codex-ide-session-input-prompt-start-marker session)))
+      (should (equal (codex-ide-test--prompt-prefix-at-line) "> ")))))
 
 (ert-deftest codex-ide-running-output-spacing-preserves-input-point ()
   (with-temp-buffer
@@ -513,8 +575,11 @@
       (codex-ide--append-to-buffer (current-buffer) "Final answer.\n")
       (codex-ide--finish-turn session)
       (should (string-match-p
-               (rx "Final answer." "\n\n> steer draft" string-end)
-               (buffer-string))))))
+               (rx "Final answer." "\n\nsteer draft" string-end)
+               (buffer-string)))
+      (goto-char (marker-position
+                  (codex-ide-session-input-prompt-start-marker session)))
+      (should (equal (codex-ide-test--prompt-prefix-at-line) "> ")))))
 
 (ert-deftest codex-ide-first-rendered-item-clears-pending-output-indicator ()
   (with-temp-buffer
@@ -786,46 +851,47 @@
         (should (string-match-p "  └ found 2 hits" buffer-text))))))
 
 (ert-deftest codex-ide-command-execution-streams-output-and-folds-on-completion ()
-  (with-temp-buffer
-    (codex-ide-session-mode)
-    (let ((session (make-codex-ide-session
-                    :directory default-directory
-                    :buffer (current-buffer)
-                    :status "idle"
-                    :item-states (make-hash-table :test 'equal))))
-      (setq-local codex-ide--session session)
-      (codex-ide--insert-input-prompt session "submitted prompt")
-      (codex-ide--begin-turn-display session)
-      (codex-ide--render-item-start
-       session
-       '((id . "call-1")
-         (type . "commandExecution")
-         (command . ["echo" "hello"])))
-      (codex-ide--handle-notification
-       session
-       '((method . "item/commandExecution/outputDelta")
-         (params . ((itemId . "call-1")
-                    (delta . "hello\nworld\n")))))
-      (should (string-match-p "    hello\n    world" (buffer-string)))
-      (goto-char (point-min))
-      (search-forward "output: 2 lines, streaming")
-      (let ((overlay (get-char-property
-                      (match-beginning 0)
-                      codex-ide-command-output-overlay-property)))
-        (should (overlayp overlay))
-        (should-not (overlay-get overlay 'invisible))
-        (codex-ide--render-item-completion
+  (let ((codex-ide-command-output-fold-on-start nil))
+    (with-temp-buffer
+      (codex-ide-session-mode)
+      (let ((session (make-codex-ide-session
+                      :directory default-directory
+                      :buffer (current-buffer)
+                      :status "idle"
+                      :item-states (make-hash-table :test 'equal))))
+        (setq-local codex-ide--session session)
+        (codex-ide--insert-input-prompt session "submitted prompt")
+        (codex-ide--begin-turn-display session)
+        (codex-ide--render-item-start
          session
          '((id . "call-1")
            (type . "commandExecution")
-           (status . "completed")
-           (exitCode . 0)))
-        (should (overlay-get overlay 'invisible))
-        (should (overlay-get overlay :folded))
-        (should (string-match-p "output: 2 lines \\[expand\\]"
-                                (buffer-string)))
-        (should-not (string-match-p "    hello\n    world"
-                                    (buffer-string)))))))
+           (command . ["echo" "hello"])))
+        (codex-ide--handle-notification
+         session
+         '((method . "item/commandExecution/outputDelta")
+           (params . ((itemId . "call-1")
+                      (delta . "hello\nworld\n")))))
+        (should (string-match-p "    hello\n    world" (buffer-string)))
+        (goto-char (point-min))
+        (search-forward "output: 2 lines, streaming [fold]")
+        (let ((overlay (get-char-property
+                        (match-beginning 0)
+                        codex-ide-command-output-overlay-property)))
+          (should (overlayp overlay))
+          (should-not (overlay-get overlay 'invisible))
+          (codex-ide--render-item-completion
+           session
+           '((id . "call-1")
+             (type . "commandExecution")
+             (status . "completed")
+             (exitCode . 0)))
+          (should (overlay-get overlay 'invisible))
+          (should (overlay-get overlay :folded))
+          (should (string-match-p "output: 2 lines \\[expand\\]"
+                                  (buffer-string)))
+          (should-not (string-match-p "    hello\n    world"
+                                      (buffer-string))))))))
 
 (ert-deftest codex-ide-command-output-face-extends-line-background ()
   (should (eq (face-attribute 'codex-ide-command-output-face :extend nil t)
@@ -857,15 +923,14 @@
         (let ((buffer-text (buffer-string))
               (state (codex-ide--item-state session "call-1")))
           (should (string-match-p
-                   "output: 5 lines, showing last 3, streaming \\[fold\\] \\[full output\\]"
+                   "output: 5 lines, showing last 3, streaming \\[expand\\] \\[full output\\]"
                    buffer-text))
-          (should (string-match-p
-                   "transcript output truncated; showing latest output"
-                   buffer-text))
-          (should (string-match-p
-                   "    three\n    four\n    five\n"
-                   buffer-text))
-          (should-not (string-match-p "    one" buffer-text))
+          (let ((overlay (plist-get state :command-output-overlay)))
+            (should (overlayp overlay))
+            (should (overlay-get overlay 'invisible))
+            (should (string-match-p
+                     "one\ntwo\nthree\nfour\nfive\n"
+                     (or (overlay-get overlay :output-fallback-text) ""))))
           (should (string-match-p "four\nfive"
                                   (plist-get state :output-text))))
         (codex-ide--render-item-completion
@@ -1086,7 +1151,7 @@
         (should-not (overlay-get overlay 'invisible))
         (should (string-match-p "    hello\n    world" (buffer-string)))))))
 
-(ert-deftest codex-ide-command-output-does-not-fold-following-assistant-message ()
+(ert-deftest codex-ide-command-output-stays-with-command-when-created-after-later-transcript-text ()
   (with-temp-buffer
     (codex-ide-session-mode)
     (let ((session (make-codex-ide-session
@@ -1101,47 +1166,184 @@
        session
        '((id . "call-1")
          (type . "commandExecution")
-         (command . ["sh" "-c" "echo start; sleep 1; echo end"])))
-      (codex-ide--handle-notification
+         (command . ["git" "branch" "--show-current"])))
+      (codex-ide--render-item-start
        session
-       '((method . "item/commandExecution/outputDelta")
-         (params . ((itemId . "call-1")
-                    (delta . "start\n")))))
+       '((id . "call-2")
+         (type . "commandExecution")
+         (command . ["git" "log" "--oneline" "main..HEAD"])))
       (codex-ide--handle-notification
        session
        '((method . "item/agentMessage/delta")
          (params . ((itemId . "msg-1")
-                    (delta . "assistant while command runs\n")))))
+                    (delta . "Later assistant text\n")))))
+      (codex-ide--render-item-completion
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (status . "completed")
+         (exitCode . 0)
+         (aggregatedOutput . "branch-name\n")))
+      (codex-ide--render-item-completion
+       session
+       '((id . "call-2")
+         (type . "commandExecution")
+         (status . "completed")
+         (exitCode . 0)
+         (aggregatedOutput . "deadbeef commit\n")))
+      (goto-char (point-min))
+      (search-forward "* Ran command")
+      (let ((first-command-pos (match-beginning 0)))
+        (search-forward "output: 1 line [expand]")
+        (let ((first-output-pos (match-beginning 0)))
+          (search-forward "* Ran command")
+          (let ((second-command-pos (match-beginning 0)))
+            (search-forward "output: 1 line [expand]")
+            (let ((second-output-pos (match-beginning 0)))
+              (search-forward "Later assistant text")
+              (let ((assistant-pos (match-beginning 0)))
+                (should (< first-command-pos first-output-pos))
+                (should (< first-output-pos second-command-pos))
+                (should (< second-command-pos second-output-pos))
+                (should (< second-output-pos assistant-pos))))))))))
+
+(ert-deftest codex-ide-completed-command-output-stays-before-later-agent-text ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["git" "branch" "--show-current"])))
+      (codex-ide--render-item-completion
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (status . "completed")
+         (exitCode . 0)
+         (aggregatedOutput . "branch-name\n")))
       (codex-ide--handle-notification
        session
-       '((method . "item/commandExecution/outputDelta")
-         (params . ((itemId . "call-1")
-                    (delta . "end\n")))))
+       '((method . "item/agentMessage/delta")
+         (params . ((itemId . "msg-1")
+                    (delta . "Later assistant text\n")))))
+      (codex-ide--render-item-completion
+       session
+       '((id . "msg-1")
+         (type . "agentMessage")
+         (status . "completed")))
       (goto-char (point-min))
-      (search-forward "output: 2 lines, streaming")
-      (let* ((overlay (get-char-property
-                       (match-beginning 0)
-                       codex-ide-command-output-overlay-property))
-             (output-text (buffer-substring-no-properties
-                           (overlay-start overlay)
-                           (overlay-end overlay))))
-        (should (overlayp overlay))
-        (should (string-match-p "    start\n    end\n" output-text))
-        (should-not (string-match-p "assistant while command runs" output-text))
-        (codex-ide--render-item-completion
+      (search-forward "output: 1 line [expand]")
+      (let ((output-pos (match-beginning 0)))
+        (search-forward "Later assistant text")
+        (should (< output-pos (match-beginning 0)))))))
+
+(ert-deftest codex-ide-command-output-does-not-fold-following-assistant-message ()
+  (let ((codex-ide-command-output-fold-on-start nil))
+    (with-temp-buffer
+      (codex-ide-session-mode)
+      (let ((session (make-codex-ide-session
+                      :directory default-directory
+                      :buffer (current-buffer)
+                      :status "idle"
+                      :item-states (make-hash-table :test 'equal))))
+        (setq-local codex-ide--session session)
+        (codex-ide--insert-input-prompt session "submitted prompt")
+        (codex-ide--begin-turn-display session)
+        (codex-ide--render-item-start
          session
          '((id . "call-1")
            (type . "commandExecution")
-           (status . "completed")
-           (exitCode . 0)))
-        (should (overlay-get overlay 'invisible))
-        (search-forward "assistant while command runs")
-        (should-not (get-char-property (match-beginning 0) 'invisible))
-        (should-not (get-char-property
-                     (match-beginning 0)
-                     codex-ide-command-output-overlay-property))))))
+           (command . ["sh" "-c" "echo start; sleep 1; echo end"])))
+        (codex-ide--handle-notification
+         session
+         '((method . "item/commandExecution/outputDelta")
+           (params . ((itemId . "call-1")
+                      (delta . "start\n")))))
+        (codex-ide--handle-notification
+         session
+         '((method . "item/agentMessage/delta")
+           (params . ((itemId . "msg-1")
+                      (delta . "assistant while command runs\n")))))
+        (codex-ide--handle-notification
+         session
+         '((method . "item/commandExecution/outputDelta")
+           (params . ((itemId . "call-1")
+                      (delta . "end\n")))))
+        (goto-char (point-min))
+        (search-forward "output: 2 lines, streaming [fold]")
+        (let* ((overlay (get-char-property
+                         (match-beginning 0)
+                         codex-ide-command-output-overlay-property))
+               (output-text (buffer-substring-no-properties
+                             (overlay-start overlay)
+                             (overlay-end overlay))))
+          (should (overlayp overlay))
+          (should (string-match-p "    start\n    end\n" output-text))
+          (should-not (string-match-p "assistant while command runs" output-text))
+          (codex-ide--render-item-completion
+           session
+           '((id . "call-1")
+             (type . "commandExecution")
+             (status . "completed")
+             (exitCode . 0)))
+          (should (overlay-get overlay 'invisible))))))
 
 (ert-deftest codex-ide-command-output-ret-toggles-folded-block ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["echo" "hello"])))
+      (codex-ide--render-item-completion
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (status . "completed")
+         (exitCode . 0)
+         (aggregatedOutput . "hello\nworld\n")))
+      (goto-char (point-min))
+      (search-forward "output: 2 lines")
+      (let* ((header-pos (match-beginning 0))
+             (overlay (get-char-property
+                       header-pos
+                       codex-ide-command-output-overlay-property)))
+        (should (overlay-get overlay 'invisible))
+        (goto-char header-pos)
+        (should (eq (key-binding (kbd "RET"))
+                    #'codex-ide-toggle-command-output-at-point))
+        (call-interactively (key-binding (kbd "RET")))
+        (should-not (overlay-get overlay 'invisible))
+        (should (string-match-p "output: 2 lines \\[fold\\]"
+                                (buffer-string)))
+        (should (string-match-p "    hello\n    world" (buffer-string)))
+        (goto-char header-pos)
+        (call-interactively (key-binding (kbd "RET")))
+        (should (overlay-get overlay 'invisible))
+        (should (string-match-p "output: 2 lines \\[expand\\]"
+                                (buffer-string)))
+        (should-not (string-match-p "    hello\n    world"
+                                    (buffer-string)))))))
+
+(ert-deftest codex-ide-command-output-expand-button-toggles-folded-block ()
   (with-temp-buffer
     (codex-ide-session-mode)
     (let ((session (make-codex-ide-session
@@ -1185,7 +1387,7 @@
         (should-not (string-match-p "    hello\n    world"
                                     (buffer-string)))))))
 
-(ert-deftest codex-ide-command-output-expand-button-toggles-folded-block ()
+(ert-deftest codex-ide-command-output-header-controls-are-scoped ()
   (with-temp-buffer
     (codex-ide-session-mode)
     (let ((session (make-codex-ide-session
@@ -1209,22 +1411,18 @@
          (exitCode . 0)
          (aggregatedOutput . "hello\nworld\n")))
       (goto-char (point-min))
-      (search-forward "output: 2 lines")
-      (let ((overlay (get-char-property
-                      (match-beginning 0)
-                      codex-ide-command-output-overlay-property)))
-        (should (overlay-get overlay :folded))
-        (should-not (string-match-p "    hello\n    world"
-                                    (buffer-string)))
-        (goto-char (point-min))
-        (search-forward "[expand]")
-        (goto-char (match-beginning 0))
-        (push-button)
-        (should-not (overlay-get overlay :folded))
-        (should (string-match-p "output: 2 lines \\[fold\\]"
-                                (buffer-string)))
-        (should (string-match-p "    hello\n    world"
-                                (buffer-string)))))))
+      (search-forward "output: 2 lines ")
+      (let ((prefix-pos (match-beginning 0)))
+        (should-not (button-at prefix-pos))
+        (should (eq (get-text-property prefix-pos 'keymap)
+                    codex-ide-command-output-map))
+        (should (eq (get-text-property prefix-pos 'face)
+                    'codex-ide-item-detail-face)))
+      (search-forward "[expand]")
+      (let ((pos (match-beginning 0)))
+        (should (button-at pos))
+        (should-not (eq (get-text-property pos 'keymap)
+                        codex-ide-command-output-map))))))
 
 (ert-deftest codex-ide-command-execution-rg-completion-counts-aggregated-output ()
   (with-temp-buffer
@@ -1365,9 +1563,10 @@
       (should (string-match-p "Working\\.\\.\\." (buffer-string)))
       (codex-ide--finish-turn session)
       (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
-      (goto-char (point-max))
-      (forward-line 0)
-      (should (looking-at-p "> $")))))
+      (should (codex-ide--input-prompt-active-p session))
+      (goto-char (marker-position
+                  (codex-ide-session-input-prompt-start-marker session)))
+      (should (eolp)))))
 
 (ert-deftest codex-ide-session-markdown-faces-survive-font-lock-attempts ()
   (with-temp-buffer
@@ -1385,8 +1584,8 @@
 (ert-deftest codex-ide-session-mode-binds-tab-to-button-navigation ()
   (with-temp-buffer
     (codex-ide-session-mode)
-    (should (eq (key-binding (kbd "TAB")) #'forward-button))
-    (should (eq (key-binding (kbd "<backtab>")) #'backward-button))))
+    (should (eq (key-binding (kbd "TAB")) #'codex-ide-session-mode-nav-forward))
+    (should (eq (key-binding (kbd "<backtab>")) #'codex-ide-session-mode-nav-backward))))
 
 (ert-deftest codex-ide-start-session-new-initializes-thread-without-real-cli ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -1416,9 +1615,10 @@
                            '("initialize" "thread/start")))
             (with-current-buffer (codex-ide-session-buffer session)
               (should (derived-mode-p 'codex-ide-session-mode))
-              (goto-char (point-max))
-              (forward-line 0)
-              (should (looking-at-p "> ")))))))))
+              (should (codex-ide--input-prompt-active-p session))
+              (goto-char (marker-position
+                          (codex-ide-session-input-prompt-start-marker session)))
+              (should (eolp)))))))))
 
 (ert-deftest codex-ide-start-session-new-honors-new-session-split ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -1597,9 +1797,16 @@
                                          (equal method "config/read"))
                                        (nreverse requests))
                            '("initialize")))
-            (should (string= (codex-ide-session-status session) "idle"))))))))
+            (should (string= (codex-ide-session-status session) "idle"))
+            (should (codex-ide--input-prompt-active-p session))
+            (with-current-buffer (codex-ide-session-buffer session)
+              (should (string-prefix-p "Codex session for " (buffer-string)))
+              (should (markerp
+                       (codex-ide-session-input-prompt-start-marker session)))
+              (should (markerp
+                       (codex-ide-session-input-start-marker session))))))))))
 
-(ert-deftest codex-ide-show-session-buffer-adds-prompt-to-idle-query-session ()
+(ert-deftest codex-ide-show-session-buffer-preserves-prompt-on-idle-query-session ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (requests nil))
     (codex-ide-test-with-fixture project-dir
@@ -1614,7 +1821,7 @@
                    (lambda (_buffer) (selected-window))))
           (let ((session (codex-ide--ensure-query-session-for-thread-selection
                           project-dir)))
-            (should-not (codex-ide--input-prompt-active-p session))
+            (should (codex-ide--input-prompt-active-p session))
             (codex-ide--show-session-buffer session)
             (should (equal (seq-remove (lambda (method)
                                          (equal method "config/read"))
@@ -1624,7 +1831,7 @@
             (with-current-buffer (codex-ide-session-buffer session)
               (goto-char (marker-position
                           (codex-ide-session-input-prompt-start-marker session)))
-              (should (looking-at-p "> ")))))))))
+              (should (eolp)))))))))
 
 (ert-deftest codex-ide-show-or-resume-thread-reuses-idle-threadless-session ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -1668,7 +1875,7 @@
               (with-current-buffer (codex-ide-session-buffer session)
                 (let ((buffer-text (buffer-string)))
                   (should-not (string-match-p "Kill Codex session buffer" buffer-text))
-                  (should (string-match-p "^> Reuse this buffer" buffer-text))
+                  (should (string-match-p "^Reuse this buffer" buffer-text))
                   (should (string-match-p "Buffer reused\\." buffer-text)))))))))))
 
 (ert-deftest codex-ide-start-session-resume-aborts-cleanly-on-picker-quit ()
@@ -1751,10 +1958,10 @@
                        (_ (ert-fail (format "Unexpected method %s" method)))))))
           (let ((session (codex-ide--start-session 'new)))
             (with-current-buffer (codex-ide-session-buffer session)
-              (should (= (how-many "^> " (point-min) (point-max)) 1))
-              (goto-char (point-max))
-              (forward-line 0)
-              (should (looking-at-p "> $")))))))))
+              (should (codex-ide--input-prompt-active-p session))
+              (goto-char (marker-position
+                          (codex-ide-session-input-prompt-start-marker session)))
+              (should (eolp)))))))))
 
 (ert-deftest codex-ide-input-prompt-prefix-is-read-only ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -1768,7 +1975,8 @@
             (should-error (delete-backward-char 1) :type 'text-read-only)
             (goto-char (marker-position
                         (codex-ide-session-input-prompt-start-marker session)))
-            (should (looking-at-p "> hello"))
+            (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
+            (should (looking-at-p "hello"))
             (should (string= (codex-ide--current-input session) "hello"))))))))
 
 (ert-deftest codex-ide-input-prompt-allows-insert-at-input-start ()
@@ -1783,7 +1991,8 @@
             (insert "h")
             (goto-char (marker-position
                         (codex-ide-session-input-prompt-start-marker session)))
-            (should (looking-at-p "> h"))
+            (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
+            (should (looking-at-p "h"))
             (should (string= (codex-ide--current-input session) "h"))))))))
 
 (ert-deftest codex-ide-compose-turn-input-includes-context-on-every-send ()
@@ -1960,8 +2169,12 @@
               (let ((buffer-text (buffer-string))
                     (input (alist-get 'input submitted)))
                 (should (string-match-p
-                         "\n> Explain this\nContext: file=.*src/example\\.el\" buffer=\"example\\.el\" line=1 column=3"
+                         "\nExplain this\nContext: file=.*src/example\\.el\" buffer=\"example\\.el\" line=1 column=3"
                          buffer-text))
+                (goto-char (point-min))
+                (re-search-forward "^Explain this$")
+                (beginning-of-line)
+                (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
                 (should (string-match-p "\\[Emacs prompt context\\]"
                                         (alist-get 'text (aref input 0))))
                 (should (string-match-p "\\[/Emacs prompt context\\]"
@@ -1995,15 +2208,14 @@
             (should (string-match-p "Actually run tests first"
                                     (alist-get 'text (aref input 0)))))
           (with-current-buffer (codex-ide-session-buffer session)
-            (goto-char (point-max))
-            (forward-line 0)
-            (should (looking-at-p "> $"))
             (should (codex-ide--input-prompt-active-p session))
+            (goto-char (marker-position
+                        (codex-ide-session-input-prompt-start-marker session)))
+            (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
             (codex-ide--append-to-buffer (current-buffer) "sleep 10 still running.")
             (should (string-match-p
                      (rx "Actually run tests first"
-                         "\nsleep 10 still running."
-                         "\n> ")
+                         "\nsleep 10 still running.")
                      (buffer-string)))
             (should-not (string-match-p "Steered this turn:" (buffer-string)))
             (goto-char (point-min))
@@ -2033,9 +2245,12 @@
               (should (string-match-p
 	                       (rx "Queued turns:"
 	                           "\n  1. Do this next"
-	                           "\n\n> "
+	                           "\n\n"
 	                           string-end)
                        (buffer-string)))
+              (goto-char (marker-position
+                          (codex-ide-session-input-prompt-start-marker session)))
+              (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
               (codex-ide--replace-current-input session "And then this")
               (codex-ide-submit)
               (should (= (length (codex-ide--queued-prompts session)) 2))
@@ -2673,12 +2888,13 @@
                      (rx "Selected: accept"
                          (* anything)
                          "\n  " (or "└" "\342\224\224") " output: 2 lines"
-                         (* anything)
-                         "\n> steer while approved command runs"
-                         (* anything)
-                         "\n> "
-                         string-end)
-                     (buffer-string)))))))))
+                         (* anything))
+                     (buffer-string)))
+            (should (string-match-p "steer while approved command runs\\'"
+                                    (buffer-string)))
+            (goto-char (marker-position
+                        (codex-ide-session-input-prompt-start-marker session)))
+            (should (equal (codex-ide-test--prompt-prefix-at-line) "> ")))))))))
 
 (ert-deftest codex-ide-command-approval-does-not-display-nonvisible-buffer-when-disabled ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -2938,9 +3154,10 @@
           (with-current-buffer (codex-ide-session-buffer session)
             (should (string-match-p "Codex notification: Codex authentication failed." (buffer-string)))
             (should (string-match-p "Run `codex login`" (buffer-string)))
-            (goto-char (point-max))
-            (forward-line 0)
-            (should (looking-at-p "> "))))))))
+            (should (codex-ide--input-prompt-active-p session))
+            (goto-char (marker-position
+                        (codex-ide-session-input-prompt-start-marker session)))
+            (should (eolp))))))))
 
 (ert-deftest codex-ide-error-notification-retries-stay-concise-and-keep-turn-open ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -2969,7 +3186,7 @@
                        text))
               (should-not (string-match-p "Inspect the session log for details" text))
               (should-not (string-match-p "\\[Codex notification:" text))
-              (should (string-match-p "^> $" text))))
+              (should (codex-ide--input-prompt-active-p session))))
           (with-current-buffer (codex-ide-session-log-buffer session)
             (should (string-match-p "Retryable Codex error: Reconnecting... 2/5"
                                     (buffer-string)))))))))
@@ -3045,11 +3262,13 @@
              (params . ((turnId . "turn-auth-final-2")))))
           (with-current-buffer (codex-ide-session-buffer session)
             (let* ((text (buffer-string))
-                   (prompts (how-many "^> " (point-min) (point-max))))
-              (should (= prompts 1))
-              (goto-char (point-max))
-              (forward-line 0)
-              (should (looking-at-p "> "))
+                   (prompt-start
+                    (marker-position
+                     (codex-ide-session-input-prompt-start-marker session))))
+              (should (codex-ide--input-prompt-active-p session))
+              (should prompt-start)
+              (goto-char prompt-start)
+              (should (eolp))
               (should-not (string-match-p "> \n\n> " text)))))))))
 
 (ert-deftest codex-ide-notification-error-info-tolerates-non-alist-codex-error-info ()
@@ -3250,7 +3469,7 @@
         (should (codex-ide--restore-thread-read-transcript session thread-read))
         (with-current-buffer (codex-ide-session-buffer session)
           (let ((buffer-text (buffer-string)))
-            (should (string-match-p "^> What DB columns are on MyTable\\?" buffer-text))
+            (should (string-match-p "^What DB columns are on MyTable\\?" buffer-text))
             (should-not (string-match-p "\\[Emacs context\\]" buffer-text))
             (should (string-match-p "Columns include `my_table_id` and `price`\\." buffer-text))
             (should (string-match-p
@@ -3259,6 +3478,8 @@
                              (regexp-quote
                               (codex-ide--restored-transcript-separator-string)))
                      buffer-text))
+            (goto-char (point-min))
+            (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
             (goto-char (point-min))
             (search-forward "my_table_id")
             (should (eq (get-text-property (1- (point)) 'face)
@@ -3296,8 +3517,35 @@
             (concat
              (regexp-quote
               "If you want, I can also give this as the exact SQL-ish schema shape with field types/nullability.")
-             "\n\n> What is MyTable's primary key\\?")
+             "\n\nWhat is MyTable's primary key\\?")
             (buffer-string))))))))
+
+(ert-deftest codex-ide-restore-thread-read-transcript-keeps-prompt-face-after-separator ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (session nil)
+         (thread-read
+          '((thread . ((id . "thread-restore-face-1")
+                       (turns . (((id . "turn-1")
+                                  (items . (((type . "userMessage")
+                                             (content . (((type . "text")
+                                                          (text . "Show the last prompt")))))
+                                            ((type . "agentMessage")
+                                             (id . "item-1")
+                                             (text . "Here is the restored reply."))))))))))))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (setq session (codex-ide--create-process-session))
+        (should (codex-ide--restore-thread-read-transcript session thread-read))
+        (with-current-buffer (codex-ide-session-buffer session)
+          (goto-char (marker-position
+                      (codex-ide-session-input-prompt-start-marker session)))
+          (insert "draft")
+          (should (eq (get-char-property (point) 'face)
+                      'codex-ide-user-prompt-face))
+          (goto-char (point-min))
+          (search-forward "[End of restored session]")
+          (should (eq (get-text-property (match-beginning 0) 'face)
+                      'codex-ide-output-separator-face)))))))
 
 (ert-deftest codex-ide-restore-thread-read-transcript-renders-trailing-pipe-tables ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
@@ -3339,8 +3587,10 @@
         (should (codex-ide--restore-thread-read-transcript session thread-read))
         (with-current-buffer (codex-ide-session-buffer session)
           (should (string-match-p
-                   (regexp-quote "> Line one\nLine two\nLine three")
+                   (regexp-quote "Line one\nLine two\nLine three")
                    (buffer-string)))
+          (goto-char (point-min))
+          (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
           (should-not (string-match-p "\\[Emacs context\\]" (buffer-string))))))))
 
 (ert-deftest codex-ide-start-session-resume-replays-thread-read-transcript ()
@@ -3386,18 +3636,17 @@
                            '("initialize" "thread/read" "thread/resume")))
             (with-current-buffer (codex-ide-session-buffer session)
               (let ((buffer-text (buffer-string)))
-                (should (string-match-p "^> Why is resume stale\\?" buffer-text))
+                (should (string-match-p "^Why is resume stale\\?" buffer-text))
                 (should (string-match-p "The prompt was restored too early\\." buffer-text))
                 (should (string-match-p
                          (concat (regexp-quote "The prompt was restored too early.")
                                  "\n"
                                  (regexp-quote
-                                  (codex-ide--restored-transcript-separator-string))
-                                 "> ")
+                                  (codex-ide--restored-transcript-separator-string)))
                          buffer-text))
                 (goto-char (point-max))
                 (forward-line 0)
-                (should (looking-at-p "> "))))))))))
+                (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))))))))))
 
 (ert-deftest codex-ide-resume-thread-into-session-replays-thread-read-transcript ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -3433,7 +3682,7 @@
                            '("thread/read" "thread/resume")))
             (with-current-buffer (codex-ide-session-buffer session)
               (let ((buffer-text (buffer-string)))
-                (should (string-match-p "^> Resume this exact thread\\." buffer-text))
+                (should (string-match-p "^Resume this exact thread\\." buffer-text))
                 (should (string-match-p "Exact thread resumed\\." buffer-text))))))))))
 
 (ert-deftest codex-ide-start-session-resume-replaces-existing-session-with-selected-thread ()
@@ -3484,7 +3733,7 @@
                                            (nreverse requests))
                                '("initialize" "thread/read" "thread/resume")))
                 (with-current-buffer (codex-ide-session-buffer new-session)
-                  (should (string-match-p "^> Switch threads"
+                  (should (string-match-p "^Switch threads"
                                           (buffer-string))))))))))))
 
 (ert-deftest codex-ide-start-session-resume-reuses-existing-session-for-selected-thread ()
@@ -3716,7 +3965,13 @@
             (with-current-buffer buffer
               (let ((inhibit-read-only t))
                 (goto-char (point-max))
-                (insert "old transcript\n"))
+                (insert "old transcript\n")
+                (goto-char (point-min))
+                (codex-ide--style-user-prompt-region
+                 (line-beginning-position)
+                 (line-end-position)))
+              (codex-ide--insert-input-prompt session "draft reset prompt")
+              (should (= (codex-ide-test--prompt-prefix-overlay-count) 2))
               (setq new-session (codex-ide-reset-current-session)))
             (should-not (eq new-session session))
             (should (eq (codex-ide-session-buffer new-session) buffer))
@@ -3730,7 +3985,12 @@
                              "thread-reset-new"))
             (with-current-buffer buffer
               (should (eq (codex-ide--session-for-current-buffer) new-session))
-              (should-not (string-match-p "old transcript" (buffer-string))))
+              (should-not (string-match-p "old transcript" (buffer-string)))
+              (should (= (codex-ide-test--prompt-prefix-overlay-count) 1))
+              (goto-char (marker-position
+                          (codex-ide-session-input-prompt-start-marker
+                           new-session)))
+              (should (equal (codex-ide-test--prompt-prefix-at-line) "> ")))
             (should (equal (seq-remove (lambda (method)
                                          (equal method "config/read"))
                                        requests)
@@ -3808,14 +4068,21 @@
                   first-input
                   second-input)
               (erase-buffer)
-              (insert "> first prompt\nassistant reply\n> second prompt\n")
+              (insert "first prompt\nassistant reply\nsecond prompt\n")
               (goto-char (point-min))
-              (setq first-input (+ (line-beginning-position) 2))
+              (codex-ide--style-user-prompt-region
+               (line-beginning-position)
+               (line-end-position))
+              (setq first-input (line-beginning-position))
               (forward-line 2)
-              (setq second-input (+ (line-beginning-position) 2))
+              (codex-ide--style-user-prompt-region
+               (line-beginning-position)
+               (line-end-position))
+              (setq second-input (line-beginning-position))
               (goto-char (point-max))
               (forward-line -1)
-              (should (looking-at-p "> second prompt"))
+              (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
+              (should (looking-at-p "second prompt"))
               (codex-ide--goto-prompt-line -1)
               (should (= (point) first-input))
               (should (looking-at-p "first prompt"))
@@ -3833,18 +4100,23 @@
           (with-current-buffer (codex-ide-session-buffer session)
             (let ((inhibit-read-only t))
               (erase-buffer)
-              (insert "> first prompt\nassistant reply\n"))
+              (insert "first prompt\nassistant reply\n")
+              (goto-char (point-min))
+              (codex-ide--style-user-prompt-region
+               (line-beginning-position)
+               (line-end-position)))
             (codex-ide--insert-input-prompt session nil)
             (goto-char (point-min))
             (codex-ide--goto-prompt-line -1)
             (codex-ide--goto-prompt-line 1)
             (should (= (point)
                        (marker-position
-                        (codex-ide-session-input-start-marker session))))
+                       (codex-ide-session-input-start-marker session))))
             (insert "draft")
             (goto-char (marker-position
                         (codex-ide-session-input-prompt-start-marker session)))
-            (should (looking-at-p "> draft")))))))))
+            (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
+            (should (looking-at-p "draft")))))))))
 
 (ert-deftest codex-ide-reopen-input-after-submit-error-resets-turn-state ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -3874,7 +4146,8 @@
             (should (string-match-p "\\[Submit failed\\] boom" (buffer-string)))
             (goto-char (point-max))
             (forward-line 0)
-            (should (looking-at-p "> retry prompt"))))))))
+            (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
+            (should (looking-at-p "retry prompt"))))))))
 
 (ert-deftest codex-ide-finish-turn-resets-state-and-opens-fresh-prompt ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -3903,7 +4176,7 @@
             (should (string-match-p "\\[Agent interrupted\\]" (buffer-string)))
             (goto-char (point-max))
             (forward-line 0)
-            (should (looking-at-p "> "))))))))
+            (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))))))))
 
 (ert-deftest codex-ide-mcp-bridge-request-exempt-from-approval-matches-server-name ()
   (let ((codex-ide-emacs-bridge-require-approval nil)

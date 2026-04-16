@@ -64,7 +64,7 @@
 
 (define-key codex-ide-section-mode-map (kbd "<left-fringe> <mouse-1>") #'codex-ide-section-mouse-toggle-section)
 (define-key codex-ide-section-mode-map (kbd "<left-fringe> <mouse-2>") #'codex-ide-section-mouse-toggle-section)
-(define-key codex-ide-section-mode-map (kbd "TAB") #'codex-ide-section-toggle-at-point)
+(define-key codex-ide-section-mode-map (kbd "t") #'codex-ide-section-toggle-at-point)
 (define-key codex-ide-section-mode-map (kbd "^") #'codex-ide-section-up)
 (define-key codex-ide-section-mode-map (kbd "p") #'codex-ide-section-backward)
 (define-key codex-ide-section-mode-map (kbd "n") #'codex-ide-section-forward)
@@ -220,7 +220,7 @@
                        rear-nonsticky (codex-ide-section
                                        keymap
                                        help-echo)
-                       help-echo "TAB: toggle section"))))
+                       help-echo "t: toggle section"))))
 
 (defun codex-ide-section--update-indicator (section)
   "Refresh SECTION's visible indicator."
