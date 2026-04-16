@@ -84,6 +84,33 @@
         (should-not prompted)
         (should-not deleted-storage)))))
 
+(ert-deftest codex-ide-delete-session-thread-skip-confirmation-bypasses-prompt ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (deleted-session nil)
+        (deleted-storage nil)
+        (prompted nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-delete-3")
+          (cl-letf (((symbol-function 'codex-ide--thread-rollout-path)
+                     (lambda (_thread-id)
+                       "/tmp/codex-thread-delete-3.jsonl"))
+                    ((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _)
+                       (setq prompted t)
+                       (ert-fail "Unexpected confirmation prompt")))
+                    ((symbol-function 'codex-ide--delete-live-thread-session)
+                     (lambda (value)
+                       (setq deleted-session value)))
+                    ((symbol-function 'codex-ide--delete-thread-storage)
+                     (lambda (rollout-path)
+                       (setq deleted-storage rollout-path))))
+            (codex-ide-delete-session-thread "thread-delete-3" t)
+            (should (eq deleted-session session))
+            (should (equal deleted-storage "/tmp/codex-thread-delete-3.jsonl"))
+            (should-not prompted)))))))
+
 (provide 'codex-ide-delete-session-thread-tests)
 
 ;;; codex-ide-delete-session-thread-tests.el ends here

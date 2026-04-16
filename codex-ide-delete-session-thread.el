@@ -91,7 +91,7 @@
           (kill-buffer buffer))))))
 
 ;;;###autoload
-(defun codex-ide-delete-session-thread (thread-id)
+(defun codex-ide-delete-session-thread (thread-id &optional skip-confirmation)
   "Delete Codex THREAD-ID from the active `CODEX_HOME`.
 
 This command relies on current Codex internal storage details under
@@ -102,7 +102,10 @@ supported thread deletion API, this implementation should be replaced to use
 that instead.
 
 If a live session buffer is attached to THREAD-ID, prompt before tearing down
-that session and then remove the persisted thread data from disk."
+that session and then remove the persisted thread data from disk.
+
+When SKIP-CONFIRMATION is non-nil, delete without prompting.  This is intended
+for batch callers that already presented a single confirmation."
   (interactive
    (list
     (read-string "Delete Codex thread ID: "
@@ -118,16 +121,16 @@ that session and then remove the persisted thread data from disk."
          (rollout-path (codex-ide--thread-rollout-path thread-id)))
     (unless rollout-path
       (user-error "No stored Codex thread found for %s" thread-id))
-    (unless
-        (yes-or-no-p
-         (if buffer-name
-             (format "Delete Codex buffer %s and permanently remove thread %s from %s? "
-                     buffer-name
-                     thread-id
-                     (abbreviate-file-name (codex-ide--codex-home)))
-           (format "Permanently remove Codex thread %s from %s? "
-                   thread-id
-                     (abbreviate-file-name (codex-ide--codex-home)))))
+    (unless (or skip-confirmation
+                (yes-or-no-p
+                 (if buffer-name
+                     (format "Delete Codex buffer %s and permanently remove thread %s from %s? "
+                             buffer-name
+                             thread-id
+                             (abbreviate-file-name (codex-ide--codex-home)))
+                   (format "Permanently remove Codex thread %s from %s? "
+                           thread-id
+                           (abbreviate-file-name (codex-ide--codex-home))))))
       (user-error "Canceled deletion of Codex thread %s" thread-id))
     (when session
       (codex-ide--delete-live-thread-session session))

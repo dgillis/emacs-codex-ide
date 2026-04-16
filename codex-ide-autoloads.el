@@ -338,7 +338,10 @@ that instead.
 If a live session buffer is attached to THREAD-ID, prompt before tearing down
 that session and then remove the persisted thread data from disk.
 
-(fn THREAD-ID)" t)
+When SKIP-CONFIRMATION is non-nil, delete without prompting.  This is intended
+for batch callers that already presented a single confirmation.
+
+(fn THREAD-ID &optional SKIP-CONFIRMATION)" t)
 (register-definition-prefixes "codex-ide-delete-session-thread" '("codex-ide--"))
 
 

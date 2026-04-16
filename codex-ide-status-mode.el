@@ -145,6 +145,24 @@ Only child `buffer' and `thread' sections support visit and delete actions."
       (user-error "No status entry at point"))
     section))
 
+(defun codex-ide-status-mode--selected-actionable-sections ()
+  "Return actionable sections at point or every unique one touched by the active region."
+  (if (use-region-p)
+      (let ((sections nil)
+            (end (max (region-beginning) (1- (region-end)))))
+        (save-excursion
+          (goto-char (region-beginning))
+          (beginning-of-line)
+          (while (<= (point) end)
+            (when-let ((section (codex-ide-status-mode--section-containing-point)))
+              (when (and (memq (codex-ide-section-type section) '(buffer thread))
+                         (not (memq section sections)))
+                (push section sections)))
+            (forward-line 1)))
+        (or (nreverse sections)
+            (user-error "No status entries in region")))
+    (list (codex-ide-status-mode--actionable-section-at-point))))
+
 (defun codex-ide-status-mode--visit-section (section)
   "Visit SECTION using the same underlying behavior as the session list modes."
   (pcase (codex-ide-section-type section)
@@ -178,8 +196,67 @@ Only child `buffer' and `thread' sections support visit and delete actions."
 (defun codex-ide-status-mode--delete-thread (thread)
   "Delete THREAD with list-mode-consistent confirmation and refresh."
   (codex-ide--prepare-session-operations)
-  (when (y-or-n-p "Delete 1 Codex thread? ")
-    (codex-ide-delete-session-thread (alist-get 'id thread))
+  (let ((codex-home (abbreviate-file-name (codex-ide--codex-home))))
+    (when (yes-or-no-p
+           (format "Permanently remove 1 Codex thread from %s? " codex-home))
+      (codex-ide-delete-session-thread (alist-get 'id thread) t)
+      (codex-ide-status-mode-refresh))))
+
+(defun codex-ide-status-mode--confirm-delete-sections (sections)
+  "Return non-nil when the user confirms deleting SECTIONS."
+  (let* ((count (length sections))
+         (buffer-count (seq-count
+                        (lambda (section)
+                          (eq (codex-ide-section-type section) 'buffer))
+                        sections))
+         (thread-count (- count buffer-count))
+         (codex-home (abbreviate-file-name (codex-ide--codex-home)))
+         (prompt nil)
+         (confirm-function nil))
+    (cond
+     ((= buffer-count count)
+      (setq prompt
+            (if (= count 1)
+                (format "Kill Codex session buffer %s? "
+                        (buffer-name
+                         (codex-ide-session-buffer
+                          (codex-ide-section-value (car sections)))))
+              (format "Kill %d Codex session buffers? " count))
+            confirm-function #'y-or-n-p))
+     ((= thread-count count)
+      (setq prompt
+            (if (= count 1)
+                (format "Permanently remove 1 Codex thread from %s? " codex-home)
+              (format "Permanently remove %d Codex threads from %s? "
+                      count
+                      codex-home))
+            confirm-function #'yes-or-no-p))
+     (t
+      (setq prompt (format "Delete %d Codex status entries? " count)
+            confirm-function #'y-or-n-p)))
+    (funcall confirm-function prompt)))
+
+(defun codex-ide-status-mode--delete-sections (sections)
+  "Delete SECTIONS after one confirmation and refresh once."
+  (when (codex-ide-status-mode--confirm-delete-sections sections)
+    (when (seq-some (lambda (section)
+                      (eq (codex-ide-section-type section) 'thread))
+                    sections)
+      (codex-ide--prepare-session-operations))
+    (dolist (section sections)
+      (pcase (codex-ide-section-type section)
+        ('buffer
+         (let* ((session (codex-ide-section-value section))
+                (buffer (and (codex-ide-session-p session)
+                             (codex-ide-session-buffer session))))
+           (unless (buffer-live-p buffer)
+             (user-error "Session buffer is no longer live"))
+           (let ((kill-buffer-query-functions nil))
+             (kill-buffer buffer))))
+        ('thread
+         (codex-ide-delete-session-thread
+          (alist-get 'id (codex-ide-section-value section))
+          t))))
     (codex-ide-status-mode-refresh)))
 
 (defun codex-ide-status-mode-visit-thing-at-point ()
@@ -189,16 +266,10 @@ Only child `buffer' and `thread' sections support visit and delete actions."
    (codex-ide-status-mode--actionable-section-at-point)))
 
 (defun codex-ide-status-mode-delete-thing-at-point ()
-  "Delete the actionable status entry at point."
+  "Delete the actionable status entry at point or every entry in the active region."
   (interactive)
-  (let ((section (codex-ide-status-mode--actionable-section-at-point)))
-    (pcase (codex-ide-section-type section)
-      ('buffer
-       (codex-ide-status-mode--delete-buffer-session
-        (codex-ide-section-value section)))
-      ('thread
-       (codex-ide-status-mode--delete-thread
-        (codex-ide-section-value section))))))
+  (codex-ide-status-mode--delete-sections
+   (codex-ide-status-mode--selected-actionable-sections)))
 
 (defun codex-ide-status-mode--status-face (status)
   "Return the face used for STATUS."

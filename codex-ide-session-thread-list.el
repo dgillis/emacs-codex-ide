@@ -100,13 +100,16 @@
   (interactive)
   (codex-ide--prepare-session-operations)
   (let* ((thread-ids (codex-ide-session-list-selected-ids))
-         (count (length thread-ids)))
-    (when (y-or-n-p
+         (count (length thread-ids))
+         (codex-home (abbreviate-file-name (codex-ide--codex-home))))
+    (when (yes-or-no-p
            (if (= count 1)
-               "Delete 1 Codex thread? "
-             (format "Delete %d Codex threads? " count)))
+               (format "Permanently remove 1 Codex thread from %s? " codex-home)
+             (format "Permanently remove %d Codex threads from %s? "
+                     count
+                     codex-home)))
       (dolist (thread-id thread-ids)
-        (codex-ide-delete-session-thread thread-id))
+        (codex-ide-delete-session-thread thread-id t))
       (tabulated-list-print t))))
 
 (defun codex-ide-session-thread-list-redisplay ()

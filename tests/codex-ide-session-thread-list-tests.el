@@ -113,6 +113,7 @@
 (ert-deftest codex-ide-session-thread-list-delete-thread-binds-D-and-refreshes ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (deleted-thread-id nil)
+        (skip-confirmation nil)
         (thread-deleted nil)
         (buffer-name nil))
     (codex-ide-test-with-fixture project-dir
@@ -124,8 +125,9 @@
                   ((symbol-function 'codex-ide-mcp-bridge-ensure-server)
                    (lambda () nil))
                   ((symbol-function 'codex-ide-delete-session-thread)
-                   (lambda (thread-id)
+                   (lambda (thread-id &optional skip-confirm)
                      (setq deleted-thread-id thread-id
+                           skip-confirmation skip-confirm
                            thread-deleted t)))
                   ((symbol-function 'codex-ide--request-sync)
                    (lambda (_session method _params)
@@ -157,17 +159,25 @@
             (goto-char (point-min))
             (forward-line 1)
             (cl-letf (((symbol-function 'y-or-n-p)
+                       (lambda (&rest _)
+                         (ert-fail "Unexpected y-or-n-p prompt")))
+                      ((symbol-function 'yes-or-no-p)
                        (lambda (prompt)
-                         (should (equal prompt "Delete 1 Codex thread? "))
+                         (should (equal prompt
+                                        (format "Permanently remove 1 Codex thread from %s? "
+                                                (abbreviate-file-name
+                                                 (codex-ide--codex-home)))))
                          t)))
               (call-interactively #'codex-ide-session-thread-list-delete-thread))
             (should (equal deleted-thread-id "thread-11111111"))
+            (should skip-confirmation)
             (should-not (string-match-p "Delete me" (buffer-string)))
             (should (string-match-p "Remaining thread" (buffer-string)))))))))
 
 (ert-deftest codex-ide-session-thread-list-delete-thread-deletes-region-with-one-confirmation ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (deleted-thread-ids nil)
+        (skip-confirmations nil)
         (thread-deleted-count 0)
         (confirmation-count 0)
         (buffer-name nil))
@@ -180,13 +190,20 @@
                   ((symbol-function 'codex-ide-mcp-bridge-ensure-server)
                    (lambda () nil))
                   ((symbol-function 'y-or-n-p)
+                   (lambda (&rest _)
+                     (ert-fail "Unexpected y-or-n-p prompt")))
+                  ((symbol-function 'yes-or-no-p)
                    (lambda (prompt)
                      (setq confirmation-count (1+ confirmation-count))
-                     (should (equal prompt "Delete 2 Codex threads? "))
+                     (should (equal prompt
+                                    (format "Permanently remove 2 Codex threads from %s? "
+                                            (abbreviate-file-name
+                                             (codex-ide--codex-home)))))
                      t))
                   ((symbol-function 'codex-ide-delete-session-thread)
-                   (lambda (thread-id)
+                   (lambda (thread-id &optional skip-confirm)
                      (push thread-id deleted-thread-ids)
+                     (push skip-confirm skip-confirmations)
                      (setq thread-deleted-count (1+ thread-deleted-count))))
                   ((symbol-function 'codex-ide--request-sync)
                    (lambda (_session method _params)
@@ -225,6 +242,7 @@
             (should (= confirmation-count 1))
             (should (equal deleted-thread-ids
                            '("thread-11111111" "thread-22222222")))
+            (should (equal skip-confirmations '(t t)))
             (should-not (string-match-p "Delete me first" (buffer-string)))
             (should-not (string-match-p "Delete me second" (buffer-string)))
             (should (string-match-p "Remaining thread" (buffer-string)))))))))
