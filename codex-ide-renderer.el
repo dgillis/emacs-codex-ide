@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'button)
 (require 'json)
 (require 'subr-x)
 (require 'codex-ide-core)
@@ -61,6 +62,28 @@ rich markdown rendering."
 Streaming output is still collected and the output header line count updates.
 Press RET on the output header to expand or fold the block."
   :type 'boolean
+  :group 'codex-ide)
+
+(defcustom codex-ide-command-output-max-rendered-lines 10
+  "Maximum command output lines to insert into the transcript buffer.
+
+The full output still contributes to the output line count and item completion
+bookkeeping, but only this many lines are inserted into the Emacs buffer.  Set
+this to nil to render all command output lines.  When output exceeds this
+limit, the transcript shows the most recent lines."
+  :type '(choice (const :tag "No limit" nil)
+                 (integer :tag "Maximum lines"))
+  :group 'codex-ide)
+
+(defcustom codex-ide-command-output-max-rendered-chars 60000
+  "Maximum command output characters to insert into the transcript buffer.
+
+This is a second guard for extremely long individual lines.  Set this to nil to
+render all command output characters, subject to
+`codex-ide-command-output-max-rendered-lines'.  When output exceeds this limit,
+the transcript shows the most recent characters."
+  :type '(choice (const :tag "No limit" nil)
+                 (integer :tag "Maximum characters"))
   :group 'codex-ide)
 
 (defface codex-ide-user-prompt-face
@@ -353,11 +376,17 @@ inserted text."
         (codex-ide--without-undo-recording
           (let ((inhibit-read-only t)
                 (moving (= (point) (point-max)))
+                inserted-text
                 start
                 marker)
             (goto-char (point-max))
+            (setq inserted-text
+                  (concat (if (or (= (point) (point-min)) (bolp))
+                              ""
+                            "\n")
+                          indicator-text))
             (setq start (point))
-            (insert (propertize indicator-text 'face 'shadow))
+            (insert (propertize inserted-text 'face 'shadow))
             (setq marker (copy-marker start))
             (codex-ide--freeze-region start (point))
             (codex-ide--session-metadata-put
@@ -367,7 +396,7 @@ inserted text."
             (codex-ide--session-metadata-put
              session
              :pending-output-indicator-text
-             indicator-text)
+             inserted-text)
             (when moving
               (goto-char (point-max)))))))))
 
@@ -2004,13 +2033,74 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
   "Return a short summary for COUNT search hits."
   (format "found %d hit%s" count (if (= count 1) "" "s")))
 
+(defun codex-ide--command-output-trimmed-end (output)
+  "Return the end index of OUTPUT after trimming trailing whitespace."
+  (let ((end (length output)))
+    (while (and (> end 0)
+                (memq (aref output (1- end))
+                      '(?\s ?\t ?\n ?\r ?\f ?\v)))
+      (setq end (1- end)))
+    end))
+
+(defun codex-ide--command-output-count-newlines (output end)
+  "Return the number of newline characters in OUTPUT before END."
+  (let ((count 0)
+        (pos 0))
+    (while (< pos end)
+      (when (= (aref output pos) ?\n)
+        (setq count (1+ count)))
+      (setq pos (1+ pos)))
+    count))
+
 (defun codex-ide--command-output-line-count (output)
   "Return the display line count for command OUTPUT."
-  (if (or (null output) (string-empty-p output))
-      0
-    (length (split-string (string-trim-right output) "\n"))))
+  (cond
+   ((or (null output) (string-empty-p output)) 0)
+   ((= (codex-ide--command-output-trimmed-end output) 0) 1)
+   (t
+    (1+ (codex-ide--command-output-count-newlines
+         output
+         (codex-ide--command-output-trimmed-end output))))))
 
-(defun codex-ide--format-command-output-text (output)
+(defun codex-ide--command-output-start-after-lines (output line-count)
+  "Return the index after LINE-COUNT newline-terminated lines in OUTPUT."
+  (let ((len (length output))
+        (seen 0)
+        (pos 0))
+    (while (and (< pos len)
+                (< seen line-count))
+      (when (= (aref output pos) ?\n)
+        (setq seen (1+ seen)))
+      (setq pos (1+ pos)))
+    pos))
+
+(defun codex-ide--command-output-render-range (output)
+  "Return the raw OUTPUT range to render into the transcript as (START . END)."
+  (let ((start 0)
+        (end (length output)))
+    (when (integerp codex-ide-command-output-max-rendered-lines)
+      (let* ((line-count (codex-ide--command-output-line-count output))
+             (hidden-lines
+              (max 0
+                   (- line-count
+                      (max 0 codex-ide-command-output-max-rendered-lines)))))
+        (setq start
+              (max start
+                   (codex-ide--command-output-start-after-lines
+                    output
+                    hidden-lines)))))
+    (when (integerp codex-ide-command-output-max-rendered-chars)
+      (setq start
+            (max start
+                 (- end
+                    (max 0 codex-ide-command-output-max-rendered-chars)))))
+    (cons (min start end) end)))
+
+(defun codex-ide--command-output-truncation-notice ()
+  "Return the transcript notice inserted after truncated command output."
+  "    ... transcript output truncated; showing latest output.\n")
+
+(defun codex-ide--format-command-output-text (output &optional truncated)
   "Return prefixed display text for raw command OUTPUT."
   (when (and (stringp output) (not (string-empty-p output)))
     (let* ((ends-with-newline (string-suffix-p "\n" output))
@@ -2019,20 +2109,145 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
                    output))
            (lines (split-string body "\n")))
       (concat
+       (when truncated
+         (codex-ide--command-output-truncation-notice))
        (mapconcat (lambda (line) (concat "    " line)) lines "\n")
        (if ends-with-newline "\n" "")))))
 
-(defun codex-ide--command-output-header-text (overlay)
-  "Return the header text for command output OVERLAY."
+(defun codex-ide--command-output-header-prefix-text (overlay)
+  "Return the non-action header text for command output OVERLAY."
   (let* ((line-count (overlay-get overlay :line-count))
+         (visible-line-count (overlay-get overlay :visible-line-count))
+         (truncated (overlay-get overlay :truncated))
          (line-label (if (= line-count 1) "line" "lines"))
-         (folded (overlay-get overlay :folded))
          (complete (overlay-get overlay :complete)))
-    (format "  └ output: %d %s%s (RET to %s)\n"
+    (format "  └ output: %d %s%s%s "
             line-count
             line-label
-            (if complete "" ", streaming")
-            (if folded "expand" "fold"))))
+            (if truncated
+                (format ", showing last %d" visible-line-count)
+              "")
+            (if complete "" ", streaming"))))
+
+(defun codex-ide--command-output-text (overlay)
+  "Return the full output text for command output OVERLAY."
+  (let* ((session (overlay-get overlay :session))
+         (item-id (overlay-get overlay :item-id))
+         (state (and session item-id
+                     (codex-ide--item-state session item-id))))
+    (or (plist-get state :output-text)
+        (overlay-get overlay :output-fallback-text)
+        "")))
+
+(defun codex-ide--command-output-buffer-name (overlay)
+  "Return the buffer name for full command output OVERLAY."
+  (let* ((session (overlay-get overlay :session))
+         (item-id (overlay-get overlay :item-id))
+         (directory (and session (codex-ide-session-directory session)))
+         (project (and directory
+                       (file-name-nondirectory
+                        (directory-file-name directory)))))
+    (format "*codex-output[%s:%s]*"
+            (or project "session")
+            (or item-id "command"))))
+
+(defun codex-ide--command-output-command-text (overlay)
+  "Return the display command associated with command output OVERLAY."
+  (let* ((session (overlay-get overlay :session))
+         (item-id (overlay-get overlay :item-id))
+         (state (and session item-id
+                     (codex-ide--item-state session item-id)))
+         (item (plist-get state :item))
+         (command (and (listp item) (alist-get 'command item))))
+    (and command
+         (codex-ide--display-command-string command))))
+
+(defun codex-ide--open-command-output-overlay (overlay)
+  "Open full command output for OVERLAY in a separate buffer."
+  (unless (overlayp overlay)
+    (user-error "No command output at point"))
+  (let* ((output (codex-ide--command-output-text overlay))
+         (command (codex-ide--command-output-command-text overlay))
+         (buffer (get-buffer-create
+                  (codex-ide--command-output-buffer-name overlay))))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (when command
+          (insert "$ " command "\n\n"))
+        (insert output)
+        (unless (or (string-empty-p output)
+                    (string-suffix-p "\n" output))
+          (insert "\n"))
+        (goto-char (point-min))
+        (special-mode)
+        (setq-local buffer-undo-list t)
+        (when (bound-and-true-p visual-line-mode)
+          (visual-line-mode -1))
+        (when (bound-and-true-p font-lock-mode)
+          (font-lock-mode -1))))
+    (pop-to-buffer buffer)))
+
+(defun codex-ide--toggle-command-output-overlay (overlay)
+  "Toggle command output OVERLAY.
+Return non-nil when OVERLAY was toggled."
+  (when (and (overlayp overlay)
+             (buffer-live-p (overlay-buffer overlay)))
+    (let ((folded (not (overlay-get overlay :folded))))
+      (overlay-put overlay :folded folded)
+      (overlay-put overlay 'invisible (and folded t))
+      (codex-ide--set-command-output-header overlay)
+      (codex-ide--set-command-output-body
+       overlay
+       (or (overlay-get overlay :display-text) ""))
+      t)))
+
+(defun codex-ide-open-command-output-at-point (&optional pos)
+  "Open full command output for the output block at POS.
+Return non-nil when a command output block was found."
+  (interactive)
+  (if-let ((overlay (codex-ide--command-output-overlay-at-point pos)))
+      (progn
+        (codex-ide--open-command-output-overlay overlay)
+        t)
+    (user-error "No command output at point")))
+
+(defun codex-ide--insert-command-output-button (label action overlay help-echo)
+  "Insert a command output button labeled LABEL invoking ACTION for OVERLAY."
+  (let ((start (point)))
+    (insert "[" label "]")
+    (make-text-button
+     start
+     (point)
+     'action (lambda (_button) (funcall action overlay))
+     'follow-link t
+     'help-echo help-echo
+     codex-ide-command-output-overlay-property overlay)))
+
+(defun codex-ide--insert-command-output-header (overlay)
+  "Insert the command output header and action buttons for OVERLAY."
+  (let ((prefix-start (point)))
+    (insert (codex-ide--command-output-header-prefix-text overlay))
+    (add-text-properties
+     prefix-start
+     (point)
+     (list 'face 'codex-ide-item-detail-face
+           'keymap codex-ide-command-output-map
+           'help-echo "RET toggles command output"
+           codex-ide-command-output-overlay-property overlay))
+    (codex-ide--insert-command-output-button
+     (if (overlay-get overlay :folded) "expand" "fold")
+     #'codex-ide--toggle-command-output-overlay
+     overlay
+     "Toggle command output")
+    (when (overlay-get overlay :truncated)
+      (insert " ")
+      (codex-ide--insert-command-output-button
+       "full output"
+       #'codex-ide--open-command-output-overlay
+       overlay
+       "Open full command output in a separate buffer"))
+    (insert "\n")))
 
 (defun codex-ide--set-command-output-header (overlay)
   "Refresh the visible header for command output OVERLAY."
@@ -2050,19 +2265,17 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
         (codex-ide--without-undo-recording
           (let ((inhibit-read-only t)
                 (moving (= (point) (point-max)))
+                (body-empty (= (marker-position body-start)
+                               (marker-position body-end)))
                 (start (marker-position header-start)))
             (goto-char start)
             (delete-region start (marker-position header-end))
-            (insert
-             (propertize
-              (codex-ide--command-output-header-text overlay)
-              'face 'codex-ide-item-detail-face
-              'keymap codex-ide-command-output-map
-              'help-echo "RET toggles command output"
-              codex-ide-command-output-overlay-property overlay))
+            (codex-ide--insert-command-output-header overlay)
             (set-marker header-start start)
             (set-marker header-end (point))
             (set-marker body-start (point))
+            (when body-empty
+              (set-marker body-end (point)))
             (move-overlay overlay
                           (marker-position body-start)
                           (marker-position body-end))
@@ -2070,6 +2283,44 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
                                       (marker-position header-end))
             (when moving
               (goto-char (point-max)))))))))
+
+(defun codex-ide--set-command-output-body (overlay display-text)
+  "Refresh OVERLAY's visible body using DISPLAY-TEXT.
+When OVERLAY is folded, remove the body text from the transcript buffer."
+  (let ((buffer (overlay-buffer overlay))
+        (body-start (overlay-get overlay :body-start))
+        (body-end (overlay-get overlay :body-end)))
+    (when (and (buffer-live-p buffer)
+               (markerp body-start)
+               (markerp body-end))
+      (with-current-buffer buffer
+        (let ((codex-ide--current-agent-item-type "commandExecution"))
+          (codex-ide--without-undo-recording
+            (let ((inhibit-read-only t)
+                  (moving (= (point) (point-max)))
+                  start)
+              (delete-region (marker-position body-start)
+                             (marker-position body-end))
+              (goto-char (marker-position body-start))
+              (setq start (point))
+              (unless (overlay-get overlay :folded)
+                (insert display-text)
+                (add-text-properties
+                 start
+                 (point)
+                 (append
+                  (list 'face 'codex-ide-command-output-face
+                        'keymap codex-ide-command-output-map
+                        'help-echo "RET toggles command output"
+                        codex-ide-command-output-overlay-property overlay)
+                  (overlay-get overlay :body-properties)))
+                (codex-ide--freeze-region start (point)))
+              (set-marker body-end (point))
+              (move-overlay overlay
+                            (marker-position body-start)
+                            (marker-position body-end))
+              (when moving
+                (goto-char (point-max))))))))))
 
 (defun codex-ide--ensure-command-output-block (session item-id)
   "Return the command output overlay for ITEM-ID in SESSION, creating it."
@@ -2095,26 +2346,24 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
                   (setq overlay (make-overlay (point) (point) buffer nil nil))
                   (overlay-put overlay 'face 'codex-ide-command-output-face)
                   (overlay-put overlay codex-ide-command-output-overlay-property overlay)
+                  (overlay-put overlay :session session)
+                  (overlay-put overlay :item-id item-id)
                   (overlay-put overlay :header-start header-start)
-                  (overlay-put overlay :output-text "")
+                  (overlay-put overlay :display-text "")
                   (overlay-put overlay :line-count 0)
+                  (overlay-put overlay :visible-line-count 0)
+                  (overlay-put overlay :truncated nil)
                   (overlay-put overlay :folded initial-folded)
                   (overlay-put overlay :complete nil)
                   (overlay-put overlay 'invisible (and initial-folded t))
-                  (insert (codex-ide--command-output-header-text overlay))
+                  (overlay-put overlay :body-properties nil)
+                  (codex-ide--insert-command-output-header overlay)
                   (setq header-end (copy-marker (point)))
                   (setq body-start (copy-marker (point)))
                   (setq body-end (copy-marker (point)))
                   (overlay-put overlay :header-end header-end)
                   (overlay-put overlay :body-start body-start)
                   (overlay-put overlay :body-end body-end)
-                  (add-text-properties
-                   (marker-position header-start)
-                   (marker-position header-end)
-                   (list 'face 'codex-ide-item-detail-face
-                         'keymap codex-ide-command-output-map
-                         'help-echo "RET toggles command output"
-                         codex-ide-command-output-overlay-property overlay))
                   (codex-ide--freeze-region (marker-position header-start)
                                             (marker-position header-end))
                   (when moving
@@ -2129,49 +2378,49 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
   "Append command output TEXT for ITEM-ID in SESSION."
   (when (and (stringp text) (not (string-empty-p text)))
     (when-let ((overlay (codex-ide--ensure-command-output-block session item-id)))
-      (let ((buffer (overlay-buffer overlay))
-            (body-start (overlay-get overlay :body-start))
-            (body-end (overlay-get overlay :body-end))
-            (previous (or (overlay-get overlay :output-text) ""))
+      (let ((state-output-text
+             (plist-get (codex-ide--item-state session item-id) :output-text))
+            (previous (or (overlay-get overlay :output-fallback-text) ""))
             output-text
-            display-text)
-        (setq output-text (concat previous text)
-              display-text (codex-ide--format-command-output-text output-text))
-        (overlay-put overlay :output-text output-text)
-        (overlay-put overlay
-                     :line-count
-                     (codex-ide--command-output-line-count output-text))
-        (when (and (buffer-live-p buffer)
-                   (markerp body-start)
-                   (markerp body-end))
-          (with-current-buffer buffer
-            (let ((codex-ide--current-agent-item-type "commandExecution"))
-              (codex-ide--without-undo-recording
-                (let ((inhibit-read-only t)
-                      (moving (= (point) (point-max)))
-                      start)
-                  (delete-region (marker-position body-start)
-                                 (marker-position body-end))
-                  (goto-char (marker-position body-start))
-                  (setq start (point))
-                  (insert display-text)
-                  (set-marker body-end (point))
-                  (add-text-properties
-                   start
-                   (point)
-                   (append
-                    (list 'face 'codex-ide-command-output-face
-                          'keymap codex-ide-command-output-map
-                          'help-echo "RET toggles command output"
-                          codex-ide-command-output-overlay-property overlay)
-                    (codex-ide--current-agent-text-properties)))
-                  (move-overlay overlay
-                                (marker-position body-start)
-                                (marker-position body-end))
-                  (codex-ide--freeze-region start (point))
-                  (when moving
-                    (goto-char (point-max))))))))
-        (codex-ide--set-command-output-header overlay)))))
+            visible-range
+            visible-output
+            display-text
+            truncated)
+        (setq output-text (or state-output-text (concat previous text))
+              visible-range
+              (codex-ide--command-output-render-range output-text)
+              visible-output
+              (substring output-text
+                         (car visible-range)
+                         (cdr visible-range))
+              truncated (> (car visible-range) 0)
+              display-text
+              (or (codex-ide--format-command-output-text
+                   visible-output
+                   truncated)
+                  (and truncated
+                       (codex-ide--command-output-truncation-notice))
+                  ""))
+        (overlay-put overlay :output-fallback-text output-text)
+        (let* ((line-count (codex-ide--command-output-line-count output-text))
+               (visible-line-count
+                (codex-ide--command-output-line-count visible-output)))
+          (overlay-put overlay :line-count line-count)
+          (overlay-put overlay :visible-line-count
+                       (if truncated
+                           (min visible-line-count line-count)
+                         line-count))
+          (overlay-put overlay :truncated truncated))
+        (when (not (equal display-text
+                          (overlay-get overlay :display-text)))
+          (overlay-put overlay :display-text display-text)
+          (overlay-put overlay
+                       :body-properties
+                       (codex-ide--current-agent-text-properties)))
+        (codex-ide--set-command-output-header overlay)
+        (codex-ide--set-command-output-body
+         overlay
+         (or (overlay-get overlay :display-text) ""))))))
 
 (defun codex-ide--render-command-output-delta (session item-id delta)
   "Render streamed command output DELTA for ITEM-ID in SESSION."
@@ -2193,7 +2442,10 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
       (overlay-put overlay :complete t)
       (overlay-put overlay :folded t)
       (overlay-put overlay 'invisible t)
-      (codex-ide--set-command-output-header overlay))))
+      (codex-ide--set-command-output-header overlay)
+      (codex-ide--set-command-output-body
+       overlay
+       (or (overlay-get overlay :display-text) "")))))
 
 (defun codex-ide--command-output-overlay-at-point (&optional pos)
   "Return the command output overlay at POS, or nil."
@@ -2213,11 +2465,7 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
 Return non-nil when a command output block was found."
   (interactive)
   (when-let ((overlay (codex-ide--command-output-overlay-at-point pos)))
-    (let ((folded (not (overlay-get overlay :folded))))
-      (overlay-put overlay :folded folded)
-      (overlay-put overlay 'invisible (and folded t))
-      (codex-ide--set-command-output-header overlay)
-      t)))
+    (codex-ide--toggle-command-output-overlay overlay)))
 
 (defun codex-ide--command-search-summary (command)
   "Return a semantic search summary for COMMAND, or nil."

@@ -762,12 +762,142 @@
            (exitCode . 0)))
         (should (overlay-get overlay 'invisible))
         (should (overlay-get overlay :folded))
-        (should (string-match-p "output: 2 lines (RET to expand)"
-                                (buffer-string)))))))
+        (should (string-match-p "output: 2 lines \\[expand\\]"
+                                (buffer-string)))
+        (should-not (string-match-p "    hello\n    world"
+                                    (buffer-string)))))))
 
 (ert-deftest codex-ide-command-output-face-extends-line-background ()
   (should (eq (face-attribute 'codex-ide-command-output-face :extend nil t)
               t)))
+
+(ert-deftest codex-ide-command-output-tails-rendered-lines ()
+  (let ((codex-ide-command-output-max-rendered-lines 3)
+        (codex-ide-command-output-max-rendered-chars nil))
+    (with-temp-buffer
+      (codex-ide-session-mode)
+      (let ((session (make-codex-ide-session
+                      :directory default-directory
+                      :buffer (current-buffer)
+                      :status "idle"
+                      :item-states (make-hash-table :test 'equal))))
+        (setq-local codex-ide--session session)
+        (codex-ide--insert-input-prompt session "submitted prompt")
+        (codex-ide--begin-turn-display session)
+        (codex-ide--render-item-start
+         session
+         '((id . "call-1")
+           (type . "commandExecution")
+           (command . ["sh" "-c" "printf lots"])))
+        (codex-ide--handle-notification
+         session
+         '((method . "item/commandExecution/outputDelta")
+           (params . ((itemId . "call-1")
+                      (delta . "one\ntwo\nthree\nfour\nfive\n")))))
+        (let ((buffer-text (buffer-string))
+              (state (codex-ide--item-state session "call-1")))
+          (should (string-match-p
+                   "output: 5 lines, showing last 3, streaming \\[fold\\] \\[full output\\]"
+                   buffer-text))
+          (should (string-match-p
+                   "transcript output truncated; showing latest output"
+                   buffer-text))
+          (should (string-match-p
+                   "    three\n    four\n    five\n"
+                   buffer-text))
+          (should-not (string-match-p "    one" buffer-text))
+          (should (string-match-p "four\nfive"
+                                  (plist-get state :output-text))))
+        (codex-ide--render-item-completion
+         session
+         '((id . "call-1")
+           (type . "commandExecution")
+           (status . "completed")
+           (exitCode . 0)))
+        (should (string-match-p
+                 "output: 5 lines, showing last 3 \\[expand\\] \\[full output\\]"
+                 (buffer-string)))))))
+
+(ert-deftest codex-ide-command-output-full-button-opens-uncapped-output ()
+  (let ((codex-ide-command-output-max-rendered-lines 2)
+        (codex-ide-command-output-max-rendered-chars nil))
+    (with-temp-buffer
+      (codex-ide-session-mode)
+      (let ((session (make-codex-ide-session
+                      :directory default-directory
+                      :buffer (current-buffer)
+                      :status "idle"
+                      :item-states (make-hash-table :test 'equal))))
+        (setq-local codex-ide--session session)
+        (codex-ide--insert-input-prompt session "submitted prompt")
+        (codex-ide--begin-turn-display session)
+        (codex-ide--render-item-start
+         session
+         '((id . "call-1")
+           (type . "commandExecution")
+           (command . ["sh" "-c" "printf lots"])))
+        (codex-ide--handle-notification
+         session
+         '((method . "item/commandExecution/outputDelta")
+           (params . ((itemId . "call-1")
+                      (delta . "one\ntwo\nthree\nfour\n")))))
+        (goto-char (point-min))
+        (search-forward "[full output]")
+        (let ((button (button-at (match-beginning 0))))
+          (should button)
+          (push-button (match-beginning 0)))
+        (should (string-match-p
+                 "\\*codex-output\\[.*:call-1\\]\\*"
+                 (buffer-name)))
+        (should (derived-mode-p 'special-mode))
+        (should (string-match-p
+                 "\\$ printf lots\n\none\ntwo\nthree\nfour\n"
+                 (buffer-string)))))))
+
+(ert-deftest codex-ide-command-output-full-button-uses-stream-cache ()
+  (let ((codex-ide-command-output-max-rendered-lines 2)
+        (codex-ide-command-output-max-rendered-chars nil))
+    (with-temp-buffer
+      (codex-ide-session-mode)
+      (let ((session (make-codex-ide-session
+                      :directory default-directory
+                      :buffer (current-buffer)
+                      :status "idle"
+                      :item-states (make-hash-table :test 'equal))))
+        (setq-local codex-ide--session session)
+        (codex-ide--insert-input-prompt session "submitted prompt")
+        (codex-ide--begin-turn-display session)
+        (codex-ide--render-item-start
+         session
+         '((id . "call-1")
+           (type . "commandExecution")
+           (command . ["sh" "-c" "printf lots"])))
+        (codex-ide--handle-notification
+         session
+         '((method . "item/commandExecution/outputDelta")
+           (params . ((itemId . "call-1")
+                      (delta . "one\ntwo\n")))))
+        (codex-ide--handle-notification
+         session
+         '((method . "item/commandExecution/outputDelta")
+           (params . ((itemId . "call-1")
+                      (delta . "three\nfour\n")))))
+        (let* ((state (codex-ide--item-state session "call-1"))
+               (overlay (plist-get state :command-output-overlay)))
+          (should (equal (overlay-get overlay :output-fallback-text)
+                         "one\ntwo\nthree\nfour\n"))
+          (codex-ide--put-item-state
+           session
+           "call-1"
+           (plist-put state :output-text nil))
+          (codex-ide--open-command-output-overlay overlay))
+        (should (string-match-p
+                 "\\*codex-output\\[.*:call-1\\]\\*"
+                 (buffer-name)))
+        (should (derived-mode-p 'special-mode))
+        (should (string-match-p
+                 "\\$ printf lots\n\none\ntwo\nthree\nfour\n"
+                 (buffer-string)))))))
 
 (ert-deftest codex-ide-command-output-can-start-folded-while-streaming ()
   (let ((codex-ide-command-output-fold-on-start t))
@@ -797,18 +927,20 @@
            (params . ((itemId . "call-1")
                       (delta . "world\n")))))
         (goto-char (point-min))
-        (search-forward "output: 2 lines, streaming (RET to expand)")
+        (search-forward "output: 2 lines, streaming [expand]")
         (let ((overlay (get-char-property
                         (match-beginning 0)
                         codex-ide-command-output-overlay-property)))
           (should (overlayp overlay))
           (should (overlay-get overlay :folded))
           (should (overlay-get overlay 'invisible))
-          (should (string-match-p "    hello\n    world"
-                                  (buffer-string)))
+          (should-not (string-match-p "    hello\n    world"
+                                      (buffer-string)))
           (codex-ide-toggle-command-output-at-point (match-beginning 0))
           (should-not (overlay-get overlay 'invisible))
-          (should (string-match-p "output: 2 lines, streaming (RET to fold)"
+          (should (string-match-p "    hello\n    world"
+                                  (buffer-string)))
+          (should (string-match-p "output: 2 lines, streaming \\[fold\\]"
                                   (buffer-string))))))))
 
 (ert-deftest codex-ide-command-execution-keeps-output-before-start ()
@@ -845,12 +977,16 @@
          (status . "completed")
          (exitCode . 0)))
       (goto-char (point-min))
-      (search-forward "output: 3 lines (RET to expand)")
+      (search-forward "output: 3 lines [expand]")
       (let ((overlay (get-char-property
                       (match-beginning 0)
                       codex-ide-command-output-overlay-property)))
         (should (overlayp overlay))
         (should (overlay-get overlay 'invisible))
+        (should-not (string-match-p "    early 1"
+                                    (buffer-string)))
+        (codex-ide-toggle-command-output-at-point (match-beginning 0))
+        (should-not (overlay-get overlay 'invisible))
         (should (string-match-p
                  "    early 1\n    early 2\n    late 3\n"
                  (buffer-string)))))))
@@ -879,12 +1015,15 @@
          (exitCode . 0)
          (aggregatedOutput . "hello\nworld\n")))
       (goto-char (point-min))
-      (search-forward "output: 2 lines (RET to expand)")
+      (search-forward "output: 2 lines [expand]")
       (let ((overlay (get-char-property
                       (match-beginning 0)
                       codex-ide-command-output-overlay-property)))
         (should (overlayp overlay))
         (should (overlay-get overlay 'invisible))
+        (should-not (string-match-p "    hello\n    world" (buffer-string)))
+        (codex-ide-toggle-command-output-at-point (match-beginning 0))
+        (should-not (overlay-get overlay 'invisible))
         (should (string-match-p "    hello\n    world" (buffer-string)))))))
 
 (ert-deftest codex-ide-command-output-does-not-fold-following-assistant-message ()
@@ -976,11 +1115,55 @@
                     #'codex-ide-toggle-command-output-at-point))
         (codex-ide-toggle-command-output-at-point)
         (should-not (overlay-get overlay 'invisible))
-        (should (string-match-p "output: 2 lines (RET to fold)"
+        (should (string-match-p "output: 2 lines \\[fold\\]"
                                 (buffer-string)))
+        (should (string-match-p "    hello\n    world" (buffer-string)))
         (codex-ide-toggle-command-output-at-point)
         (should (overlay-get overlay 'invisible))
-        (should (string-match-p "output: 2 lines (RET to expand)"
+        (should (string-match-p "output: 2 lines \\[expand\\]"
+                                (buffer-string)))
+        (should-not (string-match-p "    hello\n    world"
+                                    (buffer-string)))))))
+
+(ert-deftest codex-ide-command-output-expand-button-toggles-folded-block ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . ["echo" "hello"])))
+      (codex-ide--render-item-completion
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (status . "completed")
+         (exitCode . 0)
+         (aggregatedOutput . "hello\nworld\n")))
+      (goto-char (point-min))
+      (search-forward "output: 2 lines")
+      (let ((overlay (get-char-property
+                      (match-beginning 0)
+                      codex-ide-command-output-overlay-property)))
+        (should (overlay-get overlay :folded))
+        (should-not (string-match-p "    hello\n    world"
+                                    (buffer-string)))
+        (goto-char (point-min))
+        (search-forward "[expand]")
+        (goto-char (match-beginning 0))
+        (push-button)
+        (should-not (overlay-get overlay :folded))
+        (should (string-match-p "output: 2 lines \\[fold\\]"
+                                (buffer-string)))
+        (should (string-match-p "    hello\n    world"
                                 (buffer-string)))))))
 
 (ert-deftest codex-ide-command-execution-rg-completion-counts-aggregated-output ()
@@ -1089,6 +1272,25 @@
       (should (string-match-p "Reasoning\\.\\.\\." (buffer-string)))
       (codex-ide--ensure-agent-message-prefix session "msg-1")
       (should-not (string-match-p "Reasoning\\.\\.\\." (buffer-string))))))
+
+(ert-deftest codex-ide-pending-output-indicator-starts-on-new-line ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (let ((inhibit-read-only t))
+        (insert "* Ran command"))
+      (codex-ide--insert-pending-output-indicator
+       session
+       "Reasoning...\n")
+      (should (string-match-p
+               (regexp-quote "* Ran command\nReasoning...\n")
+               (buffer-string)))
+      (codex-ide--clear-pending-output-indicator session)
+      (should (equal (buffer-string) "* Ran command")))))
 
 (ert-deftest codex-ide-finish-turn-clears-pending-output-indicator ()
   (with-temp-buffer
