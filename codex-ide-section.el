@@ -13,6 +13,7 @@
   type
   value
   keymap
+  interactive-heading
   parent
   children
   heading-start
@@ -65,6 +66,10 @@
 (define-key codex-ide-section-mode-map (kbd "<left-fringe> <mouse-1>") #'codex-ide-section-mouse-toggle-section)
 (define-key codex-ide-section-mode-map (kbd "<left-fringe> <mouse-2>") #'codex-ide-section-mouse-toggle-section)
 (define-key codex-ide-section-mode-map (kbd "t") #'codex-ide-section-toggle-at-point)
+(define-key codex-ide-section-mode-map (kbd "T") #'codex-ide-section-toggle-siblings-at-point)
+;; Binding "(" for consistency with direds binding for toggling expanded directory detail.
+(define-key codex-ide-section-mode-map (kbd "(") #'codex-ide-section-toggle-siblings-at-point)
+(define-key codex-ide-section-mode-map (kbd "TAB") #'codex-ide-section-toggle-at-point)
 (define-key codex-ide-section-mode-map (kbd "^") #'codex-ide-section-up)
 (define-key codex-ide-section-mode-map (kbd "p") #'codex-ide-section-backward)
 (define-key codex-ide-section-mode-map (kbd "n") #'codex-ide-section-forward)
@@ -92,6 +97,14 @@
   (or (get-text-property pos 'codex-ide-section)
       (and (> pos (point-min))
            (get-text-property (1- pos) 'codex-ide-section))))
+
+(defun codex-ide-section-heading-at-point (&optional pos)
+  "Return the section whose heading contains POS or point."
+  (setq pos (or pos (point)))
+  (when-let ((section (codex-ide-section-at-point pos)))
+    (when (and (<= (codex-ide-section-heading-start section) pos)
+               (< pos (codex-ide-section-heading-end section)))
+      section)))
 
 (defun codex-ide-section-containing-point (&optional pos)
   "Return the deepest section containing POS or point."
@@ -209,34 +222,39 @@
 
 (defun codex-ide-section--set-heading-properties (section start end)
   "Tag SECTION heading text from START to END."
-  (let ((map (if-let ((section-map (codex-ide-section-keymap section)))
-                 (make-composed-keymap
-                  (list section-map codex-ide-section-heading-map))
-               codex-ide-section-heading-map)))
-  (add-text-properties
-   start end
-   `(codex-ide-section ,section
-                       keymap ,map
-                       rear-nonsticky (codex-ide-section
-                                       keymap
-                                       help-echo)
-                       help-echo "t: toggle section"))))
+  (when (codex-ide-section-interactive-heading section)
+    (let ((map (if-let ((section-map (codex-ide-section-keymap section)))
+                   (make-composed-keymap
+                    (list section-map codex-ide-section-heading-map))
+                 codex-ide-section-heading-map)))
+      (add-text-properties
+       start end
+       `(codex-ide-section ,section
+                           keymap ,map
+                           rear-nonsticky (codex-ide-section
+                                           keymap
+                                           help-echo)
+                           help-echo "t: toggle section")))))
 
 (defun codex-ide-section--update-indicator (section)
   "Refresh SECTION's visible indicator."
-  (let ((overlay (or (codex-ide-section-indicator-overlay section)
-                     (make-overlay (codex-ide-section-heading-start section)
-                                   (codex-ide-section-heading-end section)
-                                   nil t t))))
-    (overlay-put overlay 'evaporate t)
-    (overlay-put overlay 'codex-ide-section-indicator t)
-    (overlay-put overlay 'before-string
-                 (codex-ide-section--indicator-before-string section))
-    (setf (codex-ide-section-indicator-overlay section) overlay)
-    (codex-ide-section--set-heading-properties
-     section
-     (codex-ide-section-heading-start section)
-     (codex-ide-section-heading-end section))))
+  (if (codex-ide-section-interactive-heading section)
+      (let ((overlay (or (codex-ide-section-indicator-overlay section)
+                         (make-overlay (codex-ide-section-heading-start section)
+                                       (codex-ide-section-heading-end section)
+                                       nil t t))))
+        (overlay-put overlay 'evaporate t)
+        (overlay-put overlay 'codex-ide-section-indicator t)
+        (overlay-put overlay 'before-string
+                     (codex-ide-section--indicator-before-string section))
+        (setf (codex-ide-section-indicator-overlay section) overlay)
+        (codex-ide-section--set-heading-properties
+         section
+         (codex-ide-section-heading-start section)
+         (codex-ide-section-heading-end section)))
+    (when-let ((overlay (codex-ide-section-indicator-overlay section)))
+      (delete-overlay overlay)
+      (setf (codex-ide-section-indicator-overlay section) nil))))
 
 (defun codex-ide-section-show (section)
   "Show SECTION body."
@@ -274,6 +292,21 @@
       (codex-ide-section-toggle section)
     (user-error "No section at point")))
 
+(defun codex-ide-section-toggle-siblings-at-point ()
+  "Toggle all sibling sections for the heading at point.
+If every sibling is collapsed, expand them all.  Otherwise, collapse them all."
+  (interactive)
+  (let* ((section (codex-ide-section-heading-at-point))
+         (siblings (if section
+                       (codex-ide-section--siblings section)
+                     codex-ide-section--root-sections))
+         (action (if (seq-every-p #'codex-ide-section-hidden siblings)
+                     #'codex-ide-section-show
+                   #'codex-ide-section-hide)))
+    (unless siblings
+      (user-error "No section at point"))
+    (mapc action siblings)))
+
 (defun codex-ide-section-mouse-toggle-section (event)
   "Toggle the section clicked in EVENT."
   (interactive "e")
@@ -283,17 +316,25 @@
       (goto-char (codex-ide-section-heading-start section))
       (codex-ide-section-toggle section))))
 
-(defun codex-ide-section-insert (type value title body-fn &optional hidden keymap)
+(defun codex-ide-section-insert
+    (type value title body-fn &optional hidden keymap properties)
   "Insert a section with TYPE, VALUE, TITLE, and BODY-FN.
 BODY-FN is called with the new section object inserted as current parent.
 When HIDDEN is non-nil, initially hide the section body.
-When KEYMAP is non-nil, compose it with `codex-ide-section-heading-map'."
+When KEYMAP is non-nil, compose it with `codex-ide-section-heading-map'.
+PROPERTIES is a plist of section options.  Supported keys:
+`:interactive-heading' controls whether the heading is toggleable."
   (let ((inhibit-read-only t))
     (let* ((parent (car codex-ide-section--section-stack))
+           (interactive-heading
+            (if (plist-member properties :interactive-heading)
+                (plist-get properties :interactive-heading)
+              t))
            (section (codex-ide-section--create
                      :type type
                      :value value
                      :keymap keymap
+                     :interactive-heading interactive-heading
                      :parent parent
                      :children nil
                      :hidden nil))

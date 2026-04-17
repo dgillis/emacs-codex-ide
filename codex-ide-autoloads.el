@@ -384,9 +384,6 @@ Show a minibuffer summary of live Codex IDE session state." t)
 
 ;;; Generated autoloads from codex-ide-status-mode.el
 
-(defvar codex-ide-status-mode-preview-max-width 120 "\
-Maximum width for preview text shown in status section headings.")
-(custom-autoload 'codex-ide-status-mode-preview-max-width "codex-ide-status-mode" t)
 (defvar codex-ide-status-mode-transcript-preview-max-lines 40 "\
 Maximum number of transcript lines shown in expanded buffer sections.")
 (custom-autoload 'codex-ide-status-mode-transcript-preview-max-lines "codex-ide-status-mode" t)

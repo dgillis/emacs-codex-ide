@@ -528,7 +528,7 @@ inserted text."
          (padding (max 0 (- width (length label))))
          (left (/ padding 2))
          (right (- padding left)))
-    (format "\n%s%s%s\n\n"
+    (format "\n%s%s%s\n"
             (make-string left ?-)
             label
             (make-string right ?-))))
@@ -538,7 +538,8 @@ inserted text."
   (codex-ide--append-agent-text
    buffer
    (codex-ide--restored-transcript-separator-string)
-   'codex-ide-output-separator-face))
+   'codex-ide-output-separator-face)
+  (codex-ide--append-to-buffer buffer "\n"))
 
 (defun codex-ide--insert-pending-output-indicator (session &optional text)
   "Insert a temporary pending-output indicator for SESSION."

@@ -38,6 +38,7 @@
 (require 'codex-ide-core)
 (require 'codex-ide-mcp-elicitation)
 (require 'codex-ide-nav)
+(require 'codex-ide-utils)
 (require 'codex-ide-renderer)
 (require 'codex-ide-transient)
 (require 'codex-ide-mcp-bridge)
@@ -1197,9 +1198,10 @@ When INCLUDE-TURNS is non-nil, request the stored turn history too."
   "Format UPDATED-AT for thread labels."
   (cond
    ((numberp updated-at)
-    (format-time-string "%Y-%m-%dT%H:%M:%S%z"
-                        (seconds-to-time updated-at)))
-   ((stringp updated-at) updated-at)
+    (codex-ide-human-time-ago updated-at))
+   ((stringp updated-at)
+    (or (codex-ide-human-time-ago updated-at)
+        updated-at))
    (t "")))
 
 (defun codex-ide--thread-choice-preview (value)
