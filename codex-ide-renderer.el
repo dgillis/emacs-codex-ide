@@ -15,6 +15,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'codex-ide-core)
+(require 'codex-ide-nav)
 
 (declare-function codex-ide--extract-error-text "codex-ide" (&rest values))
 (declare-function codex-ide--classify-session-error "codex-ide" (&rest values))
@@ -57,7 +58,7 @@ rich markdown rendering."
                  (integer :tag "Maximum characters"))
   :group 'codex-ide)
 
-(defcustom codex-ide-command-output-fold-on-start nil
+(defcustom codex-ide-command-output-fold-on-start t
   "When non-nil, command output blocks start folded while output streams.
 
 Streaming output is still collected and the output header line count updates.
@@ -65,7 +66,7 @@ Press RET on the output header to expand or fold the block."
   :type 'boolean
   :group 'codex-ide)
 
-(defcustom codex-ide-command-output-max-rendered-lines 100
+(defcustom codex-ide-command-output-max-rendered-lines 10
   "Maximum command output lines to insert into the transcript buffer.
 
 The full output still contributes to the output line count and item completion
@@ -89,8 +90,10 @@ the transcript shows the most recent characters."
 
 (defface codex-ide-user-prompt-face
   '((((class color) (background light))
+     :inherit default
      :background "#f4f1e8")
     (((class color) (background dark))
+     :inherit default
      :background "#2d2a24"))
   "Face used to distinguish submitted and active user prompts."
   :group 'codex-ide)
@@ -112,6 +115,12 @@ the transcript shows the most recent characters."
   '((t :inherit shadow))
   "Face used for item detail lines."
   :group 'codex-ide)
+
+(defconst codex-ide-prompt-start-property 'codex-ide-prompt-start
+  "Text property used to mark the first character of a frozen user prompt.")
+
+(defconst codex-ide-prompt-prefix-overlay-property 'codex-ide-prompt-prefix-overlay
+  "Overlay property used to mark the visible `> ' prompt prefix overlay.")
 
 (defface codex-ide-command-output-face
   '((((class color) (background light))
@@ -201,8 +210,9 @@ the transcript shows the most recent characters."
 (defvar codex-ide-command-output-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'codex-ide-toggle-command-output-at-point)
+    (define-key map (kbd "<return>") #'codex-ide-toggle-command-output-at-point)
     map)
-  "Keymap active on command output headers and expanded output.")
+  "Keymap used on command output transcript text.")
 
 (defvar codex-ide--current-transcript-log-marker nil
   "Marker for the log line associated with the transcript text being inserted.")
@@ -625,6 +635,32 @@ inserted text."
     (delete-overlay overlay)
     (setf (codex-ide-session-input-overlay session) nil)))
 
+(defun codex-ide--prompt-prefix-overlay-at (pos)
+  "Return the prompt prefix overlay at POS, or nil when absent."
+  (seq-find (lambda (overlay)
+              (and (overlay-get overlay codex-ide-prompt-prefix-overlay-property)
+                   (= (overlay-start overlay) pos)))
+            (append (car (overlay-lists))
+                    (cdr (overlay-lists)))))
+
+(defun codex-ide--ensure-prompt-prefix-overlay-at (pos)
+  "Ensure a visible prompt prefix overlay exists at POS."
+  (unless (codex-ide--prompt-prefix-overlay-at pos)
+    (let ((overlay (make-overlay pos pos nil nil t)))
+      (overlay-put overlay codex-ide-prompt-prefix-overlay-property t)
+      (overlay-put overlay 'before-string
+                   (propertize "> " 'face 'codex-ide-user-prompt-face))
+      overlay)))
+
+(defun codex-ide--line-has-prompt-start-p (&optional pos)
+  "Return non-nil when the line at POS starts a user prompt."
+  (save-excursion
+    (goto-char (or pos (point)))
+    (beginning-of-line)
+    (let ((line-start (point)))
+      (or (codex-ide--prompt-prefix-overlay-at line-start)
+          (get-text-property line-start codex-ide-prompt-start-property)))))
+
 (defun codex-ide--delete-active-input-prompt (session)
   "Delete SESSION's active editable input prompt, if any."
   (let ((buffer (codex-ide-session-buffer session))
@@ -791,7 +827,10 @@ When DRAFT is nil, preserve the current active prompt text."
 (defun codex-ide--style-user-prompt-region (start end)
   "Apply prompt styling to the user prompt region from START to END."
   (when (< start end)
-    (add-text-properties start end '(face codex-ide-user-prompt-face))))
+    (add-text-properties start end '(face codex-ide-user-prompt-face))
+    (add-text-properties start (1+ start)
+                         `(,codex-ide-prompt-start-property t))
+    (codex-ide--ensure-prompt-prefix-overlay-at start)))
 
 (defun codex-ide--format-compact-number (value)
   "Format numeric VALUE in a compact human-readable form."
@@ -1500,6 +1539,7 @@ When UNDERSCORE is non-nil, reject intraword underscore delimiters."
            pos next
            'action #'codex-ide--open-file-link
            'follow-link t
+           'keymap (codex-ide-nav-button-keymap)
            'help-echo (get-text-property pos 'help-echo)
            'face 'link
            'codex-ide-markdown t
@@ -1615,6 +1655,7 @@ END; this keeps streamed partial tables from being reformatted on every delta."
                  match-start match-end
                  'action #'codex-ide--open-file-link
                  'follow-link t
+                 'keymap (codex-ide-nav-button-keymap)
                  'help-echo target
                  'face 'link
                  'codex-ide-markdown t
@@ -1917,8 +1958,7 @@ Optionally seed it with INITIAL-TEXT."
             (setf (codex-ide-session-input-prompt-start-marker session)
                   (copy-marker (point)))
             (setq prompt-start (point))
-            (insert (propertize "> " 'face 'codex-ide-user-prompt-face))
-            (codex-ide--freeze-region prompt-start (point))
+            (codex-ide--ensure-prompt-prefix-overlay-at prompt-start)
             (setf (codex-ide-session-input-start-marker session)
                   (copy-marker (point)))
             (codex-ide--reset-prompt-history-navigation session)
@@ -1935,7 +1975,6 @@ Optionally seed it with INITIAL-TEXT."
                             t
                             t)))
               (overlay-put overlay 'face 'codex-ide-user-prompt-face)
-              (overlay-put overlay 'evaporate t)
               (setf (codex-ide-session-input-overlay session) overlay))
             (when moving
               (goto-char (point-max)))
@@ -2065,25 +2104,20 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
   (let ((session (codex-ide--session-for-current-project)))
     (unless (eq (current-buffer) (codex-ide-session-buffer session))
       (user-error "Prompt-line navigation is only available in the Codex session buffer"))
-    (save-match-data
-      (beginning-of-line)
-      (let ((found
-             (pcase direction
-               (-1
-                (when (looking-at-p "> ")
-                  (forward-line -1))
-                (re-search-backward "^> " nil t))
-               (1
-                (when (looking-at-p "> ")
-                  (forward-line 1))
-                (re-search-forward "^> " nil t))
-               (_
-                (error "Unsupported prompt-line direction: %s" direction)))))
+    (beginning-of-line)
+    (when (codex-ide--line-has-prompt-start-p)
+      (forward-line direction))
+    (let ((found nil))
+      (while (and (not found)
+                  (not (if (< direction 0) (bobp) (eobp))))
+        (setq found (codex-ide--line-has-prompt-start-p))
         (unless found
-          (user-error (if (< direction 0)
-                          "No earlier prompt line"
-                        "No later prompt line")))
-        (goto-char (match-end 0))))))
+          (forward-line direction)))
+      (unless found
+        (user-error (if (< direction 0)
+                        "No earlier prompt line"
+                      "No later prompt line")))
+      (beginning-of-line))))
 
 (defun codex-ide--begin-turn-display (&optional session context-summary quiet)
   "Freeze the current prompt and show immediate pending output for SESSION.
@@ -2683,6 +2717,7 @@ Return non-nil when a command output block was found."
             (move-overlay overlay
                           (marker-position body-start)
                           (marker-position body-end))
+            (codex-ide--advance-active-boundary-after buffer body-end)
             (codex-ide--freeze-region (marker-position header-start)
                                       (marker-position header-end))
             (if restore-point
@@ -2732,44 +2767,6 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                   (codex-ide--restore-input-point-marker restore-point)
                 (when moving
                   (goto-char (point-max)))))))))))
-
-(defun codex-ide--set-command-output-body (overlay display-text)
-  "Refresh OVERLAY's visible body using DISPLAY-TEXT.
-When OVERLAY is folded, remove the body text from the transcript buffer."
-  (let ((buffer (overlay-buffer overlay))
-        (body-start (overlay-get overlay :body-start))
-        (body-end (overlay-get overlay :body-end)))
-    (when (and (buffer-live-p buffer)
-               (markerp body-start)
-               (markerp body-end))
-      (with-current-buffer buffer
-        (let ((codex-ide--current-agent-item-type "commandExecution"))
-          (codex-ide--without-undo-recording
-            (let ((inhibit-read-only t)
-                  (moving (= (point) (point-max)))
-                  start)
-              (delete-region (marker-position body-start)
-                             (marker-position body-end))
-              (goto-char (marker-position body-start))
-              (setq start (point))
-              (unless (overlay-get overlay :folded)
-                (insert display-text)
-                (add-text-properties
-                 start
-                 (point)
-                 (append
-                  (list 'face 'codex-ide-command-output-face
-                        'keymap codex-ide-command-output-map
-                        'help-echo "RET toggles command output"
-                        codex-ide-command-output-overlay-property overlay)
-                  (overlay-get overlay :body-properties)))
-                (codex-ide--freeze-region start (point)))
-              (set-marker body-end (point))
-              (move-overlay overlay
-                            (marker-position body-start)
-                            (marker-position body-end))
-              (when moving
-                (goto-char (point-max))))))))))
 
 (defun codex-ide--ensure-command-output-block (session item-id)
   "Return the command output overlay for ITEM-ID in SESSION, creating it."
@@ -3217,14 +3214,16 @@ Return non-nil when a command output block was found."
                         (alist-get 'command item))))))
           (setq state (plist-put state :details-rendered t))
           (when (equal item-type "commandExecution")
+            ;; Keep delayed command output anchored directly after the command
+            ;; block; later transcript inserts should not move this placeholder
+            ;; forward.
             (setq state
-                  (plist-put
-                   state
-                   :command-output-anchor-marker
-                   (with-current-buffer buffer
-                     (copy-marker
-                      (codex-ide--transcript-insertion-position buffer)
-                      t)))))
+                  (plist-put state
+                             :command-output-anchor-marker
+                             (with-current-buffer buffer
+                               (copy-marker
+                                (codex-ide--transcript-insertion-position
+                                 buffer))))))
           (setq state (plist-put state :saw-output nil))
           (codex-ide--put-item-state session item-id state))
         (when-let ((pending-output
@@ -3477,6 +3476,7 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
   (unless session
     (error "No Codex session available"))
   (let ((buffer (codex-ide-session-buffer session))
+        (turn-id (codex-ide-session-current-turn-id session))
         (queued-prompt (codex-ide--session-metadata-get
                         session
                         :queued-prompts))
@@ -3492,9 +3492,14 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
           (codex-ide-session-current-message-start-marker session) nil
           (codex-ide-session-output-prefix-inserted session) nil
           (codex-ide-session-item-states session) (make-hash-table :test 'equal)
-          (codex-ide-session-interrupt-requested session) nil
-          (codex-ide-session-status session) "idle")
+          (codex-ide-session-interrupt-requested session) nil)
+    (codex-ide--set-session-status session "idle" 'turn-completed)
     (codex-ide--update-header-line session)
+    (codex-ide--run-session-event
+     'turn-completed
+     session
+     :turn-id turn-id
+     :closing-note closing-note)
     (cond
      ((and active-prompt queued-prompt)
       (codex-ide--refresh-running-input-display session))
@@ -3542,7 +3547,6 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
            (t
             (insert "\n\n")))
           (setq prompt-start (point))
-          (insert (propertize "> " 'face 'codex-ide-user-prompt-face))
           (insert display-text)
           (codex-ide--style-user-prompt-region prompt-start (point))
           (codex-ide--freeze-region prompt-start (point))

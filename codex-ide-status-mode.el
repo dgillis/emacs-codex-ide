@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'codex-ide)
+(require 'codex-ide-nav)
 (require 'codex-ide-renderer)
 (require 'codex-ide-section)
 (require 'codex-ide-session-list)
@@ -17,8 +18,31 @@
   :type 'integer
   :group 'codex-ide)
 
+;;;###autoload
+(defcustom codex-ide-status-mode-transcript-preview-max-lines 40
+  "Maximum number of transcript lines shown in expanded buffer sections."
+  :type 'integer
+  :group 'codex-ide)
+
+;;;###autoload
+(defcustom codex-ide-status-mode-auto-refresh-delay 0.1
+  "Idle delay in seconds before status buffers auto-refresh after session events."
+  :type 'number
+  :group 'codex-ide)
+
+(defface codex-ide-status-expanded-content-face
+  '((t :inherit codex-ide-user-prompt-face :extend t))
+  "Face used for expanded buffer and thread content in status buffers."
+  :group 'codex-ide)
+
 (defvar-local codex-ide-status-mode--directory nil
   "Project directory displayed by the current status buffer.")
+
+(defvar-local codex-ide-status-mode--refresh-timer nil
+  "Idle timer used to coalesce automatic status buffer refreshes.")
+
+(defvar-local codex-ide-status-mode--event-listener nil
+  "Function object registered on `codex-ide-session-event-hook' for this buffer.")
 
 (defvar codex-ide-status-mode-map
   (let ((map (make-sparse-keymap)))
@@ -30,12 +54,98 @@
 (define-key codex-ide-status-mode-map (kbd "D") #'codex-ide-status-mode-delete-thing-at-point)
 (define-key codex-ide-status-mode-map (kbd "l") #'codex-ide-status-mode-refresh)
 (define-key codex-ide-status-mode-map (kbd "RET") #'codex-ide-status-mode-visit-thing-at-point)
+(define-key codex-ide-status-mode-map (kbd "TAB") #'codex-ide-status-mode-nav-forward)
+(define-key codex-ide-status-mode-map (kbd "<backtab>") #'codex-ide-status-mode-nav-backward)
+
+(defun codex-ide-status-mode--focal-points ()
+  "Return focal points for the current status buffer."
+  (append (codex-ide-nav-collect-sections)
+          (codex-ide-nav-collect-buttons)))
+
+;;;###autoload
+(defun codex-ide-status-mode-nav-forward ()
+  "Move point to the next focal point in a Codex status buffer."
+  (interactive)
+  (unless (derived-mode-p 'codex-ide-status-mode)
+    (user-error "Not in a Codex status buffer"))
+  (codex-ide-nav-forward))
+
+;;;###autoload
+(defun codex-ide-status-mode-nav-backward ()
+  "Move point to the previous focal point in a Codex status buffer."
+  (interactive)
+  (unless (derived-mode-p 'codex-ide-status-mode)
+    (user-error "Not in a Codex status buffer"))
+  (codex-ide-nav-backward))
 
 (define-derived-mode codex-ide-status-mode codex-ide-section-mode "Codex-Status"
   "Major mode for the Codex project status buffer."
   (setq-local hl-line-face 'codex-ide-session-list-current-row-face)
   (hl-line-mode 1)
-  (setq-local revert-buffer-function #'codex-ide-status-mode-refresh))
+  (setq-local codex-ide-nav-focal-point-functions
+              '(codex-ide-status-mode--focal-points))
+  (setq-local revert-buffer-function #'codex-ide-status-mode-refresh)
+  (codex-ide-status-mode--teardown-auto-refresh)
+  (codex-ide-status-mode--setup-auto-refresh))
+
+(defconst codex-ide-status-mode--session-events
+  '(created destroyed thread-attached status-changed turn-started
+            turn-completed approval-requested reset thread-deleted)
+  "Session events that should trigger a status buffer refresh.")
+
+(defun codex-ide-status-mode--cancel-refresh-timer ()
+  "Cancel any pending automatic refresh timer for the current buffer."
+  (when (timerp codex-ide-status-mode--refresh-timer)
+    (cancel-timer codex-ide-status-mode--refresh-timer)
+    (setq codex-ide-status-mode--refresh-timer nil)))
+
+(defun codex-ide-status-mode--run-scheduled-refresh (buffer)
+  "Refresh BUFFER if it is still a live Codex status buffer."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq codex-ide-status-mode--refresh-timer nil)
+      (when (and codex-ide-status-mode--directory
+                 (derived-mode-p 'codex-ide-status-mode))
+        (codex-ide-status-mode-refresh)))))
+
+(defun codex-ide-status-mode--schedule-refresh ()
+  "Schedule a coalesced refresh for the current status buffer."
+  (unless (timerp codex-ide-status-mode--refresh-timer)
+    (setq codex-ide-status-mode--refresh-timer
+          (run-with-idle-timer
+           codex-ide-status-mode-auto-refresh-delay
+           nil
+           #'codex-ide-status-mode--run-scheduled-refresh
+           (current-buffer)))))
+
+(defun codex-ide-status-mode--handle-session-event (event session _payload)
+  "Schedule a refresh when EVENT for SESSION affects this status buffer."
+  (when (and codex-ide-status-mode--directory
+             (memq event codex-ide-status-mode--session-events)
+             (equal (codex-ide-session-directory session)
+                    codex-ide-status-mode--directory))
+    (codex-ide-status-mode--schedule-refresh)))
+
+(defun codex-ide-status-mode--setup-auto-refresh ()
+  "Subscribe the current status buffer to Codex session events."
+  (unless codex-ide-status-mode--event-listener
+    (let ((buffer (current-buffer)))
+      (setq codex-ide-status-mode--event-listener
+            (lambda (event session payload)
+              (when (buffer-live-p buffer)
+                (with-current-buffer buffer
+                  (codex-ide-status-mode--handle-session-event
+                   event session payload)))))))
+  (add-hook 'codex-ide-session-event-hook codex-ide-status-mode--event-listener)
+  (add-hook 'kill-buffer-hook #'codex-ide-status-mode--teardown-auto-refresh nil t))
+
+(defun codex-ide-status-mode--teardown-auto-refresh ()
+  "Remove session event subscriptions for the current status buffer."
+  (codex-ide-status-mode--cancel-refresh-timer)
+  (when codex-ide-status-mode--event-listener
+    (remove-hook 'codex-ide-session-event-hook codex-ide-status-mode--event-listener)
+    (setq codex-ide-status-mode--event-listener nil))
+  (remove-hook 'kill-buffer-hook #'codex-ide-status-mode--teardown-auto-refresh t))
 
 (defun codex-ide-status-mode--section-identity (section)
   "Return a stable identity for SECTION across rerenders."
@@ -294,6 +404,41 @@ Only child `buffer' and `thread' sections support visit and delete actions."
     (plist-get (codex-ide-status-mode--last-prompt-data-before session search-end)
                :text)))
 
+(defun codex-ide-status-mode--first-prompt-data (session)
+  "Return plist describing the first non-empty submitted prompt in SESSION.
+The plist contains `:text', `:start', and `:end'."
+  (when-let ((buffer (codex-ide-session-buffer session)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (save-excursion
+          (let ((pos (point-min))
+                found)
+            (while (and (< pos (point-max)) (not found))
+              (when (codex-ide-status-mode--user-prompt-face-p
+                     (get-char-property pos 'face))
+                (let* ((end (next-single-char-property-change pos 'face nil (point-max)))
+                       (start pos)
+                       text)
+                  (while (and (> start (point-min))
+                              (codex-ide-status-mode--user-prompt-face-p
+                               (get-char-property (1- start) 'face)))
+                    (setq start (1- start)))
+                  (setq text (string-remove-prefix
+                              "> "
+                              (buffer-substring-no-properties start end)))
+                  (setq text (string-trim text))
+                  (unless (string-empty-p text)
+                    (setq found (list :text text
+                                      :start start
+                                      :end end)))))
+              (unless found
+                (setq pos (next-single-char-property-change pos 'face nil (point-max)))))
+            found))))))
+
+(defun codex-ide-status-mode--first-submitted-prompt-text (session)
+  "Return the first submitted non-empty prompt text from SESSION."
+  (plist-get (codex-ide-status-mode--first-prompt-data session) :text))
+
 (defun codex-ide-status-mode--active-prompt-data (session)
   "Return plist describing SESSION's current non-empty editable prompt."
   (when-let ((buffer (codex-ide-session-buffer session)))
@@ -465,19 +610,95 @@ PREFIX defaults to a dimmed `└ '.  PREFIX-FACE defaults to `shadow'."
                   (insert "\n"))))
             (forward-line 1)))))))
 
-(defun codex-ide-status-mode--last-output-block-range (start end)
-  "Return the last separator-delimited output block between START and END."
+(defun codex-ide-status-mode--apply-expanded-content-face (start end)
+  "Apply the expanded-content face between START and END."
+  (when (< start end)
+    (add-face-text-property
+     start
+     end
+     'codex-ide-status-expanded-content-face
+     'append)))
+
+(defun codex-ide-status-mode--skip-transcript-leading-junk (start end)
+  "Return the first content position between START and END.
+Skip separator borders and leading whitespace."
+  (save-excursion
+    (goto-char start)
+    (let ((separator (codex-ide--output-separator-string))
+          (separator-regexp (regexp-quote (codex-ide--output-separator-string)))
+          done)
+      (while (and (< (point) end) (not done))
+        (let ((before (point)))
+          (skip-chars-forward " \t\n" end)
+          (cond
+           ((and (<= (+ (point) (length separator)) end)
+                 (looking-at-p separator-regexp))
+            (forward-char (length separator)))
+           ((= (point) before)
+            (setq done t)))))
+      (min (point) end))))
+
+(defun codex-ide-status-mode--trim-transcript-end (start end)
+  "Return the last content position between START and END.
+Trim trailing separator borders and whitespace."
   (save-excursion
     (goto-char end)
     (let ((separator (codex-ide--output-separator-string)))
-      (if-let ((separator-start (search-backward separator start t)))
-          (progn
-            (goto-char (+ separator-start (length separator)))
-            (while (and (< (point) end)
-                        (eq (char-after) ?\n))
-              (forward-char 1))
-            (cons (point) end))
-        (cons start end)))))
+      (while (and (> (point) start)
+                  (progn
+                    (skip-chars-backward " \t\n" start)
+                    (if (and (>= (- (point) (length separator)) start)
+                             (save-excursion
+                               (goto-char (- (point) (length separator)))
+                               (looking-at-p (regexp-quote separator))))
+                        (progn
+                          (goto-char (- (point) (length separator)))
+                          t)
+                      nil))))
+      (skip-chars-backward " \t\n" start)
+      (max start (point)))))
+
+(defun codex-ide-status-mode--transcript-preview-range (start end)
+  "Return the transcript preview range between START and END.
+The preview shows the last
+`codex-ide-status-mode-transcript-preview-max-lines' lines, expanded to begin
+at the start of the containing separator-delimited block."
+  (save-excursion
+    (let ((trimmed-end (codex-ide-status-mode--trim-transcript-end start end)))
+      (when (< start trimmed-end)
+        (goto-char trimmed-end)
+        (forward-line (- (max 0 codex-ide-status-mode-transcript-preview-max-lines)))
+        (let* ((separator (codex-ide--output-separator-string))
+               (line-start (max start (line-beginning-position)))
+               (block-start
+                (progn
+                  (goto-char line-start)
+                  (if-let ((separator-start (search-backward separator start t)))
+                      (+ separator-start (length separator))
+                    start)))
+               (content-start
+                (codex-ide-status-mode--skip-transcript-leading-junk
+                 block-start trimmed-end)))
+          (when (< content-start trimmed-end)
+            (cons content-start trimmed-end)))))))
+
+(defun codex-ide-status-mode--last-output-block-range (start end)
+  "Return the last separator-delimited output block between START and END."
+  (save-excursion
+    (let* ((trimmed-end (codex-ide-status-mode--trim-transcript-end start end))
+           (separator (codex-ide--output-separator-string)))
+      (when (< start trimmed-end)
+        (goto-char trimmed-end)
+        (let* ((block-start
+                (if-let ((separator-start
+                          (search-backward separator start t)))
+                    (+ separator-start (length separator))
+                  start))
+               (content-start
+                (codex-ide-status-mode--skip-transcript-leading-junk
+                 block-start trimmed-end)))
+          (when (< content-start trimmed-end)
+            (cons content-start trimmed-end)))))))
 
 (defun codex-ide-status-mode--current-turn-transcript-range (session)
   "Return the visible transcript range for SESSION's in-progress turn."
@@ -524,7 +745,7 @@ Return nil when there is no agent reply."
             (when-let* ((response-range
                          (codex-ide-status-mode--last-agent-response-range session))
                         (block-range
-                         (codex-ide-status-mode--last-output-block-range
+                         (codex-ide-status-mode--transcript-preview-range
                           (car response-range)
                           (cdr response-range))))
               (codex-ide-status-mode--copy-buffer-region-for-status
@@ -557,16 +778,20 @@ Return nil when there is no agent reply."
       (codex-ide-session-status session)
     "stored"))
 
+(defun codex-ide-status-mode--thread-session (thread directory)
+  "Return the live session linked to THREAD in DIRECTORY, if any."
+  (codex-ide--session-for-thread-id (alist-get 'id thread) directory))
+
 (defun codex-ide-status-mode--thread-buffer-name (thread directory)
   "Return the linked live buffer name for THREAD in DIRECTORY, if any."
-  (when-let ((session (codex-ide--session-for-thread-id
-                       (alist-get 'id thread)
-                       directory)))
+  (when-let ((session (codex-ide-status-mode--thread-session thread directory)))
     (buffer-name (codex-ide-session-buffer session))))
 
 (defun codex-ide-status-mode--insert-thread-metadata-line (label value)
   "Insert a dimmed thread metadata line with LABEL and VALUE."
-  (insert (propertize (format "└ %s: %s\n" label (or value "")) 'face 'shadow)))
+  (let ((start (point)))
+    (insert (propertize (format "└ %s: %s\n" label (or value "")) 'face 'shadow))
+    (codex-ide-status-mode--apply-expanded-content-face start (point))))
 
 (defun codex-ide-status-mode--thread-preview-body (full-preview)
   "Return FULL-PREVIEW normalized for status display."
@@ -581,8 +806,9 @@ Return nil when there is no agent reply."
   "Insert a child section for SESSION."
   (let* ((status (codex-ide-session-status session))
          (label (codex-ide--status-label status))
-         (full-prompt (or (codex-ide-status-mode--last-submitted-prompt-text session) ""))
-         (preview (codex-ide-status-mode--truncate-preview full-prompt))
+         (first-prompt (or (codex-ide-status-mode--first-submitted-prompt-text session) ""))
+         (last-prompt (or (codex-ide-status-mode--last-submitted-prompt-text session) ""))
+         (preview (codex-ide-status-mode--truncate-preview first-prompt))
          (buffer-name (buffer-name (codex-ide-session-buffer session)))
          (title (concat
                  (propertize label 'face (codex-ide-status-mode--status-face status))
@@ -593,63 +819,83 @@ Return nil when there is no agent reply."
     (codex-ide-section-insert
      'buffer session title
      (lambda (_section)
-       (when-let ((transcript (codex-ide-status-mode--buffer-transcript-slice session)))
-         (codex-ide-status-mode--insert-prefixed-lines transcript nil "  ")
-         (unless (bolp)
-           (insert "\n"))))
+       (let ((start (point)))
+         (codex-ide-status-mode--insert-thread-metadata-line
+          "Last Prompt"
+          (codex-ide-status-mode--truncate-preview last-prompt))
+         (codex-ide-status-mode--insert-thread-metadata-line
+          "Last Response"
+          nil)
+         (when-let ((transcript (codex-ide-status-mode--buffer-transcript-slice session)))
+           (codex-ide-status-mode--insert-prefixed-lines transcript nil "  ")
+           (unless (bolp)
+             (insert "\n")))
+         (codex-ide-status-mode--apply-expanded-content-face start (point))))
      t)))
 
 (defun codex-ide-status-mode--insert-thread-section (thread directory)
   "Insert a child section for THREAD in DIRECTORY."
-  (let* ((status (codex-ide-status-mode--thread-status thread directory))
+  (let* ((session (codex-ide-status-mode--thread-session thread directory))
+         (status (if session
+                     (codex-ide-session-status session)
+                   "stored"))
          (label (codex-ide--status-label status))
          (thread-id (alist-get 'id thread))
          (raw-preview (or (alist-get 'name thread)
                           (alist-get 'preview thread)
                           "Untitled"))
-         (thread-title (codex-ide-status-mode--preview-line raw-preview))
-         (preview (codex-ide-status-mode--truncate-preview raw-preview))
+         (buffer-name (if session
+                          (buffer-name (codex-ide-session-buffer session))
+                        "none"))
+         (first-prompt (when session
+                         (codex-ide-status-mode--first-submitted-prompt-text session)))
+         (last-prompt (when session
+                        (codex-ide-status-mode--last-submitted-prompt-text session)))
+         (last-response (when session
+                          (codex-ide-status-mode--buffer-transcript-slice session)))
+         (preview (codex-ide-status-mode--truncate-preview
+                   (or first-prompt raw-preview)))
          (title (concat
                  (propertize label 'face (codex-ide-status-mode--status-face status))
                  "  "
-                 (propertize (codex-ide--thread-choice-short-id thread)
-                             'face '(shadow font-lock-constant-face))
+                 (propertize buffer-name 'face 'shadow)
                  "  "
                  preview)))
     (codex-ide-section-insert
      'thread thread title
      (lambda (_section)
-       (codex-ide-status-mode--insert-thread-metadata-line "Thread" thread-id)
-       (codex-ide-status-mode--insert-thread-metadata-line
-        "Buffer"
-        (or (codex-ide-status-mode--thread-buffer-name thread directory) "None"))
-       (codex-ide-status-mode--insert-thread-metadata-line
-        "Created"
-        (codex-ide--format-thread-updated-at (alist-get 'createdAt thread)))
-       (codex-ide-status-mode--insert-thread-metadata-line
-        "Updated"
-        (codex-ide--format-thread-updated-at (alist-get 'updatedAt thread)))
-       (codex-ide-status-mode--insert-thread-preview-body raw-preview))
+       (let ((start (point)))
+         (codex-ide-status-mode--insert-thread-metadata-line "Thread ID" thread-id)
+         (codex-ide-status-mode--insert-thread-metadata-line
+          "Created"
+          (codex-ide--format-thread-updated-at (alist-get 'createdAt thread)))
+         (codex-ide-status-mode--insert-thread-metadata-line
+          "Updated"
+          (codex-ide--format-thread-updated-at (alist-get 'updatedAt thread)))
+         (when last-prompt
+           (codex-ide-status-mode--insert-thread-metadata-line
+            "Last Prompt"
+            (codex-ide-status-mode--truncate-preview last-prompt))
+           (when last-response
+             (codex-ide-status-mode--insert-thread-metadata-line
+              "Last Response"
+              nil)
+             (codex-ide-status-mode--insert-prefixed-lines last-response nil "    ")
+             (unless (bolp)
+               (insert "\n"))))
+         (codex-ide-status-mode--apply-expanded-content-face start (point))))
      t)))
 
 (defun codex-ide-status-mode--render-sections (directory)
   "Render status sections for DIRECTORY."
-  (let* ((sessions (codex-ide-status-mode--project-sessions directory))
-         (query-session nil)
+  (let* ((query-session nil)
          (threads nil))
     (codex-ide--prepare-session-operations)
     (setq query-session (codex-ide--ensure-query-session-for-thread-selection directory))
     (setq threads (codex-ide--thread-list-data query-session))
     (codex-ide-section-insert
-     'buffers sessions
-     (codex-ide-status-mode--section-title "Buffers" (length sessions))
-     (lambda (_section)
-       (dolist (session sessions)
-         (codex-ide-status-mode--insert-buffer-section session))))
-    (insert "\n")
-    (codex-ide-section-insert
      'threads threads
-     (codex-ide-status-mode--section-title "Threads" (length threads))
+     (codex-ide-status-mode--section-title "Sessions" (length threads))
      (lambda (_section)
        (dolist (thread threads)
          (codex-ide-status-mode--insert-thread-section thread directory))))))

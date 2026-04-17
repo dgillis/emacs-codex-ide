@@ -1,0 +1,3 @@
+interface:
+  display_name: "Run Tests"
+  short_description: "Run codex-ide tests"
