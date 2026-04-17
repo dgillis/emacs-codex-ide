@@ -2733,6 +2733,44 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                 (when moving
                   (goto-char (point-max)))))))))))
 
+(defun codex-ide--set-command-output-body (overlay display-text)
+  "Refresh OVERLAY's visible body using DISPLAY-TEXT.
+When OVERLAY is folded, remove the body text from the transcript buffer."
+  (let ((buffer (overlay-buffer overlay))
+        (body-start (overlay-get overlay :body-start))
+        (body-end (overlay-get overlay :body-end)))
+    (when (and (buffer-live-p buffer)
+               (markerp body-start)
+               (markerp body-end))
+      (with-current-buffer buffer
+        (let ((codex-ide--current-agent-item-type "commandExecution"))
+          (codex-ide--without-undo-recording
+            (let ((inhibit-read-only t)
+                  (moving (= (point) (point-max)))
+                  start)
+              (delete-region (marker-position body-start)
+                             (marker-position body-end))
+              (goto-char (marker-position body-start))
+              (setq start (point))
+              (unless (overlay-get overlay :folded)
+                (insert display-text)
+                (add-text-properties
+                 start
+                 (point)
+                 (append
+                  (list 'face 'codex-ide-command-output-face
+                        'keymap codex-ide-command-output-map
+                        'help-echo "RET toggles command output"
+                        codex-ide-command-output-overlay-property overlay)
+                  (overlay-get overlay :body-properties)))
+                (codex-ide--freeze-region start (point)))
+              (set-marker body-end (point))
+              (move-overlay overlay
+                            (marker-position body-start)
+                            (marker-position body-end))
+              (when moving
+                (goto-char (point-max))))))))))
+
 (defun codex-ide--ensure-command-output-block (session item-id)
   "Return the command output overlay for ITEM-ID in SESSION, creating it."
   (let* ((state (codex-ide--item-state session item-id))
