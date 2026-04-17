@@ -6,17 +6,12 @@
 
 ;;; Code:
 
+(require 'button)
 (require 'codex-ide)
 (require 'codex-ide-nav)
 (require 'codex-ide-renderer)
 (require 'codex-ide-section)
 (require 'codex-ide-session-list)
-
-;;;###autoload
-(defcustom codex-ide-status-mode-preview-max-width 120
-  "Maximum width for preview text shown in status section headings."
-  :type 'integer
-  :group 'codex-ide)
 
 ;;;###autoload
 (defcustom codex-ide-status-mode-transcript-preview-max-lines 40
@@ -31,9 +26,21 @@
   :group 'codex-ide)
 
 (defface codex-ide-status-expanded-content-face
-  '((t :inherit codex-ide-user-prompt-face :extend t))
+  '((t :inherit default :background unspecified :extend t))
   "Face used for expanded buffer and thread content in status buffers."
   :group 'codex-ide)
+
+(defface codex-ide-status-metadata-label-face
+  '((t :inherit default :height 0.9 :weight light))
+  "Face used for `* Label:' metadata prefixes in status buffers."
+  :group 'codex-ide)
+
+;; `defface' alone can leave an already-defined face carrying old attributes in a
+;; live Emacs session, so explicitly clear the background on reload as well.
+(face-spec-set 'codex-ide-status-expanded-content-face
+               '((t :inherit default :background unspecified :extend t)))
+(face-spec-set 'codex-ide-status-metadata-label-face
+               '((t :inherit default :height 0.9 :weight light)))
 
 (defvar-local codex-ide-status-mode--directory nil
   "Project directory displayed by the current status buffer.")
@@ -54,8 +61,8 @@
 (define-key codex-ide-status-mode-map (kbd "D") #'codex-ide-status-mode-delete-thing-at-point)
 (define-key codex-ide-status-mode-map (kbd "l") #'codex-ide-status-mode-refresh)
 (define-key codex-ide-status-mode-map (kbd "RET") #'codex-ide-status-mode-visit-thing-at-point)
-(define-key codex-ide-status-mode-map (kbd "TAB") #'codex-ide-status-mode-nav-forward)
-(define-key codex-ide-status-mode-map (kbd "<backtab>") #'codex-ide-status-mode-nav-backward)
+;; (define-key codex-ide-status-mode-map (kbd "TAB") #'codex-ide-status-mode-nav-forward)
+;; (define-key codex-ide-status-mode-map (kbd "<backtab>") #'codex-ide-status-mode-nav-backward)
 
 (defun codex-ide-status-mode--focal-points ()
   "Return focal points for the current status buffer."
@@ -80,6 +87,11 @@
 
 (define-derived-mode codex-ide-status-mode codex-ide-section-mode "Codex-Status"
   "Major mode for the Codex project status buffer."
+  (setq-local truncate-lines t)
+  (setq-local word-wrap nil)
+  (setq-local line-move-visual nil)
+  (when (bound-and-true-p visual-line-mode)
+    (visual-line-mode -1))
   (setq-local hl-line-face 'codex-ide-session-list-current-row-face)
   (hl-line-mode 1)
   (setq-local codex-ide-nav-focal-point-functions
@@ -385,9 +397,12 @@ Only child `buffer' and `thread' sections support visit and delete actions."
   "Return the face used for STATUS."
   (or (codex-ide--status-face status) 'default))
 
-(defun codex-ide-status-mode--section-title (title count)
-  "Return a section heading from TITLE and COUNT."
-  (propertize (format "%s (%d)" title count) 'face 'bold))
+(defun codex-ide-status-mode--header-line (directory count)
+  "Return header-line text for DIRECTORY with session COUNT."
+  (format "Project: %s | %d %s"
+          (codex-ide--project-name directory)
+          count
+          (if (= count 1) "session" "sessions")))
 
 (defun codex-ide-status-mode--user-prompt-face-p (face)
   "Return non-nil when FACE includes `codex-ide-user-prompt-face'."
@@ -438,6 +453,17 @@ The plist contains `:text', `:start', and `:end'."
 (defun codex-ide-status-mode--first-submitted-prompt-text (session)
   "Return the first submitted non-empty prompt text from SESSION."
   (plist-get (codex-ide-status-mode--first-prompt-data session) :text))
+
+(defun codex-ide-status-mode--submitted-prompt-count (session)
+  "Return the number of non-empty submitted prompts in SESSION."
+  (let ((count 0)
+        (position most-positive-fixnum)
+        prompt-data)
+    (while (setq prompt-data
+                 (codex-ide-status-mode--last-prompt-data-before session position))
+      (setq count (1+ count)
+            position (plist-get prompt-data :start)))
+    count))
 
 (defun codex-ide-status-mode--active-prompt-data (session)
   "Return plist describing SESSION's current non-empty editable prompt."
@@ -523,13 +549,63 @@ The plist contains `:text', `:start', and `:end'."
         "Untitled"
       preview)))
 
-(defun codex-ide-status-mode--truncate-preview (value)
-  "Return VALUE truncated for section-heading previews."
-  (let* ((limit (max 3 codex-ide-status-mode-preview-max-width))
-         (preview (codex-ide-status-mode--preview-line value)))
-    (if (> (length preview) limit)
-        (concat (substring preview 0 (- limit 3)) "...")
-      preview)))
+(defun codex-ide-status-mode--plain-text (value)
+  "Return VALUE without text properties."
+  (when value
+    (substring-no-properties value)))
+
+(defun codex-ide-status-mode--format-heading-status (label status)
+  "Return LABEL styled for STATUS."
+  (propertize label
+              'face
+              (codex-ide-status-mode--status-face status)))
+
+(defun codex-ide-status-mode--format-heading-updated (text)
+  "Return styled updated display TEXT for section headings."
+  (propertize (or text "")
+              'face
+              'shadow))
+
+(defun codex-ide-status-mode--format-heading-preview (preview)
+  "Return PREVIEW styled for section headings."
+  preview)
+
+(defun codex-ide-status-mode--pad-heading-part (text width)
+  "Return TEXT padded with trailing spaces to WIDTH."
+  (concat text (make-string (max 0 (- width (string-width text))) ?\s)))
+
+(defun codex-ide-status-mode--heading-layout (threads directory)
+  "Return heading layout widths for THREADS in DIRECTORY."
+  (let ((status-width 0)
+        (updated-width 0))
+    (dolist (thread threads)
+      (let* ((session (codex-ide-status-mode--thread-session thread directory))
+             (status (if session
+                         (codex-ide-session-status session)
+                       "stored"))
+             (label (codex-ide--status-label status))
+             (updated (or (codex-ide-human-time-ago (alist-get 'updatedAt thread)) "")))
+        (setq status-width (max status-width (string-width label))
+              updated-width (max updated-width (string-width updated)))))
+    (list :status-width status-width
+          :updated-width updated-width)))
+
+(defun codex-ide-status-mode--thread-updated-at-time (thread)
+  "Return THREAD's `updatedAt' value as an Emacs time."
+  (let ((updated-at (alist-get 'updatedAt thread)))
+    (cond
+     ((numberp updated-at) (seconds-to-time updated-at))
+     ((stringp updated-at) (or (ignore-errors (date-to-time updated-at))
+                               (seconds-to-time 0)))
+     (t (seconds-to-time 0)))))
+
+(defun codex-ide-status-mode--sort-threads-by-updated (threads)
+  "Return THREADS sorted by most recently updated first."
+  (sort (copy-sequence threads)
+        (lambda (left right)
+          (time-less-p
+           (codex-ide-status-mode--thread-updated-at-time right)
+           (codex-ide-status-mode--thread-updated-at-time left)))))
 
 (defun codex-ide-status-mode--last-agent-response-range (session)
   "Return the start and end positions of SESSION's last agent response."
@@ -782,15 +858,48 @@ Return nil when there is no agent reply."
   "Return the live session linked to THREAD in DIRECTORY, if any."
   (codex-ide--session-for-thread-id (alist-get 'id thread) directory))
 
-(defun codex-ide-status-mode--thread-buffer-name (thread directory)
-  "Return the linked live buffer name for THREAD in DIRECTORY, if any."
-  (when-let ((session (codex-ide-status-mode--thread-session thread directory)))
-    (buffer-name (codex-ide-session-buffer session))))
-
 (defun codex-ide-status-mode--insert-thread-metadata-line (label value)
-  "Insert a dimmed thread metadata line with LABEL and VALUE."
+  "Insert a thread metadata line with LABEL and VALUE."
   (let ((start (point)))
-    (insert (propertize (format "└ %s: %s\n" label (or value "")) 'face 'shadow))
+    (insert (propertize (format "* %s:" label)
+                        'face
+                        'codex-ide-status-metadata-label-face))
+    (insert " ")
+    (let ((value-start (point)))
+      (insert (or value ""))
+      (add-text-properties
+       value-start
+       (point)
+       (list 'face
+             (pcase label
+               ((or "Thread ID" "Created" "Updated") 'font-lock-string-face)
+               ("Buffer" 'warning)
+               ((or "Last Prompt" "Last Response") 'font-lock-doc-face)
+               (_ 'default)))))
+    (insert "\n")
+    (codex-ide-status-mode--apply-expanded-content-face start (point))))
+
+(defun codex-ide-status-mode--insert-buffer-metadata-line (session)
+  "Insert a clickable buffer metadata line for SESSION."
+  (let ((start (point))
+        (buffer (codex-ide-session-buffer session)))
+    (insert (propertize "* Buffer:"
+                        'face
+                        'codex-ide-status-metadata-label-face))
+    (insert " ")
+    (insert-text-button
+     (buffer-name buffer)
+     'face 'button
+     'follow-link t
+     'help-echo "Open session buffer"
+     'mouse-face 'highlight
+     'keymap (codex-ide-nav-button-keymap)
+     'action (lambda (_button)
+               (when (buffer-live-p buffer)
+                 (let ((codex-ide-display-buffer-options '(:reuse-buffer-window
+                                                           :reuse-mode-window)))
+                   (codex-ide--show-session-buffer session)))))
+    (insert "\n")
     (codex-ide-status-mode--apply-expanded-content-face start (point))))
 
 (defun codex-ide-status-mode--thread-preview-body (full-preview)
@@ -807,34 +916,34 @@ Return nil when there is no agent reply."
   (let* ((status (codex-ide-session-status session))
          (label (codex-ide--status-label status))
          (first-prompt (or (codex-ide-status-mode--first-submitted-prompt-text session) ""))
+         (prompt-count (codex-ide-status-mode--submitted-prompt-count session))
          (last-prompt (or (codex-ide-status-mode--last-submitted-prompt-text session) ""))
-         (preview (codex-ide-status-mode--truncate-preview first-prompt))
-         (buffer-name (buffer-name (codex-ide-session-buffer session)))
+         (last-response (or (codex-ide-status-mode--buffer-transcript-slice session) ""))
+         (preview (codex-ide-status-mode--preview-line first-prompt))
          (title (concat
-                 (propertize label 'face (codex-ide-status-mode--status-face status))
+                 (codex-ide-status-mode--format-heading-status label status)
                  "  "
-                 (propertize buffer-name 'face 'shadow)
-                 "  "
-                 preview)))
+                 (codex-ide-status-mode--format-heading-preview preview))))
     (codex-ide-section-insert
      'buffer session title
      (lambda (_section)
        (let ((start (point)))
+         (codex-ide-status-mode--insert-buffer-metadata-line session)
+         (codex-ide-status-mode--insert-thread-metadata-line
+          "Number of Prompts"
+          (number-to-string prompt-count))
          (codex-ide-status-mode--insert-thread-metadata-line
           "Last Prompt"
-          (codex-ide-status-mode--truncate-preview last-prompt))
+          (codex-ide-status-mode--preview-line last-prompt))
          (codex-ide-status-mode--insert-thread-metadata-line
           "Last Response"
-          nil)
-         (when-let ((transcript (codex-ide-status-mode--buffer-transcript-slice session)))
-           (codex-ide-status-mode--insert-prefixed-lines transcript nil "  ")
-           (unless (bolp)
-             (insert "\n")))
+          (codex-ide-status-mode--preview-line
+           (codex-ide-status-mode--plain-text last-response)))
          (codex-ide-status-mode--apply-expanded-content-face start (point))))
      t)))
 
-(defun codex-ide-status-mode--insert-thread-section (thread directory)
-  "Insert a child section for THREAD in DIRECTORY."
+(defun codex-ide-status-mode--insert-thread-section (thread directory layout)
+  "Insert a child section for THREAD in DIRECTORY using LAYOUT."
   (let* ((session (codex-ide-status-mode--thread-session thread directory))
          (status (if session
                      (codex-ide-session-status session)
@@ -844,23 +953,30 @@ Return nil when there is no agent reply."
          (raw-preview (or (alist-get 'name thread)
                           (alist-get 'preview thread)
                           "Untitled"))
-         (buffer-name (if session
-                          (buffer-name (codex-ide-session-buffer session))
-                        "none"))
          (first-prompt (when session
                          (codex-ide-status-mode--first-submitted-prompt-text session)))
+         (prompt-count (when session
+                         (codex-ide-status-mode--submitted-prompt-count session)))
          (last-prompt (when session
                         (codex-ide-status-mode--last-submitted-prompt-text session)))
+         (buffer-name (when session
+                        (buffer-name (codex-ide-session-buffer session))))
          (last-response (when session
                           (codex-ide-status-mode--buffer-transcript-slice session)))
-         (preview (codex-ide-status-mode--truncate-preview
+         (updated-text (or (codex-ide-human-time-ago (alist-get 'updatedAt thread)) ""))
+         (status-width (plist-get layout :status-width))
+         (updated-width (plist-get layout :updated-width))
+         (preview (codex-ide-status-mode--preview-line
                    (or first-prompt raw-preview)))
          (title (concat
-                 (propertize label 'face (codex-ide-status-mode--status-face status))
+                 (codex-ide-status-mode--format-heading-status
+                  (codex-ide-status-mode--pad-heading-part label status-width)
+                  status)
                  "  "
-                 (propertize buffer-name 'face 'shadow)
+                 (codex-ide-status-mode--format-heading-updated
+                  (codex-ide-status-mode--pad-heading-part updated-text updated-width))
                  "  "
-                 preview)))
+                 (codex-ide-status-mode--format-heading-preview preview))))
     (codex-ide-section-insert
      'thread thread title
      (lambda (_section)
@@ -873,42 +989,44 @@ Return nil when there is no agent reply."
           "Updated"
           (codex-ide--format-thread-updated-at (alist-get 'updatedAt thread)))
          (when last-prompt
+           (codex-ide-status-mode--insert-buffer-metadata-line session)
+           (codex-ide-status-mode--insert-thread-metadata-line
+            "Number of Prompts"
+            (number-to-string prompt-count))
            (codex-ide-status-mode--insert-thread-metadata-line
             "Last Prompt"
-            (codex-ide-status-mode--truncate-preview last-prompt))
-           (when last-response
-             (codex-ide-status-mode--insert-thread-metadata-line
-              "Last Response"
-              nil)
-             (codex-ide-status-mode--insert-prefixed-lines last-response nil "    ")
-             (unless (bolp)
-               (insert "\n"))))
+            (codex-ide-status-mode--preview-line last-prompt))
+           (codex-ide-status-mode--insert-thread-metadata-line
+            "Last Response"
+            (codex-ide-status-mode--preview-line
+             (codex-ide-status-mode--plain-text (or last-response "")))))
          (codex-ide-status-mode--apply-expanded-content-face start (point))))
      t)))
 
 (defun codex-ide-status-mode--render-sections (directory)
-  "Render status sections for DIRECTORY."
+  "Render status sections for DIRECTORY and return the session count."
   (let* ((query-session nil)
-         (threads nil))
+         (threads nil)
+         (layout nil))
     (codex-ide--prepare-session-operations)
     (setq query-session (codex-ide--ensure-query-session-for-thread-selection directory))
-    (setq threads (codex-ide--thread-list-data query-session))
-    (codex-ide-section-insert
-     'threads threads
-     (codex-ide-status-mode--section-title "Sessions" (length threads))
-     (lambda (_section)
-       (dolist (thread threads)
-         (codex-ide-status-mode--insert-thread-section thread directory))))))
+    (setq threads
+          (codex-ide-status-mode--sort-threads-by-updated
+           (codex-ide--thread-list-data query-session)))
+    (setq layout (codex-ide-status-mode--heading-layout threads directory))
+    (dolist (thread threads)
+      (codex-ide-status-mode--insert-thread-section thread directory layout))
+    (length threads)))
 
 (defun codex-ide-status-mode--render-buffer (directory)
   "Render the status buffer for DIRECTORY."
   (let ((inhibit-read-only t))
     (erase-buffer)
     (codex-ide-section-reset)
-    (insert (propertize "Project: " 'face 'shadow))
-    (insert (propertize (abbreviate-file-name directory) 'face 'bold))
-    (insert "\n\n")
-    (codex-ide-status-mode--render-sections directory)
+    (setq-local header-line-format
+                (codex-ide-status-mode--header-line
+                 directory
+                 (codex-ide-status-mode--render-sections directory)))
     (goto-char (point-min))))
 
 ;;;###autoload

@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'button)
 (require 'codex-ide-test-fixtures)
 (require 'codex-ide)
 (require 'codex-ide-status-mode)
@@ -68,6 +69,12 @@
       (memq face value)
     (eq value face)))
 
+(defun codex-ide-status-mode-test--header-line-string ()
+  "Return the current buffer header line as plain text."
+  (if (stringp header-line-format)
+      (substring-no-properties header-line-format)
+    (substring-no-properties (format-mode-line header-line-format))))
+
 (ert-deftest codex-ide-status-transcript-preview-expands-to-full-current-block ()
   (let* ((text (codex-ide-status-mode-test--transcript-text
                 '("alpha 1" "alpha 2")
@@ -87,6 +94,15 @@
                     "beta 1\nbeta 2\nbeta 3\n"
                     "------------------------------------------------------------------------\n\n"
                     "gamma 1\ngamma 2")))))
+
+(ert-deftest codex-ide-status-mode-disables-line-wrapping ()
+  (with-temp-buffer
+    (visual-line-mode 1)
+    (codex-ide-status-mode)
+    (should truncate-lines)
+    (should-not word-wrap)
+    (should-not line-move-visual)
+    (should-not visual-line-mode)))
 
 (ert-deftest codex-ide-status-renders-project-sections-and-collapsed-entries ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -124,37 +140,27 @@
                     ((symbol-function 'codex-ide--thread-list-data)
                      (lambda (&optional _session _omit-thread-id)
                        threads)))
-            (let ((default-directory project-dir)
-                  (codex-ide-status-mode-preview-max-width 120))
+            (let ((default-directory project-dir))
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (should (derived-mode-p 'codex-ide-status-mode))
-              (should (string-match-p
-                       (concat "^Project: "
-                               (regexp-quote
-                                (abbreviate-file-name
-                                 (codex-ide--normalize-directory project-dir)))
-                               "$")
-                       (buffer-string)))
-              (should (string-match-p "Sessions (2)" (buffer-string)))
-              (should (string-match-p
-                       (regexp-quote
-                        (format "Running  %s  Earlier prompt"
-                                (buffer-name (codex-ide-session-buffer session))))
-                       (buffer-string)))
+              (should (equal (codex-ide-status-mode-test--header-line-string)
+                             "Project: alpha | 2 sessions"))
+              (goto-char (point-min))
+              (should-not (looking-at-p "^$"))
+              (should (or (looking-at-p "Stored  .*  Stored preview")
+                          (looking-at-p "Running  .*  Earlier prompt")))
               (should (string-match-p "Running  .*  Earlier prompt" (buffer-string)))
-              (should (string-match-p "Stored  none  Stored preview" (buffer-string)))
+              (should (string-match-p "Stored  .*  Stored preview" (buffer-string)))
               (should-not (string-match-p (regexp-quote (buffer-name (codex-ide-session-buffer other-session)))
                                           (buffer-string)))
               (goto-char (point-min))
-              (search-forward
-               (format "Running  %s  Earlier prompt"
-                       (buffer-name (codex-ide-session-buffer session))))
+              (search-forward "Earlier prompt")
               (beginning-of-line)
               (forward-line 1)
               (should (invisible-p (point)))
               (goto-char (point-min))
-              (search-forward "Stored  none  Stored preview")
+              (search-forward "Stored preview")
               (beginning-of-line)
               (forward-line 1)
               (should (invisible-p (point))))))))))
@@ -231,21 +237,15 @@
                     ((symbol-function 'codex-ide--thread-list-data)
                      (lambda (&optional _session _omit-thread-id)
                        threads)))
-            (let ((default-directory project-dir)
-                  (codex-ide-status-mode-preview-max-width 120))
+            (let ((default-directory project-dir))
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
-              (goto-char (point-min))
-              (search-forward "Sessions (2)")
-              (beginning-of-line)
-              (should-not (invisible-p (point)))
-              (forward-line 1)
               (should-not (invisible-p (point)))
               (search-forward "Second prompt")
               (beginning-of-line)
               (should-not (invisible-p (point))))))))))
 
-(ert-deftest codex-ide-status-heading-previews-are-truncated-and-dimmed ()
+(ert-deftest codex-ide-status-heading-previews-are-single-line-and-dimmed ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
          (project-dir (expand-file-name "alpha" root-dir))
          (long-preview "This is a deliberately long preview line that should be truncated in the heading only")
@@ -271,29 +271,17 @@
                     ((symbol-function 'codex-ide--thread-list-data)
                      (lambda (&optional _session _omit-thread-id)
                        threads)))
-            (let ((default-directory project-dir)
-                  (codex-ide-status-mode-preview-max-width 24))
+            (let ((default-directory project-dir))
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
-              (let ((truncated-preview
-                     (let ((codex-ide-status-mode-preview-max-width 24))
-                       (codex-ide-status-mode--truncate-preview long-preview))))
+              (let ((preview (codex-ide-status-mode--preview-line long-preview)))
                 (goto-char (point-min))
-                (search-forward (buffer-name (codex-ide-session-buffer session)))
-                (let ((line-end (line-end-position)))
-                  (search-forward truncated-preview line-end t)
-                  (search-backward (buffer-name (codex-ide-session-buffer session)) (line-beginning-position) t)
-                  (should (eq (get-text-property (point) 'face) 'shadow)))
-                (goto-char (point-min))
-                (search-forward (buffer-name (codex-ide-session-buffer session)))
-                (let ((line-end (line-end-position)))
-                  (search-forward truncated-preview line-end t)
-                  (search-backward (buffer-name (codex-ide-session-buffer session))
-                                   (line-beginning-position)
-                                   t)
-                  (should (eq (get-text-property (point) 'face) 'shadow)))
-                (should-not (string-match-p (regexp-quote long-preview)
-                                            (buffer-string)))))))))))
+                (search-forward preview)
+                (should-not (eq (get-text-property (match-beginning 0) 'face)
+                                'font-lock-doc-face))
+                (should-not (string-match-p "\n" preview))
+                (should (string-match-p (regexp-quote long-preview)
+                                        (buffer-string)))))))))))
 
 (ert-deftest codex-ide-status-buffer-heading-uses-first-submitted-prompt-text ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -321,14 +309,12 @@
                     ((symbol-function 'codex-ide--thread-list-data)
                      (lambda (&optional _session _omit-thread-id)
                        threads)))
-            (let ((default-directory project-dir)
-                  (codex-ide-status-mode-preview-max-width 120))
+            (let ((default-directory project-dir))
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward (buffer-name (codex-ide-session-buffer session)))
+              (search-forward "First prompt")
               (let ((line-end (line-end-position)))
-                (should (search-forward "First prompt" line-end t))
                 (goto-char (line-beginning-position))
                 (should-not (search-forward "Submitted prompt" line-end t))
                 (goto-char (line-beginning-position))
@@ -361,31 +347,28 @@
                     ((symbol-function 'codex-ide--thread-list-data)
                      (lambda (&optional _session _omit-thread-id)
                        threads)))
-            (let ((default-directory project-dir)
-                  (codex-ide-status-mode-preview-max-width 120))
+            (let ((default-directory project-dir))
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward (format "Idle  %s  First prompt"
-                                      (buffer-name (codex-ide-session-buffer session))))
+              (search-forward "First prompt")
               (beginning-of-line)
               (codex-ide-section-toggle-at-point)
               (let ((buffer-section-end (point-max)))
-                (should (search-forward "└ Last Prompt: Explain↵failure" buffer-section-end t))
-                (should (codex-ide-status-mode-test--face-includes-p
-                         (get-text-property (match-beginning 0) 'face)
-                         'shadow))
-                (should (codex-ide-status-mode-test--face-includes-p
-                         (get-text-property (match-beginning 0) 'face)
-                         'codex-ide-status-expanded-content-face))
-                (should (search-forward "└ Last Response:" buffer-section-end t))
-                (should (codex-ide-status-mode-test--face-includes-p
-                         (get-text-property (match-beginning 0) 'face)
-                         'shadow))
+                (should (search-forward "* Buffer:" buffer-section-end t))
+                (should (search-forward (buffer-name (codex-ide-session-buffer session))
+                                        buffer-section-end
+                                        t))
+                (should (button-at (match-beginning 0)))
+                (should (search-forward "* Number of Prompts: 2" buffer-section-end t))
+                (should (search-forward "* Last Prompt: Explain↵failure" buffer-section-end t))
                 (should (codex-ide-status-mode-test--face-includes-p
                          (get-text-property (match-beginning 0) 'face)
                          'codex-ide-status-expanded-content-face))
-                (should (search-forward "  Assistant reply" buffer-section-end t))))))))))
+                (should (search-forward "* Last Response: Assistant reply" buffer-section-end t))
+                (should (codex-ide-status-mode-test--face-includes-p
+                         (get-text-property (match-beginning 0) 'face)
+                         'codex-ide-status-expanded-content-face))))))))))
 
 (ert-deftest codex-ide-status-thread-expanded-view-shows-buffer-details-when-linked ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -414,33 +397,29 @@
                     ((symbol-function 'codex-ide--thread-list-data)
                      (lambda (&optional _session _omit-thread-id)
                        threads)))
-            (let ((default-directory project-dir)
-                  (codex-ide-status-mode-preview-max-width 120))
+            (let ((default-directory project-dir))
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward "Sessions (1)")
-              (forward-line 1)
               (let ((line-end (line-end-position)))
-                (should (search-forward
-                         (format "Idle  %s  First prompt"
-                                 (buffer-name (codex-ide-session-buffer session)))
-                         line-end
-                         t)))
+                (should (search-forward "First prompt" line-end t)))
               (codex-ide-section-toggle-at-point)
               (forward-line 1)
-              (should (looking-at-p (regexp-quote "└ Thread ID: thread-alpha")))
+              (should (looking-at-p (regexp-quote "* Thread ID: thread-alpha")))
               (should (search-forward
-                       (format "└ Created: %s"
+                       (format "* Created: %s"
                                (codex-ide--format-thread-updated-at 10))
                        nil t))
               (should (search-forward
-                       (format "└ Updated: %s"
+                       (format "* Updated: %s"
                                (codex-ide--format-thread-updated-at 20))
                        nil t))
-              (should (search-forward "└ Last Prompt: Explain↵failure" nil t))
-              (should (search-forward "└ Last Response:" nil t))
-              (should (search-forward "    Assistant reply" nil t)))))))))
+              (should (search-forward "* Buffer:" nil t))
+              (should (search-forward (buffer-name (codex-ide-session-buffer session)) nil t))
+              (should (button-at (match-beginning 0)))
+              (should (search-forward "* Number of Prompts: 2" nil t))
+              (should (search-forward "* Last Prompt: Explain↵failure" nil t))
+              (should (search-forward "* Last Response: Assistant reply" nil t)))))))))
 
 (ert-deftest codex-ide-status-thread-expanded-view-omits-buffer-details-when-unlinked ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -462,12 +441,11 @@
                     ((symbol-function 'codex-ide--thread-list-data)
                      (lambda (&optional _session _omit-thread-id)
                        threads)))
-            (let ((default-directory project-dir)
-                  (codex-ide-status-mode-preview-max-width 120))
+            (let ((default-directory project-dir))
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward "Stored  none  Stored preview")
+              (search-forward "Stored preview")
               (beginning-of-line)
               (codex-ide-section-toggle-at-point)
               (let ((thread-text
@@ -476,17 +454,19 @@
                       (save-excursion
                         (forward-line 4)
                         (line-beginning-position)))))
-                (should (string-match-p "└ Thread ID: thread-stored" thread-text))
+                (should (string-match-p "\\* Thread ID: thread-stored" thread-text))
                 (should (string-match-p
                          (regexp-quote
-                          (format "└ Created: %s"
+                          (format "* Created: %s"
                                   (codex-ide--format-thread-updated-at 30)))
                          thread-text))
                 (should (string-match-p
                          (regexp-quote
-                          (format "└ Updated: %s"
+                          (format "* Updated: %s"
                                   (codex-ide--format-thread-updated-at 40)))
                          thread-text))
+                (should-not (string-match-p "Number of Prompts:" thread-text))
+                (should-not (string-match-p "Buffer:" thread-text))
                 (should-not (string-match-p "Last Prompt:" thread-text))
                 (should-not (string-match-p "Last Response:" thread-text))))))))))
 
@@ -516,28 +496,27 @@
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward "Sessions (1)")
+              (search-forward "Alpha thread")
               (beginning-of-line)
-              (forward-line 1)
               (should-not (invisible-p (point)))
-              (goto-char (line-beginning-position 0))
-              (codex-ide-section-toggle-at-point)
               (forward-line 1)
               (should (invisible-p (point)))
-              (goto-char (line-beginning-position 0))
+              (forward-line -1)
               (codex-ide-section-toggle-at-point)
               (forward-line 1)
-              (should-not (invisible-p (point))))))))))
+              (should-not (invisible-p (point)))
+              (forward-line -1)
+              (codex-ide-section-toggle-at-point)
+              (forward-line 1)
+              (should (invisible-p (point))))))))))
 
 (ert-deftest codex-ide-status-plus-is-bound-to-start-a-new-session ()
   (should (eq (lookup-key codex-ide-status-mode-map (kbd "+"))
               #'codex-ide)))
 
-(ert-deftest codex-ide-status-mode-binds-tab-to-focal-point-navigation ()
-  (should (eq (lookup-key codex-ide-status-mode-map (kbd "TAB"))
-              #'codex-ide-status-mode-nav-forward))
-  (should (eq (lookup-key codex-ide-status-mode-map (kbd "<backtab>"))
-              #'codex-ide-status-mode-nav-backward)))
+(ert-deftest codex-ide-status-mode-exposes-focal-point-navigation-commands ()
+  (should (commandp #'codex-ide-status-mode-nav-forward))
+  (should (commandp #'codex-ide-status-mode-nav-backward)))
 
 (ert-deftest codex-ide-status-refresh-preserves-expanded-sections ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -569,12 +548,12 @@
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward "Idle  *codex[alpha]*")
+              (search-forward "Submitted prompt")
               (beginning-of-line)
               (codex-ide-section-toggle-at-point)
               (codex-ide-status-mode-refresh)
               (goto-char (point-min))
-              (search-forward "Idle  *codex[alpha]*")
+              (search-forward "Submitted prompt")
               (beginning-of-line)
               (forward-line 1)
               (should-not (invisible-p (point))))))))))
@@ -610,10 +589,10 @@
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward "Idle  *codex[alpha]*")
+              (search-forward "Submitted prompt")
               (beginning-of-line)
               (codex-ide-section-toggle-at-point)
-              (search-forward "  second line")
+              (search-forward "* Last Response: first line↵second line")
               (goto-char (match-beginning 0))
               (setq expected-offset
                     (- (point)
@@ -628,7 +607,7 @@
                              (codex-ide-status-mode--section-containing-point)))
                          expected-offset))
               (should (string-match-p
-                       "second line"
+                       "Last Response: first line↵second line"
                        (buffer-substring-no-properties
                         (line-beginning-position)
                         (line-end-position)))))))))))
@@ -725,8 +704,8 @@
               (should (equal deleted-thread-id "thread-alpha"))
               (should skip-confirmation)
               (should (= prepare-count 3))
-              (should-not (string-match-p "Sessions (1)" (buffer-string)))
-              (should (string-match-p "Sessions (0)" (buffer-string))))))))))
+              (should (equal (codex-ide-status-mode-test--header-line-string)
+                             "Project: alpha | 0 sessions")))))))))
 
 (ert-deftest codex-ide-status-delete-removes-thread-sections-in-region ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -785,21 +764,22 @@
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward "thread-a")
+              (search-forward "Beta thread")
               (beginning-of-line)
               (push-mark (save-excursion
-                           (search-forward "thread-b")
+                           (search-forward "Alpha thread")
                            (line-end-position))
-                         t t)
+                         t
+                         t)
               (activate-mark)
               (call-interactively #'codex-ide-status-mode-delete-thing-at-point)
               (should (= confirmation-count 1))
-              (should (equal deleted-thread-ids
+              (should (equal (sort (copy-sequence deleted-thread-ids) #'string-lessp)
                              '("thread-alpha" "thread-beta")))
               (should (equal skip-confirmations '(t t)))
               (should (= prepare-count 3))
-              (should-not (string-match-p "Sessions (3)" (buffer-string)))
-              (should (string-match-p "Sessions (1)" (buffer-string)))
+              (should (equal (codex-ide-status-mode-test--header-line-string)
+                             "Project: alpha | 1 session"))
               (should-not (string-match-p "thread-a" (buffer-string)))
               (should-not (string-match-p "thread-b" (buffer-string)))
               (should (string-match-p "thread-g" (buffer-string))))))))))
@@ -825,8 +805,8 @@
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward "Sessions (0)")
-              (beginning-of-line)
+              (should (equal (codex-ide-status-mode-test--header-line-string)
+                             "Project: alpha | 0 sessions"))
               (should-error
                (call-interactively #'codex-ide-status-mode-visit-thing-at-point)
                :type 'user-error)
@@ -834,7 +814,7 @@
                (call-interactively #'codex-ide-status-mode-delete-thing-at-point)
                :type 'user-error))))))))
 
-(ert-deftest codex-ide-status-thread-section-renders-dimmed-metadata-and-full-preview ()
+(ert-deftest codex-ide-status-thread-section-hides-context-preview-and-shows-compact-metadata ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
          (project-dir (expand-file-name "alpha" root-dir))
          (thread-preview (concat "[Emacs prompt context]\n"
@@ -861,39 +841,30 @@
                     ((symbol-function 'codex-ide--thread-list-data)
                      (lambda (&optional _session _omit-thread-id)
                        threads)))
-            (let ((default-directory project-dir)
-                  (codex-ide-status-mode-preview-max-width 24))
+            (let ((default-directory project-dir))
               (codex-ide-status))
             (with-current-buffer "codex-ide: alpha"
               (goto-char (point-min))
-              (search-forward "Sessions (1)")
-              (search-forward "*codex[alpha]*")
+              (search-forward
+               (codex-ide-status-mode--preview-line
+                (codex-ide--thread-choice-preview thread-preview)))
               (beginning-of-line)
               (codex-ide-section-toggle-at-point)
-              (should (search-forward "└ Thread ID: thread-alpha" nil t))
-              (should (codex-ide-status-mode-test--face-includes-p
-                       (get-text-property (match-beginning 0) 'face)
-                       'shadow))
+              (should (search-forward "* Thread ID: thread-alpha" nil t))
               (should (codex-ide-status-mode-test--face-includes-p
                        (get-text-property (match-beginning 0) 'face)
                        'codex-ide-status-expanded-content-face))
               (should (search-forward
-                       (format "└ Created: %s"
+                       (format "* Created: %s"
                                (codex-ide--format-thread-updated-at 10))
                        nil t))
               (should (codex-ide-status-mode-test--face-includes-p
                        (get-text-property (match-beginning 0) 'face)
-                       'shadow))
-              (should (codex-ide-status-mode-test--face-includes-p
-                       (get-text-property (match-beginning 0) 'face)
                        'codex-ide-status-expanded-content-face))
               (should (search-forward
-                       (format "└ Updated: %s"
+                       (format "* Updated: %s"
                                (codex-ide--format-thread-updated-at 20))
                        nil t))
-              (should (codex-ide-status-mode-test--face-includes-p
-                       (get-text-property (match-beginning 0) 'face)
-                       'shadow))
               (should (codex-ide-status-mode-test--face-includes-p
                        (get-text-property (match-beginning 0) 'face)
                        'codex-ide-status-expanded-content-face))

@@ -81,8 +81,10 @@
       (should map)
       (should (eq (lookup-key codex-ide-section-mode-map (kbd "t"))
                   #'codex-ide-section-toggle-at-point))
-      (should-not (eq (lookup-key codex-ide-section-mode-map (kbd "TAB"))
-                      #'codex-ide-section-toggle-at-point))
+      (should (eq (lookup-key codex-ide-section-mode-map (kbd "T"))
+                  #'codex-ide-section-toggle-siblings-at-point))
+      (should (eq (lookup-key codex-ide-section-mode-map (kbd "TAB"))
+                  #'codex-ide-section-toggle-at-point))
       (should (eq (lookup-key codex-ide-section-mode-map (kbd "^"))
                   #'codex-ide-section-up))
       (should (eq (lookup-key codex-ide-section-mode-map (kbd "p"))
@@ -95,6 +97,87 @@
                   #'codex-ide-section-forward-sibling))
       (should (eq (lookup-key map (kbd "<double-mouse-1>"))
                   #'codex-ide-section-mouse-toggle-section)))))
+
+(ert-deftest codex-ide-section-can-render-noninteractive-heading ()
+  (with-temp-buffer
+    (codex-ide-section-mode)
+    (codex-ide-section-reset)
+    (let ((section
+           (codex-ide-section-insert
+            'root nil "Section"
+            (lambda (_section)
+              (insert "body line\n"))
+            nil
+            nil
+            '(:interactive-heading nil))))
+      (goto-char (point-min))
+      (should-not (get-text-property (point) 'codex-ide-section))
+      (should-not (codex-ide-section-indicator-overlay section))
+      (should-not (seq-find
+                   (lambda (overlay)
+                     (overlay-get overlay 'codex-ide-section-indicator))
+                   (overlays-in (point-min) (point-max)))))))
+
+(ert-deftest codex-ide-section-toggle-siblings-at-point-expands-or-collapses-all ()
+  (with-temp-buffer
+    (codex-ide-section-mode)
+    (codex-ide-section-reset)
+    (codex-ide-section-insert
+     'root 'root "Root"
+     (lambda (_section)
+       (insert "root body\n")
+       (codex-ide-section-insert
+        'child-a 'child-a "Child A"
+        (lambda (_child)
+          (insert "child-a body\n"))
+        t)
+       (codex-ide-section-insert
+        'child-b 'child-b "Child B"
+        (lambda (_child)
+          (insert "child-b body\n"))
+        t)))
+    (let* ((root (car codex-ide-section--root-sections))
+           (siblings (codex-ide-section-children root))
+           (child-a (car siblings))
+           (child-b (cadr siblings)))
+      (goto-char (codex-ide-section-heading-start child-a))
+      (should (seq-every-p #'codex-ide-section-hidden siblings))
+      (codex-ide-section-toggle-siblings-at-point)
+      (should-not (codex-ide-section-hidden child-a))
+      (should-not (codex-ide-section-hidden child-b))
+      (codex-ide-section-toggle-siblings-at-point)
+      (should (codex-ide-section-hidden child-a))
+      (should (codex-ide-section-hidden child-b)))))
+
+(ert-deftest codex-ide-section-toggle-siblings-at-point-uses-top-level-siblings-outside-heading ()
+  (with-temp-buffer
+    (codex-ide-section-mode)
+    (codex-ide-section-reset)
+    (codex-ide-section-insert
+     'root-a 'root-a "Root A"
+     (lambda (_section)
+       (insert "root-a body\n")
+       (codex-ide-section-insert
+        'child-a 'child-a "Child A"
+        (lambda (_child)
+          (insert "child-a body\n")))))
+    (codex-ide-section-insert
+     'root-b 'root-b "Root B"
+     (lambda (_section)
+       (insert "root-b body\n")))
+    (let ((root-a (car codex-ide-section--root-sections))
+          (root-b (cadr codex-ide-section--root-sections)))
+      (goto-char (point-min))
+      (search-forward "child-a body")
+      (goto-char (match-beginning 0))
+      (should-not (codex-ide-section-hidden root-a))
+      (should-not (codex-ide-section-hidden root-b))
+      (codex-ide-section-toggle-siblings-at-point)
+      (should (codex-ide-section-hidden root-a))
+      (should (codex-ide-section-hidden root-b))
+      (codex-ide-section-toggle-siblings-at-point)
+      (should-not (codex-ide-section-hidden root-a))
+      (should-not (codex-ide-section-hidden root-b)))))
 
 (ert-deftest codex-ide-section-navigation-commands-follow-section-structure ()
   (with-temp-buffer
