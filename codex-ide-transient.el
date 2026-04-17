@@ -15,7 +15,9 @@
 (declare-function codex-ide "codex-ide" ())
 (declare-function codex-ide-continue "codex-ide" ())
 (declare-function codex-ide-prompt "codex-ide" ())
+(declare-function codex-ide-queue "codex-ide" ())
 (declare-function codex-ide-reset-current-session "codex-ide" ())
+(declare-function codex-ide-steer "codex-ide" ())
 (declare-function codex-ide-stop "codex-ide" ())
 (declare-function codex-ide-switch-to-buffer "codex-ide" ())
 (declare-function codex-ide-show-cli-info "codex-ide" ())
@@ -35,6 +37,7 @@
 (defvar codex-ide-cli-extra-flags)
 (defvar codex-ide-model)
 (defvar codex-ide-reasoning-effort)
+(defvar codex-ide-running-submit-action)
 (defvar codex-ide-approval-policy)
 (defvar codex-ide-sandbox-mode)
 (defvar codex-ide-personality)
@@ -55,6 +58,11 @@
     ("vertical split" . vertical)
     ("horizontal split" . horizontal))
   "Completion choices for `codex-ide-new-session-split'.")
+
+(defconst codex-ide--running-submit-action-choices
+  '(("steer active turn" . steer)
+    ("queue next turn" . queue))
+  "Completion choices for `codex-ide-running-submit-action'.")
 
 (defun codex-ide--in-session-buffer-p ()
   "Return non-nil when the current buffer is a Codex session buffer."
@@ -158,6 +166,29 @@
                (format "set to %s" codex-ide-reasoning-effort)
              "cleared")))
 
+(defun codex-ide--running-submit-action-label ()
+  "Return a short label for `codex-ide-running-submit-action'."
+  (or (car (rassoc codex-ide-running-submit-action
+                   codex-ide--running-submit-action-choices))
+      (format "%S" codex-ide-running-submit-action)))
+
+(transient-define-suffix codex-ide--set-running-submit-action (action)
+  "Set `codex-ide-running-submit-action'."
+  :description "Set running submit action"
+  (interactive
+   (list
+    (cdr
+     (assoc
+      (completing-read
+       "Running submit action: "
+       codex-ide--running-submit-action-choices
+       nil t nil nil
+       (codex-ide--running-submit-action-label))
+      codex-ide--running-submit-action-choices))))
+  (setq codex-ide-running-submit-action action)
+  (message "Running submit action set to %s"
+           (codex-ide--running-submit-action-label)))
+
 (transient-define-suffix codex-ide--toggle-focus-on-open ()
   "Toggle `codex-ide-focus-on-open'."
   (interactive)
@@ -216,6 +247,8 @@
   (customize-save-variable 'codex-ide-cli-extra-flags codex-ide-cli-extra-flags)
   (customize-save-variable 'codex-ide-model codex-ide-model)
   (customize-save-variable 'codex-ide-reasoning-effort codex-ide-reasoning-effort)
+  (customize-save-variable 'codex-ide-running-submit-action
+                           codex-ide-running-submit-action)
   (customize-save-variable 'codex-ide-approval-policy codex-ide-approval-policy)
   (customize-save-variable 'codex-ide-sandbox-mode codex-ide-sandbox-mode)
   (customize-save-variable 'codex-ide-personality codex-ide-personality)
@@ -238,6 +271,10 @@
    ["Session"
     ("b" "Switch to session buffer" codex-ide-switch-to-buffer)
     ("p" "Send prompt from minibuffer" codex-ide-prompt)
+    ("S" "Steer active turn" codex-ide-steer
+     :if codex-ide--in-session-buffer-p)
+    ("Q" "Queue next turn" codex-ide-queue
+     :if codex-ide--in-session-buffer-p)
     ("c" "Continue most recent" codex-ide-continue)
     ("s" "Start new" codex-ide)
     ("r" "Reset current session" codex-ide-reset-current-session
@@ -260,6 +297,10 @@
     ("p" "Set CLI path" codex-ide--set-cli-path)
     ("m" "Set model" codex-ide--set-model)
     ("R" "Set reasoning effort" codex-ide--set-reasoning-effort)
+    ("u" "Set running submit action" codex-ide--set-running-submit-action
+     :description (lambda ()
+                     (format "Running submit action (%s)"
+                             (codex-ide--running-submit-action-label))))
     ("x" "Set extra flags" codex-ide--set-cli-extra-flags)
    ("a" "Set approval policy" codex-ide--set-approval-policy)
    ("P" "Set personality" codex-ide--set-personality)
