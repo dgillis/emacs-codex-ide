@@ -487,10 +487,16 @@ PREFIX defaults to a dimmed `└ '.  PREFIX-FACE defaults to `shadow'."
       (with-current-buffer buffer
         (save-excursion
           (let* ((turn-start (plist-get prompt-data :end))
+                 (turn-end (if (codex-ide--input-prompt-active-p session)
+                               (or (and (codex-ide-session-input-prompt-start-marker session)
+                                        (marker-position
+                                         (codex-ide-session-input-prompt-start-marker session)))
+                                   (point-max))
+                             (point-max)))
                  (block-range
                   (codex-ide-status-mode--last-output-block-range
                    turn-start
-                   (point-max)))
+                   turn-end))
                  (start (car block-range))
                  (end (cdr block-range)))
             (goto-char start)
@@ -513,7 +519,8 @@ Return nil when there is no agent reply."
   (when-let ((buffer (codex-ide-session-buffer session)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
-        (if (codex-ide--input-prompt-active-p session)
+        (if (and (codex-ide--input-prompt-active-p session)
+                 (string= (codex-ide-session-status session) "idle"))
             (when-let* ((response-range
                          (codex-ide-status-mode--last-agent-response-range session))
                         (block-range

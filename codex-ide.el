@@ -81,6 +81,16 @@ which applies to the current turn and subsequent turns for the thread."
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-running-submit-action 'steer
+  "Action used by `codex-ide-submit' while a Codex turn is running.
+When set to `steer', submit additional input to the active turn with
+`turn/steer'.  When set to `queue', queue the prompt and submit it as the next
+turn after the current turn completes."
+  :type '(choice (const :tag "Steer active turn" steer)
+                 (const :tag "Queue next turn" queue))
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-session-baseline-prompt "
 - You are a Codex server running inside Emacs.
 - You can use MCP tools to inspect and interact with the running Emacs session.
@@ -1802,14 +1812,18 @@ CHOICES is an alist of labels to returned values."
                                   'face
                                   'codex-ide-approval-label-face))
               (insert label)
-              (insert "\n")))
+              (insert "\n")
+              (when (and (markerp end-marker)
+                         (eq (marker-buffer end-marker) buffer))
+                (set-marker end-marker (point)))))
           (when (and block-start block-end)
             (remove-text-properties
              block-start block-end
              '(action nil mouse-face nil help-echo nil follow-link nil
                keymap nil button nil category nil)))
           (when (and block-start block-end)
-            (codex-ide--freeze-region block-start block-end)))))))
+            (codex-ide--freeze-region block-start (marker-position end-marker))
+            (codex-ide--advance-active-boundary-after buffer end-marker)))))))
 
 (defun codex-ide--resolve-buffer-approval (session id value label)
   "Resolve pending approval ID for SESSION as VALUE with display LABEL."
@@ -1933,14 +1947,18 @@ returns a plist with optional `:writable-ranges' and extra metadata.  METADATA
 is merged into the stored pending request state."
   (let ((buffer (codex-ide-session-buffer session))
         (render-state nil)
+        active-boundary
         start-marker
         status-marker
         end-marker)
     (codex-ide--clear-pending-output-indicator session)
     (with-current-buffer buffer
       (let ((inhibit-read-only t)
+            (restore-point (codex-ide--input-point-marker session))
             (moving (= (point) (point-max))))
         (codex-ide--ensure-output-spacing buffer)
+        (setq active-boundary (codex-ide--active-input-boundary-marker buffer))
+        (goto-char (codex-ide--transcript-insertion-position buffer))
         (setq start-marker (copy-marker (point)))
         (insert (propertize
                  (codex-ide--output-separator-string)
@@ -1954,11 +1972,17 @@ is merged into the stored pending request state."
         (setq end-marker (copy-marker (point) t))
         (codex-ide--freeze-region (marker-position start-marker)
                                   (marker-position end-marker))
+        (when (and active-boundary
+                   (<= (marker-position active-boundary)
+                       (marker-position start-marker)))
+          (set-marker active-boundary (point)))
         (dolist (range (plist-get render-state :writable-ranges))
           (codex-ide--make-region-writable (marker-position (car range))
                                            (marker-position (cdr range))))
-        (when moving
-          (goto-char (point-max)))))
+        (if restore-point
+            (codex-ide--restore-input-point-marker restore-point)
+          (when moving
+            (goto-char (point-max))))))
     (puthash id
              (append
               (list :kind kind
@@ -2620,7 +2644,8 @@ regions that should remain editable after rendering."
                  (codex-ide-log-message session "Turn completed after interrupt request"))
                (codex-ide--finish-turn
                 session
-                (when interrupted "[Agent interrupted]")))
+                (when interrupted "[Agent interrupted]"))
+               (codex-ide--maybe-submit-queued-prompt session))
            (codex-ide-log-message
             session
             "Ignoring duplicate turn/completed notification for an already-closed turn"))))
@@ -2961,6 +2986,104 @@ If no live session exists, prompt to start one."
           (message "Sent interrupt to Codex"))
       (user-error "No active Codex turn to interrupt"))))
 
+(defun codex-ide--queued-prompts (session)
+  "Return SESSION's queued prompt entries."
+  (or (codex-ide--session-metadata-get session :queued-prompts)
+      '()))
+
+(defun codex-ide--set-queued-prompts (session prompts)
+  "Set SESSION's queued prompt entries to PROMPTS."
+  (codex-ide--session-metadata-put session :queued-prompts prompts))
+
+(defun codex-ide--queued-prompt-p (session)
+  "Return non-nil when SESSION has at least one queued prompt."
+  (consp (codex-ide--queued-prompts session)))
+
+(defun codex-ide--queued-prompt-entry (prompt payload)
+  "Return a queued prompt entry for PROMPT and PAYLOAD."
+  (list :prompt prompt :payload payload))
+
+(defun codex-ide--clear-queued-prompts (session)
+  "Clear SESSION's queued prompt metadata."
+  (codex-ide--set-queued-prompts session nil)
+  (codex-ide--session-metadata-put session :queued-prompt nil)
+  (codex-ide--session-metadata-put session :queued-prompt-payload nil)
+  (codex-ide--session-metadata-put session :queued-prompt-start-marker nil))
+
+(defun codex-ide--prompt-for-submission (session prompt)
+  "Return prompt text for SESSION using explicit PROMPT or the active input."
+  (or prompt
+      (if (eq (current-buffer) (codex-ide-session-buffer session))
+          (codex-ide--current-input session)
+        (read-string "Codex prompt: "))))
+
+(defun codex-ide--send-turn-start (session thread-id payload)
+  "Send a `turn/start' request for SESSION THREAD-ID using PAYLOAD."
+  (when codex-ide-reasoning-effort
+    (codex-ide--session-metadata-put
+     session
+     :reasoning-effort
+     codex-ide-reasoning-effort))
+  (codex-ide--request-sync
+   session
+   "turn/start"
+   `((threadId . ,thread-id)
+     ,@(when codex-ide-model
+         `((model . ,codex-ide-model)))
+     ,@(when codex-ide-reasoning-effort
+         `((effort . ,codex-ide-reasoning-effort)))
+     (input . ,(alist-get 'input payload)))))
+
+(defun codex-ide--after-turn-start-submitted (session payload)
+  "Update SESSION state after successfully submitting PAYLOAD."
+  (when codex-ide-model
+    (codex-ide--set-session-model-name session codex-ide-model)
+    (codex-ide--update-header-line session))
+  (codex-ide--mark-session-prompt-submitted session)
+  (when (alist-get 'included-session-context payload)
+    (codex-ide--session-metadata-put session :session-context-sent t)))
+
+(defun codex-ide--submit-queued-prompt (session)
+  "Submit SESSION's next queued prompt as a new turn."
+  (let* ((queue (codex-ide--queued-prompts session))
+         (entry (car queue))
+         (prompt (plist-get entry :prompt))
+         (payload (plist-get entry :payload))
+         (thread-id (codex-ide-session-thread-id session))
+         (draft (and (codex-ide--input-prompt-active-p session)
+                     (codex-ide--current-input session))))
+    (unless (and prompt payload)
+      (error "No queued Codex prompt"))
+    (codex-ide--set-queued-prompts session (cdr queue))
+    (codex-ide-log-message
+     session
+     "Submitting queued prompt to thread %s (%d chars)"
+     thread-id
+     (length prompt))
+    (codex-ide--delete-running-input-list session)
+    (if (codex-ide--input-prompt-active-p session)
+        (codex-ide--replace-current-input session prompt)
+      (codex-ide--insert-input-prompt session prompt))
+    (codex-ide--begin-turn-display session (alist-get 'context-summary payload))
+    (when (and draft (not (string-empty-p draft)))
+      (codex-ide--replace-current-input session draft))
+    (codex-ide--refresh-running-input-display session)
+    (redisplay)
+    (condition-case err
+        (progn
+          (codex-ide--send-turn-start session thread-id payload)
+          (codex-ide--after-turn-start-submitted session payload))
+      (error
+       (codex-ide-log-message session "Queued prompt submission failed: %s"
+                              (error-message-string err))
+       (codex-ide--reopen-input-after-submit-error session prompt err)
+       (signal (car err) (cdr err))))))
+
+(defun codex-ide--maybe-submit-queued-prompt (session)
+  "Submit SESSION's queued prompt if one exists."
+  (when (codex-ide--queued-prompt-p session)
+    (codex-ide--submit-queued-prompt session)))
+
 ;;;###autoload
 (defun codex-ide-prompt ()
   "Prompt for a Codex message in the minibuffer and submit it from the Codex buffer.
@@ -3007,71 +3130,149 @@ If no live session exists for the current buffer, prompt to start one first."
   (interactive)
   (codex-ide--goto-prompt-line 1))
 
+(defun codex-ide--ensure-submittable-prompt (prompt)
+  "Signal a user error unless PROMPT has content."
+  (when (string-empty-p prompt)
+    (user-error "Prompt is empty")))
+
+(defun codex-ide--running-prompt-payload (session prompt)
+  "Build turn payload for PROMPT from SESSION's buffer."
+  (with-current-buffer (codex-ide-session-buffer session)
+    (codex-ide--compose-turn-payload prompt)))
+
+(defun codex-ide--prepare-running-prompt (session prompt)
+  "Record and freeze PROMPT for SESSION while a turn is running.
+Return the composed turn payload."
+  (codex-ide--ensure-submittable-prompt prompt)
+  (codex-ide--push-prompt-history session prompt)
+  (let ((payload (codex-ide--running-prompt-payload session prompt)))
+    (unless (eq (current-buffer) (codex-ide-session-buffer session))
+      (codex-ide--insert-input-prompt session prompt))
+    (codex-ide--freeze-active-input-prompt
+     session
+     (alist-get 'context-summary payload))
+    payload))
+
+(defun codex-ide--steer-prompt (&optional prompt)
+  "Submit PROMPT as steering input for the active Codex turn."
+  (let* ((session (codex-ide--session-for-current-project))
+         (thread-id (codex-ide-session-thread-id session))
+         (turn-id (codex-ide-session-current-turn-id session))
+         (prompt-to-send (codex-ide--prompt-for-submission session prompt))
+         payload)
+    (unless turn-id
+      (user-error "No active Codex turn to steer"))
+    (unless thread-id
+      (user-error "Codex session has no active thread"))
+    (setq payload (codex-ide--prepare-running-prompt session prompt-to-send))
+    (codex-ide-log-message
+     session
+     "Steering turn %s (%d chars)"
+     turn-id
+     (length prompt-to-send))
+    (condition-case err
+        (progn
+          (codex-ide--request-sync
+           session
+           "turn/steer"
+           `((threadId . ,thread-id)
+             (expectedTurnId . ,turn-id)
+             (input . ,(alist-get 'input payload))))
+          (codex-ide--mark-session-prompt-submitted session)
+          (when (alist-get 'included-session-context payload)
+            (codex-ide--session-metadata-put session :session-context-sent t))
+          (codex-ide--refresh-running-input-display session)
+          (message "Sent steering input to Codex"))
+      (error
+       (codex-ide-log-message session "Steering prompt failed: %s"
+                              (error-message-string err))
+       (codex-ide--reopen-input-after-submit-error session prompt-to-send err)
+       (signal (car err) (cdr err))))))
+
+(defun codex-ide--queue-prompt (&optional prompt)
+  "Queue PROMPT to run after the active Codex turn finishes."
+  (let* ((session (codex-ide--session-for-current-project))
+         (thread-id (codex-ide-session-thread-id session))
+         (turn-id (codex-ide-session-current-turn-id session))
+         (prompt-to-send (codex-ide--prompt-for-submission session prompt))
+         payload)
+    (unless turn-id
+      (user-error "No active Codex turn to queue behind"))
+    (unless thread-id
+      (user-error "Codex session has no active thread"))
+    (codex-ide--ensure-submittable-prompt prompt-to-send)
+    (codex-ide--push-prompt-history session prompt-to-send)
+    (setq payload (codex-ide--running-prompt-payload session prompt-to-send))
+    (codex-ide--set-queued-prompts
+     session
+     (append (codex-ide--queued-prompts session)
+             (list (codex-ide--queued-prompt-entry prompt-to-send payload))))
+    (when (alist-get 'included-session-context payload)
+      (codex-ide--session-metadata-put session :session-context-sent t))
+    (when (eq (current-buffer) (codex-ide-session-buffer session))
+      (codex-ide--replace-current-input session ""))
+    (codex-ide--refresh-running-input-display session)
+    (codex-ide-log-message
+     session
+     "Queued prompt after turn %s (%d chars)"
+     turn-id
+     (length prompt-to-send))
+    (message "Queued prompt for the next Codex turn")))
+
 (defun codex-ide--submit-prompt (&optional prompt)
   "Submit PROMPT to the current Codex session."
   (interactive)
   (let* ((session (codex-ide--session-for-current-project))
          (thread-id (codex-ide-session-thread-id session))
-         (prompt-to-send (or prompt
-                             (if (eq (current-buffer) (codex-ide-session-buffer session))
-                                 (codex-ide--current-input session)
-                               (read-string "Codex prompt: "))))
+         (prompt-to-send (codex-ide--prompt-for-submission session prompt))
          payload)
-    (when (codex-ide-session-current-turn-id session)
-      (user-error "A Codex turn is already running"))
-    (unless thread-id
-      (user-error "Codex session has no active thread"))
-    (when (string-empty-p prompt-to-send)
-      (user-error "Prompt is empty"))
-    (codex-ide--push-prompt-history session prompt-to-send)
-    (codex-ide-log-message
-     session
-     "Sending prompt to thread %s (%d chars)"
-     thread-id
-     (length prompt-to-send))
-    (unless (eq (current-buffer) (codex-ide-session-buffer session))
-      (codex-ide--insert-input-prompt session prompt-to-send))
-    (setq payload
-          (with-current-buffer (codex-ide-session-buffer session)
-            (codex-ide--compose-turn-payload prompt-to-send)))
-    (codex-ide--begin-turn-display session (alist-get 'context-summary payload))
-    (redisplay)
-    (condition-case err
-        (progn
-          (when codex-ide-reasoning-effort
-            (codex-ide--session-metadata-put
-             session
-             :reasoning-effort
-             codex-ide-reasoning-effort))
-          (codex-ide--request-sync
-           session
-           "turn/start"
-           `((threadId . ,thread-id)
-             ,@(when codex-ide-model
-                 `((model . ,codex-ide-model)))
-             ,@(when codex-ide-reasoning-effort
-                 `((effort . ,codex-ide-reasoning-effort)))
-             (input . ,(alist-get 'input payload))))
-          (when codex-ide-model
-            (codex-ide--set-session-model-name session codex-ide-model)
-            (codex-ide--update-header-line session))
-          (codex-ide--mark-session-prompt-submitted session)
-          (when codex-ide-model
-            (codex-ide--set-session-model-name session codex-ide-model)
-            (codex-ide--update-header-line session))
-          (codex-ide--mark-session-prompt-submitted session)
-          (when (alist-get 'included-session-context payload)
-            (codex-ide--session-metadata-put session :session-context-sent t)))
-      (error
-       (codex-ide-log-message session "Prompt submission failed: %s" (error-message-string err))
-       (codex-ide--reopen-input-after-submit-error session prompt-to-send err)
-       (signal (car err) (cdr err))))))
+    (if (codex-ide-session-current-turn-id session)
+        (pcase codex-ide-running-submit-action
+          ('queue (codex-ide--queue-prompt prompt-to-send))
+          (_ (codex-ide--steer-prompt prompt-to-send)))
+      (unless thread-id
+        (user-error "Codex session has no active thread"))
+      (codex-ide--ensure-submittable-prompt prompt-to-send)
+      (codex-ide--push-prompt-history session prompt-to-send)
+      (codex-ide-log-message
+       session
+       "Sending prompt to thread %s (%d chars)"
+       thread-id
+       (length prompt-to-send))
+      (unless (eq (current-buffer) (codex-ide-session-buffer session))
+        (codex-ide--insert-input-prompt session prompt-to-send))
+      (setq payload
+            (with-current-buffer (codex-ide-session-buffer session)
+              (codex-ide--compose-turn-payload prompt-to-send)))
+      (codex-ide--begin-turn-display session (alist-get 'context-summary payload))
+      (redisplay)
+      (condition-case err
+          (progn
+            (codex-ide--send-turn-start session thread-id payload)
+            (codex-ide--after-turn-start-submitted session payload))
+        (error
+         (codex-ide-log-message session "Prompt submission failed: %s" (error-message-string err))
+         (codex-ide--reopen-input-after-submit-error session prompt-to-send err)
+         (signal (car err) (cdr err)))))))
 
 ;;;###autoload
 (defun codex-ide-submit ()
-  "Submit the current in-buffer prompt to Codex."
+  "Submit the current in-buffer prompt to Codex.
+When a turn is running, use `codex-ide-running-submit-action'."
   (interactive)
   (codex-ide--submit-prompt))
+
+;;;###autoload
+(defun codex-ide-steer ()
+  "Submit the current prompt as steering input to the active Codex turn."
+  (interactive)
+  (codex-ide--steer-prompt))
+
+;;;###autoload
+(defun codex-ide-queue ()
+  "Queue the current prompt as the next Codex turn."
+  (interactive)
+  (codex-ide--queue-prompt))
 
 (require 'codex-ide-delete-session-thread)
 

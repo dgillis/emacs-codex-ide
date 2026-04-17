@@ -453,8 +453,68 @@
       (should buffer-undo-list)
       (codex-ide--begin-turn-display session)
       (should-not buffer-undo-list)
-      (should (string-match-p "^> submitted prompt\n\nWorking\\.\\.\\.\n\\'"
+      (should (string-match-p "^> submitted prompt\n\nWorking\\.\\.\\.\n\n> \\'"
                               (buffer-string))))))
+
+(ert-deftest codex-ide-running-input-stays-below-streamed-items ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--replace-current-input session "steer me")
+      (codex-ide--render-item-start
+       session
+       '((id . "call-1")
+         (type . "commandExecution")
+         (command . "echo hi")
+         (cwd . "/tmp")))
+      (should (string-match-p
+               (rx "> submitted prompt"
+                   (* anything)
+                   "* Ran command"
+                   (* anything)
+                   "\n> steer me"
+                   string-end)
+               (buffer-string)))
+      (should (equal (codex-ide--current-input session) "steer me")))))
+
+(ert-deftest codex-ide-running-output-spacing-preserves-input-point ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--replace-current-input session "steer draft")
+      (goto-char (point-max))
+      (codex-ide--ensure-output-spacing (current-buffer))
+      (should (= (point) (point-max)))
+      (should (equal (codex-ide--current-input session) "steer draft")))))
+
+(ert-deftest codex-ide-finish-turn-separates-active-prompt-from-output ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--replace-current-input session "steer draft")
+      (codex-ide--append-to-buffer (current-buffer) "Final answer.\n")
+      (codex-ide--finish-turn session)
+      (should (string-match-p
+               (rx "Final answer." "\n\n> steer draft" string-end)
+               (buffer-string))))))
 
 (ert-deftest codex-ide-first-rendered-item-clears-pending-output-indicator ()
   (with-temp-buffer
@@ -1907,6 +1967,105 @@
                 (should (string-match-p "\\[/Emacs prompt context\\]"
                                         (alist-get 'text (aref input 0))))))))))))
 
+(ert-deftest codex-ide-submit-steers-running-turn-by-default ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-running-submit-action 'steer)
+        (submitted nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-steer-1"
+                (codex-ide-session-current-turn-id session) "turn-steer-1"
+                (codex-ide-session-output-prefix-inserted session) t
+                (codex-ide-session-status session) "running")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (setq-local codex-ide--session session))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "Actually run tests first")
+            (cl-letf (((symbol-function 'codex-ide--request-sync)
+                       (lambda (_session method params)
+                         (setq submitted (list method params))
+                         '((turnId . "turn-steer-1")))))
+              (codex-ide-submit)))
+          (should (equal (car submitted) "turn/steer"))
+          (let* ((params (cadr submitted))
+                 (input (alist-get 'input params)))
+            (should (equal (alist-get 'threadId params) "thread-steer-1"))
+            (should (equal (alist-get 'expectedTurnId params) "turn-steer-1"))
+            (should (string-match-p "Actually run tests first"
+                                    (alist-get 'text (aref input 0)))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (goto-char (point-max))
+            (forward-line 0)
+            (should (looking-at-p "> $"))
+            (should (codex-ide--input-prompt-active-p session))
+            (codex-ide--append-to-buffer (current-buffer) "sleep 10 still running.")
+            (should (string-match-p
+                     (rx "Actually run tests first"
+                         "\nsleep 10 still running."
+                         "\n> ")
+                     (buffer-string)))
+            (should-not (string-match-p "Steered this turn:" (buffer-string)))
+            (goto-char (point-min))
+            (search-forward "sleep 10 still running.")
+            (should-not (eq (get-text-property (match-beginning 0) 'face)
+                            'codex-ide-user-prompt-face))))))))
+
+(ert-deftest codex-ide-submit-queues-running-turn-when-configured ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-running-submit-action 'queue)
+        (requests nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-queue-1"
+                (codex-ide-session-current-turn-id session) "turn-current"
+                (codex-ide-session-output-prefix-inserted session) t
+                (codex-ide-session-status session) "running")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "Do this next")
+            (cl-letf (((symbol-function 'codex-ide--request-sync)
+                       (lambda (_session method params)
+                         (push (list method params) requests)
+                         '((turn . ((id . "turn-next")))))))
+              (codex-ide-submit)
+              (should (= (length (codex-ide--queued-prompts session)) 1))
+              (should (string-match-p
+	                       (rx "Queued turns:"
+	                           "\n  1. Do this next"
+	                           "\n\n> "
+	                           string-end)
+                       (buffer-string)))
+              (codex-ide--replace-current-input session "And then this")
+              (codex-ide-submit)
+              (should (= (length (codex-ide--queued-prompts session)) 2))
+              (should (string-match-p
+	                       (rx "Queued turns:"
+	                           "\n  1. Do this next"
+	                           "\n  2. And then this"
+	                           "\n\n> "
+	                           string-end)
+                       (buffer-string)))
+              (codex-ide--handle-notification
+               session
+               '((method . "turn/completed")
+                 (params . ((turn . ((id . "turn-current")))))))))
+          (should (= (length requests) 1))
+          (should (equal (caar requests) "turn/start"))
+          (let* ((params (cadar requests))
+                 (input (alist-get 'input params)))
+            (should (equal (alist-get 'threadId params) "thread-queue-1"))
+            (should (string-match-p "Do this next"
+                                    (alist-get 'text (aref input 0)))))
+          (should (= (length (codex-ide--queued-prompts session)) 1))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (should (string-match-p
+                     (rx "> Do this next" (* anything) "Working..." (* anything) "\n> ")
+                     (buffer-string)))
+            (should (string-match-p
+                     (rx "Queued turns:" "\n  1. And then this")
+                     (buffer-string)))))))))
+
 (ert-deftest codex-ide-submit-includes-reasoning-effort-when-configured ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (submitted nil)
@@ -2469,6 +2628,58 @@
               (should-not (string-match-p "/bin/zsh -lc" text))
               (should-not (string-match-p "Searched 2 paths" text)))))))))
 
+(ert-deftest codex-ide-approval-resolution-stays-above-running-prompt-output ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-current-turn-id session) "turn-approval-2"
+                (codex-ide-session-output-prefix-inserted session) t
+                (codex-ide-session-status session) "running")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "draft"))
+          (codex-ide--render-item-start
+           session
+           '((id . "call-approved")
+             (type . "commandExecution")
+             (command . "git status")
+             (cwd . "/tmp")))
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function)
+                       (funcall function)))
+                    ((symbol-function 'codex-ide-display-buffer)
+                     (lambda (_buffer) (selected-window)))
+                    ((symbol-function 'message)
+                     (lambda (&rest _) nil)))
+            (codex-ide--handle-command-approval
+             session
+             43
+             '((command . "git status"))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (goto-char (point-min))
+            (search-forward "[accept]")
+            (backward-char 1)
+            (push-button)
+            (codex-ide--replace-current-input session "steer while approved command runs")
+            (codex-ide--freeze-active-input-prompt session)
+            (codex-ide--insert-input-prompt session)
+            (codex-ide--render-item-completion
+             session
+             '((id . "call-approved")
+               (type . "commandExecution")
+               (status . "completed")
+               (aggregatedOutput . "Switched to branch main\nYour branch is up to date\n")))
+            (should (string-match-p
+                     (rx "Selected: accept"
+                         (* anything)
+                         "\n  " (or "└" "\342\224\224") " output: 2 lines"
+                         (* anything)
+                         "\n> steer while approved command runs"
+                         (* anything)
+                         "\n> "
+                         string-end)
+                     (buffer-string)))))))))
+
 (ert-deftest codex-ide-command-approval-does-not-display-nonvisible-buffer-when-disabled ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (message-text nil)
@@ -2758,7 +2969,7 @@
                        text))
               (should-not (string-match-p "Inspect the session log for details" text))
               (should-not (string-match-p "\\[Codex notification:" text))
-              (should-not (string-match-p "^> $" text))))
+              (should (string-match-p "^> $" text))))
           (with-current-buffer (codex-ide-session-log-buffer session)
             (should (string-match-p "Retryable Codex error: Reconnecting... 2/5"
                                     (buffer-string)))))))))
