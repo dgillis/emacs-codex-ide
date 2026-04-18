@@ -18,11 +18,12 @@
 (require 'codex-ide-session-thread-list-tests)
 
 (defun codex-ide-test--prompt-prefix-at-line ()
-  "Return the visible prompt prefix overlay string at the current line."
+  "Return the visible prompt prefix string at the current line."
   (save-excursion
     (beginning-of-line)
-    (when-let ((overlay (codex-ide--prompt-prefix-overlay-at (point))))
-      (overlay-get overlay 'before-string))))
+    (buffer-substring-no-properties
+     (point)
+     (min (+ (point) 2) (line-end-position)))))
 
 (defun codex-ide-test--line-has-prompt-start ()
   "Return non-nil when the current line is marked as a prompt line."
@@ -30,13 +31,16 @@
     (beginning-of-line)
     (codex-ide--line-has-prompt-start-p)))
 
-(defun codex-ide-test--prompt-prefix-overlay-count ()
-  "Return the number of prompt prefix overlays in the current buffer."
-  (seq-count
-   (lambda (overlay)
-     (overlay-get overlay codex-ide-prompt-prefix-overlay-property))
-   (append (car (overlay-lists))
-           (cdr (overlay-lists)))))
+(defun codex-ide-test--prompt-line-count ()
+  "Return the number of prompt lines in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((count 0))
+      (while (< (point) (point-max))
+        (when (codex-ide--line-has-prompt-start-p)
+          (setq count (1+ count)))
+        (forward-line 1))
+      count)))
 
 (ert-deftest codex-ide-app-server-command-includes-bridge-and-extra-flags ()
   (let ((codex-ide-cli-path "/tmp/codex")
@@ -481,7 +485,7 @@
       (undo-boundary)
       (should buffer-undo-list)
       (primitive-undo 1 (cdr buffer-undo-list))
-      (should (string-empty-p (buffer-string)))
+      (should (equal (buffer-string) "> "))
       (should (equal (codex-ide-test--prompt-prefix-at-line) "> ")))))
 
 (ert-deftest codex-ide-insert-input-prompt-clears-stale-undo-history ()
@@ -575,7 +579,7 @@
       (codex-ide--append-to-buffer (current-buffer) "Final answer.\n")
       (codex-ide--finish-turn session)
       (should (string-match-p
-               (rx "Final answer." "\n\nsteer draft" string-end)
+               (rx "Final answer." "\n\n> steer draft" string-end)
                (buffer-string)))
       (goto-char (marker-position
                   (codex-ide-session-input-prompt-start-marker session)))
@@ -1565,7 +1569,7 @@
       (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
       (should (codex-ide--input-prompt-active-p session))
       (goto-char (marker-position
-                  (codex-ide-session-input-prompt-start-marker session)))
+                  (codex-ide-session-input-start-marker session)))
       (should (eolp)))))
 
 (ert-deftest codex-ide-session-markdown-faces-survive-font-lock-attempts ()
@@ -1617,7 +1621,7 @@
               (should (derived-mode-p 'codex-ide-session-mode))
               (should (codex-ide--input-prompt-active-p session))
               (goto-char (marker-position
-                          (codex-ide-session-input-prompt-start-marker session)))
+                          (codex-ide-session-input-start-marker session)))
               (should (eolp)))))))))
 
 (ert-deftest codex-ide-start-session-new-honors-new-session-split ()
@@ -1830,7 +1834,7 @@
             (should (codex-ide--input-prompt-active-p session))
             (with-current-buffer (codex-ide-session-buffer session)
               (goto-char (marker-position
-                          (codex-ide-session-input-prompt-start-marker session)))
+                          (codex-ide-session-input-start-marker session)))
               (should (eolp)))))))))
 
 (ert-deftest codex-ide-show-or-resume-thread-reuses-idle-threadless-session ()
@@ -1875,7 +1879,7 @@
               (with-current-buffer (codex-ide-session-buffer session)
                 (let ((buffer-text (buffer-string)))
                   (should-not (string-match-p "Kill Codex session buffer" buffer-text))
-                  (should (string-match-p "^Reuse this buffer" buffer-text))
+                  (should (string-match-p "^> Reuse this buffer" buffer-text))
                   (should (string-match-p "Buffer reused\\." buffer-text)))))))))))
 
 (ert-deftest codex-ide-start-session-resume-aborts-cleanly-on-picker-quit ()
@@ -1960,7 +1964,7 @@
             (with-current-buffer (codex-ide-session-buffer session)
               (should (codex-ide--input-prompt-active-p session))
               (goto-char (marker-position
-                          (codex-ide-session-input-prompt-start-marker session)))
+                          (codex-ide-session-input-start-marker session)))
               (should (eolp)))))))))
 
 (ert-deftest codex-ide-input-prompt-prefix-is-read-only ()
@@ -1976,6 +1980,8 @@
             (goto-char (marker-position
                         (codex-ide-session-input-prompt-start-marker session)))
             (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
+            (goto-char (marker-position
+                        (codex-ide-session-input-start-marker session)))
             (should (looking-at-p "hello"))
             (should (string= (codex-ide--current-input session) "hello"))))))))
 
@@ -1992,6 +1998,8 @@
             (goto-char (marker-position
                         (codex-ide-session-input-prompt-start-marker session)))
             (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
+            (goto-char (marker-position
+                        (codex-ide-session-input-start-marker session)))
             (should (looking-at-p "h"))
             (should (string= (codex-ide--current-input session) "h"))))))))
 
@@ -2172,7 +2180,7 @@
                          "\nExplain this\nContext: file=.*src/example\\.el\" buffer=\"example\\.el\" line=1 column=3"
                          buffer-text))
                 (goto-char (point-min))
-                (re-search-forward "^Explain this$")
+                (re-search-forward "^> Explain this$")
                 (beginning-of-line)
                 (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
                 (should (string-match-p "\\[Emacs prompt context\\]"
@@ -3156,7 +3164,7 @@
             (should (string-match-p "Run `codex login`" (buffer-string)))
             (should (codex-ide--input-prompt-active-p session))
             (goto-char (marker-position
-                        (codex-ide-session-input-prompt-start-marker session)))
+                        (codex-ide-session-input-start-marker session)))
             (should (eolp))))))))
 
 (ert-deftest codex-ide-error-notification-retries-stay-concise-and-keep-turn-open ()
@@ -3268,6 +3276,9 @@
               (should (codex-ide--input-prompt-active-p session))
               (should prompt-start)
               (goto-char prompt-start)
+              (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
+              (goto-char (marker-position
+                          (codex-ide-session-input-start-marker session)))
               (should (eolp))
               (should-not (string-match-p "> \n\n> " text)))))))))
 
@@ -3469,7 +3480,7 @@
         (should (codex-ide--restore-thread-read-transcript session thread-read))
         (with-current-buffer (codex-ide-session-buffer session)
           (let ((buffer-text (buffer-string)))
-            (should (string-match-p "^What DB columns are on MyTable\\?" buffer-text))
+            (should (string-match-p "^> What DB columns are on MyTable\\?" buffer-text))
             (should-not (string-match-p "\\[Emacs context\\]" buffer-text))
             (should (string-match-p "Columns include `my_table_id` and `price`\\." buffer-text))
             (should (string-match-p
@@ -3517,7 +3528,7 @@
             (concat
              (regexp-quote
               "If you want, I can also give this as the exact SQL-ish schema shape with field types/nullability.")
-             "\n\nWhat is MyTable's primary key\\?")
+             "\n\n> What is MyTable's primary key\\?")
             (buffer-string))))))))
 
 (ert-deftest codex-ide-restore-thread-read-transcript-keeps-prompt-face-after-separator ()
@@ -3538,17 +3549,19 @@
         (should (codex-ide--restore-thread-read-transcript session thread-read))
         (with-current-buffer (codex-ide-session-buffer session)
           (goto-char (marker-position
-                      (codex-ide-session-input-prompt-start-marker session)))
+                      (codex-ide-session-input-start-marker session)))
           (insert "draft")
           (should (eq (get-text-property (1- (point)) 'face)
                       'codex-ide-user-prompt-face))
-          (should (eq (get-text-property (point) 'face) nil))
-          (let ((prefix (codex-ide-test--prompt-prefix-at-line)))
-            (should (equal prefix "> "))
-            (should (eq (get-text-property 0 'face prefix)
-                        'codex-ide-user-prompt-face)))
-          (goto-char (point-min))
-          (search-forward "[End of restored session]")
+              (should (eq (get-text-property (point) 'face) nil))
+              (let ((prefix (codex-ide-test--prompt-prefix-at-line)))
+                (should (equal prefix "> "))
+                (goto-char (marker-position
+                            (codex-ide-session-input-prompt-start-marker session)))
+                (should (eq (get-text-property (point) 'face)
+                            'codex-ide-user-prompt-face)))
+              (goto-char (point-min))
+              (search-forward "[End of restored session]")
           (should (eq (get-text-property (match-beginning 0) 'face)
                       'codex-ide-output-separator-face)))))))
 
@@ -3976,7 +3989,7 @@
                  (line-beginning-position)
                  (line-end-position)))
               (codex-ide--insert-input-prompt session "draft reset prompt")
-              (should (= (codex-ide-test--prompt-prefix-overlay-count) 2))
+              (should (= (codex-ide-test--prompt-line-count) 2))
               (setq new-session (codex-ide-reset-current-session)))
             (should-not (eq new-session session))
             (should (eq (codex-ide-session-buffer new-session) buffer))
@@ -3991,7 +4004,7 @@
             (with-current-buffer buffer
               (should (eq (codex-ide--session-for-current-buffer) new-session))
               (should-not (string-match-p "old transcript" (buffer-string)))
-              (should (= (codex-ide-test--prompt-prefix-overlay-count) 1))
+              (should (= (codex-ide-test--prompt-line-count) 1))
               (goto-char (marker-position
                           (codex-ide-session-input-prompt-start-marker
                            new-session)))
@@ -4073,20 +4086,21 @@
                   first-input
                   second-input)
               (erase-buffer)
-              (insert "first prompt\nassistant reply\nsecond prompt\n")
+              (insert "> first prompt\nassistant reply\n> second prompt\n")
               (goto-char (point-min))
               (codex-ide--style-user-prompt-region
                (line-beginning-position)
                (line-end-position))
-              (setq first-input (line-beginning-position))
+              (setq first-input (+ (line-beginning-position) 2))
               (forward-line 2)
               (codex-ide--style-user-prompt-region
                (line-beginning-position)
                (line-end-position))
-              (setq second-input (line-beginning-position))
+              (setq second-input (+ (line-beginning-position) 2))
               (goto-char (point-max))
               (forward-line -1)
               (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
+              (forward-char 2)
               (should (looking-at-p "second prompt"))
               (codex-ide--goto-prompt-line -1)
               (should (= (point) first-input))
@@ -4105,7 +4119,7 @@
           (with-current-buffer (codex-ide-session-buffer session)
             (let ((inhibit-read-only t))
               (erase-buffer)
-              (insert "first prompt\nassistant reply\n")
+              (insert "> first prompt\nassistant reply\n")
               (goto-char (point-min))
               (codex-ide--style-user-prompt-region
                (line-beginning-position)
@@ -4121,6 +4135,8 @@
             (goto-char (marker-position
                         (codex-ide-session-input-prompt-start-marker session)))
             (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
+            (goto-char (marker-position
+                        (codex-ide-session-input-start-marker session)))
             (should (looking-at-p "draft")))))))))
 
 (ert-deftest codex-ide-reopen-input-after-submit-error-resets-turn-state ()
@@ -4152,6 +4168,8 @@
             (goto-char (point-max))
             (forward-line 0)
             (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
+            (goto-char (marker-position
+                        (codex-ide-session-input-start-marker session)))
             (should (looking-at-p "retry prompt"))))))))
 
 (ert-deftest codex-ide-finish-turn-resets-state-and-opens-fresh-prompt ()

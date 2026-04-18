@@ -117,10 +117,7 @@ the transcript shows the most recent characters."
   :group 'codex-ide)
 
 (defconst codex-ide-prompt-start-property 'codex-ide-prompt-start
-  "Text property used to mark the first character of a frozen user prompt.")
-
-(defconst codex-ide-prompt-prefix-overlay-property 'codex-ide-prompt-prefix-overlay
-  "Overlay property used to mark the visible `> ' prompt prefix overlay.")
+  "Text property used to mark the first character of a user prompt.")
 
 (defface codex-ide-command-output-face
   '((((class color) (background light))
@@ -636,31 +633,25 @@ inserted text."
     (delete-overlay overlay)
     (setf (codex-ide-session-input-overlay session) nil)))
 
-(defun codex-ide--prompt-prefix-overlay-at (pos)
-  "Return the prompt prefix overlay at POS, or nil when absent."
-  (seq-find (lambda (overlay)
-              (and (overlay-get overlay codex-ide-prompt-prefix-overlay-property)
-                   (= (overlay-start overlay) pos)))
-            (append (car (overlay-lists))
-                    (cdr (overlay-lists)))))
-
-(defun codex-ide--ensure-prompt-prefix-overlay-at (pos)
-  "Ensure a visible prompt prefix overlay exists at POS."
-  (unless (codex-ide--prompt-prefix-overlay-at pos)
-    (let ((overlay (make-overlay pos pos nil nil t)))
-      (overlay-put overlay codex-ide-prompt-prefix-overlay-property t)
-      (overlay-put overlay 'before-string
-                   (propertize "> " 'face 'codex-ide-user-prompt-face))
-      overlay)))
+(defun codex-ide--insert-prompt-prefix ()
+  "Insert a visible `> ' prompt prefix at point."
+  (let ((start (point)))
+    (insert "> ")
+    (add-text-properties
+     start
+     (point)
+     `(face codex-ide-user-prompt-face
+            read-only t
+            rear-nonsticky (read-only)
+            front-sticky (read-only)
+            ,codex-ide-prompt-start-property t))))
 
 (defun codex-ide--line-has-prompt-start-p (&optional pos)
   "Return non-nil when the line at POS starts a user prompt."
   (save-excursion
     (goto-char (or pos (point)))
     (beginning-of-line)
-    (let ((line-start (point)))
-      (or (codex-ide--prompt-prefix-overlay-at line-start)
-          (get-text-property line-start codex-ide-prompt-start-property)))))
+    (get-text-property (point) codex-ide-prompt-start-property)))
 
 (defun codex-ide--delete-active-input-prompt (session)
   "Delete SESSION's active editable input prompt, if any."
@@ -830,8 +821,7 @@ When DRAFT is nil, preserve the current active prompt text."
   (when (< start end)
     (add-text-properties start end '(face codex-ide-user-prompt-face))
     (add-text-properties start (1+ start)
-                         `(,codex-ide-prompt-start-property t))
-    (codex-ide--ensure-prompt-prefix-overlay-at start)))
+                         `(,codex-ide-prompt-start-property t))))
 
 (defun codex-ide--format-compact-number (value)
   "Format numeric VALUE in a compact human-readable form."
@@ -1956,10 +1946,10 @@ Optionally seed it with INITIAL-TEXT."
              session
              :active-input-boundary-marker
              active-boundary)
-            (setf (codex-ide-session-input-prompt-start-marker session)
-                  (copy-marker (point)))
             (setq prompt-start (point))
-            (codex-ide--ensure-prompt-prefix-overlay-at prompt-start)
+            (codex-ide--insert-prompt-prefix)
+            (setf (codex-ide-session-input-prompt-start-marker session)
+                  (copy-marker prompt-start))
             (setf (codex-ide-session-input-start-marker session)
                   (copy-marker (point)))
             (codex-ide--reset-prompt-history-navigation session)
@@ -2118,7 +2108,18 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
         (user-error (if (< direction 0)
                         "No earlier prompt line"
                       "No later prompt line")))
-      (beginning-of-line))))
+      (beginning-of-line)
+      (cond
+       ((when-let ((session (codex-ide--session-for-current-project))
+                   (prompt-start (codex-ide-session-input-prompt-start-marker session))
+                   (input-start (codex-ide-session-input-start-marker session)))
+          (when (and (markerp prompt-start)
+                     (markerp input-start)
+                     (= (marker-position prompt-start) (point)))
+            (goto-char input-start)
+            t)))
+       ((looking-at-p "> ")
+        (forward-char 2))))))
 
 (defun codex-ide--begin-turn-display (&optional session context-summary quiet)
   "Freeze the current prompt and show immediate pending output for SESSION.
@@ -3548,6 +3549,7 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
            (t
             (insert "\n\n")))
           (setq prompt-start (point))
+          (codex-ide--insert-prompt-prefix)
           (insert display-text)
           (codex-ide--style-user-prompt-region prompt-start (point))
           (codex-ide--freeze-region prompt-start (point))
