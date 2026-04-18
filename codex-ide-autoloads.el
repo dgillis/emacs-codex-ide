@@ -415,6 +415,11 @@ Move point to the next focal point in the current buffer." t)
 Move point to the previous focal point in the current buffer." t)
 (register-definition-prefixes "codex-ide-nav" '("codex-ide-nav-"))
 
+
+
+;;; Generated autoloads from codex-ide-utils.el
+
+(register-definition-prefixes "codex-ide-utils" '("codex-ide-"))
 
 ;;; End of scraped data
 
