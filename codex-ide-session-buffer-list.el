@@ -85,7 +85,7 @@
        (let* ((buffer (codex-ide-session-buffer session))
             (directory (abbreviate-file-name (codex-ide-session-directory session)))
             (thread-id (or (codex-ide-session-thread-id session) ""))
-            (status (codex-ide--status-label (codex-ide-session-status session))))
+            (status (codex-ide-renderer-status-label (codex-ide-session-status session))))
        (list session
              (vector (codex-ide-session-list-cell
                       (buffer-name buffer)

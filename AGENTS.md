@@ -22,7 +22,8 @@ Following summarizes the current (not neccessarily ideal) directory structure:
 
 - `codex-ide.el`: an undesirably monolithic module. Avoid adding new functionaltiy to it (where possible) and look for opportunities to extract funcitonality out.
 - `codex-ide-core.el`: baseline dependencies needed (almost) everywhere. This should not depend on anything else.
-- `codex-ide-renderer.el`: responsible for displaying agent generated text in Emacs buffers.
+- `codex-ide-renderer.el`: view-oriented rendering helpers. This should focus on buffer presentation, markdown rendering, text properties, overlays, and other logic that acts on explicit inputs plus buffer state. It should not depend on other `codex-ide-*.el` files.
+- `codex-ide-transcript.el`: transcript/session controller logic. This owns the orchestration that maps Codex session state and protocol events into transcript updates, and should use `codex-ide-renderer.el` for the actual view work.
 - `codex-ide-transient.el`: transient-based command menus and configuration UI. Treat this as command-surface glue, not the home for core business logic.
 - `codex-ide-mcp-bridge.el`: Emacs-side bridge helpers. Owns optional bridge configuration, server readiness checks, tool dispatch, and context reporting for the external bridge process.
 - `codex-ide-*.el`: Other elisp source code whose name/documentation describes its primary purpose.

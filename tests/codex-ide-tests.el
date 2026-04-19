@@ -455,7 +455,7 @@
     (buffer-enable-undo)
     (insert "See [`foo.el`](/tmp/foo.el#L3C2) and `code`.\n")
     (setq buffer-undo-list nil)
-    (codex-ide--render-markdown-region (point-min) (point-max) t)
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max) t)
     (should-not buffer-undo-list)))
 
 (ert-deftest codex-ide-discard-buffer-undo-history-clears-undo-tree-history ()
@@ -855,7 +855,7 @@
         (should (string-match-p "  └ found 2 hits" buffer-text))))))
 
 (ert-deftest codex-ide-command-execution-streams-output-and-folds-on-completion ()
-  (let ((codex-ide-command-output-fold-on-start nil))
+  (let ((codex-ide-renderer-command-output-fold-on-start nil))
     (with-temp-buffer
       (codex-ide-session-mode)
       (let ((session (make-codex-ide-session
@@ -902,8 +902,8 @@
               t)))
 
 (ert-deftest codex-ide-command-output-tails-rendered-lines ()
-  (let ((codex-ide-command-output-max-rendered-lines 3)
-        (codex-ide-command-output-max-rendered-chars nil))
+  (let ((codex-ide-renderer-command-output-max-rendered-lines 3)
+        (codex-ide-renderer-command-output-max-rendered-chars nil))
     (with-temp-buffer
       (codex-ide-session-mode)
       (let ((session (make-codex-ide-session
@@ -948,8 +948,8 @@
                  (buffer-string)))))))
 
 (ert-deftest codex-ide-command-output-full-button-opens-uncapped-output ()
-  (let ((codex-ide-command-output-max-rendered-lines 2)
-        (codex-ide-command-output-max-rendered-chars nil))
+  (let ((codex-ide-renderer-command-output-max-rendered-lines 2)
+        (codex-ide-renderer-command-output-max-rendered-chars nil))
     (with-temp-buffer
       (codex-ide-session-mode)
       (let ((session (make-codex-ide-session
@@ -984,8 +984,8 @@
                  (buffer-string)))))))
 
 (ert-deftest codex-ide-command-output-full-button-uses-stream-cache ()
-  (let ((codex-ide-command-output-max-rendered-lines 2)
-        (codex-ide-command-output-max-rendered-chars nil))
+  (let ((codex-ide-renderer-command-output-max-rendered-lines 2)
+        (codex-ide-renderer-command-output-max-rendered-chars nil))
     (with-temp-buffer
       (codex-ide-session-mode)
       (let ((session (make-codex-ide-session
@@ -1029,7 +1029,7 @@
                  (buffer-string)))))))
 
 (ert-deftest codex-ide-command-output-can-start-folded-while-streaming ()
-  (let ((codex-ide-command-output-fold-on-start t))
+  (let ((codex-ide-renderer-command-output-fold-on-start t))
     (with-temp-buffer
       (codex-ide-session-mode)
       (let ((session (make-codex-ide-session
@@ -1251,7 +1251,7 @@
         (should (< output-pos (match-beginning 0)))))))
 
 (ert-deftest codex-ide-command-output-does-not-fold-following-assistant-message ()
-  (let ((codex-ide-command-output-fold-on-start nil))
+  (let ((codex-ide-renderer-command-output-fold-on-start nil))
     (with-temp-buffer
       (codex-ide-session-mode)
       (let ((session (make-codex-ide-session
@@ -1577,7 +1577,7 @@
     (codex-ide-session-mode)
     (let ((inhibit-read-only t))
       (insert "`code`")
-      (codex-ide--render-markdown-region (point-min) (point-max))
+      (codex-ide-renderer-render-markdown-region (point-min) (point-max))
       (font-lock-mode 1)
       (font-lock-ensure (point-min) (point-max))
       (goto-char (point-min))
@@ -2756,12 +2756,12 @@
                                  (buffer-name (codex-ide-session-buffer session)))))
           (should (string= (codex-ide-session-status session) "approval"))
           (should (string-match-p "Codex:Approval"
-                                  (codex-ide--mode-line-status session)))
+                                  (codex-ide-renderer-mode-line-status session)))
           (should (= (hash-table-count (codex-ide--pending-approvals session)) 1))
           (with-current-buffer (codex-ide-session-buffer session)
             (let ((text (buffer-string))
                   (separator (string-trim-right
-                              (codex-ide--output-separator-string))))
+                              (codex-ide-renderer-output-separator-string))))
               (should (string-match-p
                        (concat "\n\n"
                                (regexp-quote separator)
@@ -2783,7 +2783,7 @@
               (should (string-match-p "\\[accept for session\\]" text)))
             (goto-char (point-min))
             (search-forward (string-trim-right
-                             (codex-ide--output-separator-string)))
+                             (codex-ide-renderer-output-separator-string)))
             (should (eq (get-text-property (match-beginning 0) 'face)
                         'codex-ide-output-separator-face))
             (search-forward "[Approval required]")
@@ -3121,7 +3121,7 @@
              (params . ((thread . ((status . nil)))))))
           (should (string= (codex-ide-session-status session) "running"))
           (should (string-match-p "Codex:Running"
-                                  (codex-ide--mode-line-status session))))))))
+                                  (codex-ide-renderer-mode-line-status session))))))))
 
 (ert-deftest codex-ide-normalize-session-status-maps-server-status-types ()
   (should (equal (codex-ide--normalize-session-status '((type . "active"))) "running"))
@@ -3141,7 +3141,7 @@
                         (status . ((type . "systemError")))))))
           (should (string= (codex-ide-session-status session) "error"))
           (should (string-match-p "Codex:Error"
-                                  (codex-ide--mode-line-status session))))))))
+                                  (codex-ide-renderer-mode-line-status session))))))))
 
 (ert-deftest codex-ide-error-notification-handles-authentication-failures-gracefully ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -3487,7 +3487,7 @@
                      (concat (regexp-quote "Columns include `my_table_id` and `price`.")
                              "\n"
                              (regexp-quote
-                              (codex-ide--restored-transcript-separator-string)))
+                              (codex-ide-renderer-restored-transcript-separator-string)))
                      buffer-text))
             (goto-char (point-min))
             (should (equal (codex-ide-test--prompt-prefix-at-line) "> "))
@@ -3660,7 +3660,7 @@
                          (concat (regexp-quote "The prompt was restored too early.")
                                  "\n"
                                  (regexp-quote
-                                  (codex-ide--restored-transcript-separator-string)))
+                                  (codex-ide-renderer-restored-transcript-separator-string)))
                          buffer-text))
                 (goto-char (point-max))
                 (forward-line 0)
@@ -4229,23 +4229,23 @@
            (summary-end (line-end-position 2)))
       (add-text-properties summary-start summary-end
                            '(face codex-ide-item-summary-face))
-      (codex-ide--render-markdown-region markdown-start markdown-end)
+      (codex-ide-renderer-render-markdown-region markdown-start markdown-end)
       (should (eq (get-text-property summary-start 'face)
                   'codex-ide-item-summary-face))
-      (codex-ide--render-markdown-region markdown-start (point-max))
+      (codex-ide-renderer-render-markdown-region markdown-start (point-max))
       (should (eq (get-text-property summary-start 'face)
                   'codex-ide-item-summary-face)))))
 
 (ert-deftest codex-ide-render-markdown-region-renders-file-links ()
   (with-temp-buffer
     (insert "See [`foo.el`](/tmp/foo.el#L3C2)\n")
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
     (goto-char (point-min))
     (search-forward "foo.el")
     (let ((pos (1- (point))))
       (should (button-at pos))
       (should (eq (get-text-property pos 'face) 'link))
-      (should (eq (get-text-property pos 'action) #'codex-ide--open-file-link))
+      (should (eq (get-text-property pos 'action) #'codex-ide-renderer-open-file-link))
       (should (equal (get-text-property pos 'codex-ide-path) "/tmp/foo.el"))
       (should (= (get-text-property pos 'codex-ide-line) 3))
       (should (= (get-text-property pos 'codex-ide-column) 2))
@@ -4253,19 +4253,19 @@
 
 (ert-deftest codex-ide-parse-file-link-target-normalizes-escaped-slashes ()
   (should
-   (equal (codex-ide--parse-file-link-target "\\/tmp\\/foo.el#L3C2")
+   (equal (codex-ide-renderer-parse-file-link-target "\\/tmp\\/foo.el#L3C2")
           '("/tmp/foo.el" 3 2))))
 
 (ert-deftest codex-ide-render-markdown-region-renders-file-links-with-escaped-slashes ()
   (with-temp-buffer
     (insert "See [`foo.el`](\\/tmp\\/foo.el#L3C2)\n")
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
     (goto-char (point-min))
     (search-forward "foo.el")
     (let ((pos (1- (point))))
       (should (button-at pos))
       (should (eq (get-text-property pos 'face) 'link))
-      (should (eq (get-text-property pos 'action) #'codex-ide--open-file-link))
+      (should (eq (get-text-property pos 'action) #'codex-ide-renderer-open-file-link))
       (should (equal (get-text-property pos 'codex-ide-path) "/tmp/foo.el"))
       (should (= (get-text-property pos 'codex-ide-line) 3))
       (should (= (get-text-property pos 'codex-ide-column) 2))
@@ -4274,7 +4274,7 @@
 (ert-deftest codex-ide-render-markdown-region-renders-inline-code ()
   (with-temp-buffer
     (insert "prefix `code` suffix")
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
     (goto-char (point-min))
     (search-forward "code")
     (let ((code-pos (- (point) 2))
@@ -4288,7 +4288,7 @@
 (ert-deftest codex-ide-render-markdown-region-renders-fenced-code-blocks ()
   (with-temp-buffer
     (insert "```elisp\n(setq x 1)\n```\n")
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
     (goto-char (point-min))
     (should (equal (get-text-property (point-min) 'display) ""))
     (search-forward "setq")
@@ -4303,7 +4303,7 @@
 (ert-deftest codex-ide-render-markdown-region-renders-pipe-tables ()
   (with-temp-buffer
     (insert "| Name | Age |\n| --- | ---: |\n| Bob | 3 |\n")
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
     (let ((rendered (buffer-string)))
       (should (string-match-p "^| Name | Age |" rendered))
       (should (string-match-p "^|------|----:|$" rendered))
@@ -4314,7 +4314,7 @@
 (ert-deftest codex-ide-render-markdown-region-renders-file-links-inside-pipe-tables ()
   (with-temp-buffer
     (insert "| File |\n| --- |\n| [`foo.el`](/tmp/foo.el#L3C2) |\n")
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
     (let ((rendered (buffer-string)))
       (should (string-match-p "^| File   |" rendered))
       (should (string-match-p "^| foo\\.el |" rendered))
@@ -4331,10 +4331,10 @@
 (ert-deftest codex-ide-render-markdown-region-defers-trailing-pipe-tables ()
   (with-temp-buffer
     (insert "| Name | Age |\n| --- | ---: |\n| Bob | 3 |\n")
-    (codex-ide--render-markdown-region (point-min) (point-max) nil)
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max) nil)
     (should (equal (buffer-string)
                    "| Name | Age |\n| --- | ---: |\n| Bob | 3 |\n"))
-    (codex-ide--render-markdown-region (point-min) (point-max) t)
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max) t)
     (should (string-match-p "^| Bob  |   3 |$" (buffer-string)))
     (should-not (get-text-property (point-min) 'display))))
 
@@ -4428,7 +4428,7 @@
 (ert-deftest codex-ide-render-markdown-region-renders-emphasis ()
   (with-temp-buffer
     (insert "This is **bold** and *italic* plus __strong_with_underscores__ and _emphasis_.\n")
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
     (should (equal (buffer-string)
                    "This is bold and italic plus strong_with_underscores and emphasis.\n"))
     (goto-char (point-min))
@@ -4444,8 +4444,8 @@
 (ert-deftest codex-ide-render-markdown-region-keeps-emphasis-after-rerender ()
   (with-temp-buffer
     (insert "This is **bold** and _italic_.\n")
-    (codex-ide--render-markdown-region (point-min) (point-max))
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
     (should (equal (buffer-string) "This is bold and italic.\n"))
     (goto-char (point-min))
     (search-forward "bold")
@@ -4456,7 +4456,7 @@
 (ert-deftest codex-ide-render-markdown-region-keeps-intraword-underscores-literal ()
   (with-temp-buffer
     (insert "Keep my_table_id literal.\n")
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
     (should (equal (buffer-string)
                    "Keep my_table_id literal.\n"))
     (goto-char (point-min))
@@ -4467,7 +4467,7 @@
 (ert-deftest codex-ide-render-markdown-region-renders-bold-with-internal-underscores ()
   (with-temp-buffer
     (insert "Render **bold_with_underscores** and __strong_with_underscores__.\n")
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
     (should (equal (buffer-string)
                    "Render bold_with_underscores and strong_with_underscores.\n"))
     (goto-char (point-min))
@@ -4479,7 +4479,7 @@
 (ert-deftest codex-ide-render-markdown-region-renders-table-emphasis ()
   (with-temp-buffer
     (insert "| Kind | Value |\n| --- | --- |\n| **Bold** | _italic_ |\n| Star bold | **bold_with_underscores** |\n| Underscore bold | __strong_with_underscores__ |\n")
-    (codex-ide--render-markdown-region (point-min) (point-max) t)
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max) t)
     (goto-char (point-min))
     (search-forward "Bold")
     (should (memq 'bold
@@ -4507,8 +4507,8 @@
                              '((("\\_<foo\\_>" . font-lock-keyword-face)))))))
       (with-temp-buffer
         (insert "```codex-ide-test-cached\nfoo\n```\n")
-        (codex-ide--render-markdown-region (point-min) (point-max) t)
-        (codex-ide--render-markdown-region (point-min) (point-max) t)
+        (codex-ide-renderer-render-markdown-region (point-min) (point-max) t)
+        (codex-ide-renderer-render-markdown-region (point-min) (point-max) t)
         (should (= mode-call-count 1))
         (goto-char (point-min))
         (search-forward "foo")

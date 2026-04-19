@@ -56,7 +56,7 @@
   (mapconcat
    (lambda (block-lines)
      (concat
-      (codex-ide--output-separator-string)
+      (codex-ide-renderer-output-separator-string)
       "\n"
       (mapconcat #'identity block-lines "\n")
       "\n"))

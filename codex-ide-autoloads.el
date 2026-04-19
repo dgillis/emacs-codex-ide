@@ -420,6 +420,11 @@ Move point to the previous focal point in the current buffer." t)
 ;;; Generated autoloads from codex-ide-utils.el
 
 (register-definition-prefixes "codex-ide-utils" '("codex-ide-"))
+
+
+;;; Generated autoloads from codex-ide-transcript.el
+
+(register-definition-prefixes "codex-ide-transcript" '("codex-ide-"))
 
 ;;; End of scraped data
 

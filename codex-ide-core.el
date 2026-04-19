@@ -16,7 +16,7 @@
 (require 'seq)
 (require 'subr-x)
 
-(declare-function codex-ide--update-header-line "codex-ide-renderer" (&optional session))
+(declare-function codex-ide--update-header-line "codex-ide-transcript" (&optional session))
 (declare-function codex-ide-log-message "codex-ide" (session format-string &rest args))
 
 (defvar codex-ide-buffer-name-function)

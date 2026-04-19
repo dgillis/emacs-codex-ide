@@ -395,7 +395,7 @@ Only child `buffer' and `thread' sections support visit and delete actions."
 
 (defun codex-ide-status-mode--status-face (status)
   "Return the face used for STATUS."
-  (or (codex-ide--status-face status) 'default))
+  (or (codex-ide-renderer-status-face status) 'default))
 
 (defun codex-ide-status-mode--header-line (directory count)
   "Return header-line text for DIRECTORY with session COUNT."
@@ -583,7 +583,7 @@ The plist contains `:text', `:start', and `:end'."
              (status (if session
                          (codex-ide-session-status session)
                        "stored"))
-             (label (codex-ide--status-label status))
+             (label (codex-ide-renderer-status-label status))
              (updated (or (codex-ide-human-time-ago (alist-get 'updatedAt thread)) "")))
         (setq status-width (max status-width (string-width label))
               updated-width (max updated-width (string-width updated)))))
@@ -700,8 +700,8 @@ PREFIX defaults to a dimmed `└ '.  PREFIX-FACE defaults to `shadow'."
 Skip separator borders and leading whitespace."
   (save-excursion
     (goto-char start)
-    (let ((separator (codex-ide--output-separator-string))
-          (separator-regexp (regexp-quote (codex-ide--output-separator-string)))
+    (let ((separator (codex-ide-renderer-output-separator-string))
+          (separator-regexp (regexp-quote (codex-ide-renderer-output-separator-string)))
           done)
       (while (and (< (point) end) (not done))
         (let ((before (point)))
@@ -719,7 +719,7 @@ Skip separator borders and leading whitespace."
 Trim trailing separator borders and whitespace."
   (save-excursion
     (goto-char end)
-    (let ((separator (codex-ide--output-separator-string)))
+    (let ((separator (codex-ide-renderer-output-separator-string)))
       (while (and (> (point) start)
                   (progn
                     (skip-chars-backward " \t\n" start)
@@ -744,7 +744,7 @@ at the start of the containing separator-delimited block."
       (when (< start trimmed-end)
         (goto-char trimmed-end)
         (forward-line (- (max 0 codex-ide-status-mode-transcript-preview-max-lines)))
-        (let* ((separator (codex-ide--output-separator-string))
+        (let* ((separator (codex-ide-renderer-output-separator-string))
                (line-start (max start (line-beginning-position)))
                (block-start
                 (progn
@@ -762,7 +762,7 @@ at the start of the containing separator-delimited block."
   "Return the last separator-delimited output block between START and END."
   (save-excursion
     (let* ((trimmed-end (codex-ide-status-mode--trim-transcript-end start end))
-           (separator (codex-ide--output-separator-string)))
+           (separator (codex-ide-renderer-output-separator-string)))
       (when (< start trimmed-end)
         (goto-char trimmed-end)
         (let* ((block-start
@@ -914,7 +914,7 @@ Return nil when there is no agent reply."
 (defun codex-ide-status-mode--insert-buffer-section (session)
   "Insert a child section for SESSION."
   (let* ((status (codex-ide-session-status session))
-         (label (codex-ide--status-label status))
+         (label (codex-ide-renderer-status-label status))
          (first-prompt (or (codex-ide-status-mode--first-submitted-prompt-text session) ""))
          (prompt-count (codex-ide-status-mode--submitted-prompt-count session))
          (last-prompt (or (codex-ide-status-mode--last-submitted-prompt-text session) ""))
@@ -948,7 +948,7 @@ Return nil when there is no agent reply."
          (status (if session
                      (codex-ide-session-status session)
                    "stored"))
-         (label (codex-ide--status-label status))
+         (label (codex-ide-renderer-status-label status))
          (thread-id (alist-get 'id thread))
          (raw-preview (or (alist-get 'name thread)
                           (alist-get 'preview thread)

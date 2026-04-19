@@ -33,7 +33,7 @@ BODY may refer to the lexical variable `session'."
 (ert-deftest codex-ide-renderer-renders-indented-fenced-code-blocks ()
   (with-temp-buffer
     (insert "Each PR should target:\n\n    ```text\n    dgillis/emacs-codex-ide:main\n    ```\n")
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
     (goto-char (point-min))
     (search-forward "```text")
     (should (equal (get-text-property (match-beginning 0) 'display) ""))
@@ -48,7 +48,7 @@ BODY may refer to the lexical variable `session'."
 (ert-deftest codex-ide-renderer-renders-javascript-fenced-code-blocks ()
   (with-temp-buffer
     (insert "```javascript\nconst x = 1;\n```\n")
-    (codex-ide--render-markdown-region (point-min) (point-max) t)
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max) t)
     (goto-char (point-min))
     (should (equal (get-text-property (point-min) 'display) ""))
     (search-forward "const x")
@@ -65,7 +65,7 @@ BODY may refer to the lexical variable `session'."
 (ert-deftest codex-ide-renderer-renders-json-fenced-code-blocks-with-stock-mode ()
   (with-temp-buffer
     (insert "```json\n{\"tool\": true}\n```\n")
-    (codex-ide--render-markdown-region (point-min) (point-max) t)
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max) t)
     (goto-char (point-min))
     (search-forward "tool")
     (let ((code-pos (1- (point))))
@@ -78,7 +78,7 @@ BODY may refer to the lexical variable `session'."
 (ert-deftest codex-ide-renderer-renders-leading-underscore-inline-code ()
   (with-temp-buffer
     (insert "prefix `_x_yz` suffix")
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
     (goto-char (point-min))
     (search-forward "_x_yz")
     (let ((code-pos (match-beginning 0))
@@ -94,7 +94,7 @@ BODY may refer to the lexical variable `session'."
 (ert-deftest codex-ide-renderer-renders-bold-containing-inline-code ()
   (with-temp-buffer
     (insert "**bold with `verbatim` and `_x_yz` inside**\n")
-    (codex-ide--render-markdown-region (point-min) (point-max))
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
     (should (equal (buffer-string)
                    "bold with `verbatim` and `_x_yz` inside\n"))
     (goto-char (point-min))
@@ -121,7 +121,7 @@ BODY may refer to the lexical variable `session'."
 (ert-deftest codex-ide-renderer-fontifies-completed-fences-while-streaming ()
   (with-temp-buffer
     (insert "```javascript\nconst x = 1;\n")
-    (codex-ide--render-markdown-region (point-min) (point-max) nil)
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max) nil)
     (goto-char (point-min))
     (search-forward "const x")
     (let ((code-pos (match-beginning 0)))
@@ -129,7 +129,7 @@ BODY may refer to the lexical variable `session'."
                         (ensure-list (get-text-property code-pos 'face)))))
     (goto-char (point-max))
     (insert "```\n")
-    (codex-ide--render-markdown-region (point-min) (point-max) nil)
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max) nil)
     (goto-char (point-min))
     (search-forward "const x")
     (let ((code-pos (match-beginning 0)))
@@ -292,7 +292,7 @@ BODY may refer to the lexical variable `session'."
 
 (ert-deftest codex-ide-renderer-completion-skips-markdown-over-size-limit ()
   (codex-ide-renderer-test-with-agent-message-buffer
-    (let ((codex-ide-markdown-render-max-chars 10))
+    (let ((codex-ide-renderer-markdown-render-max-chars 10))
       (insert "This longer message has `code` here.\n")
       (codex-ide--render-current-agent-message-markdown-streaming session "msg-1")
       (codex-ide--render-current-agent-message-markdown session "msg-1" t)
@@ -303,7 +303,7 @@ BODY may refer to the lexical variable `session'."
 
 (ert-deftest codex-ide-renderer-streaming-size-limit-applies-to-spans ()
   (codex-ide-renderer-test-with-agent-message-buffer
-    (let ((codex-ide-markdown-render-max-chars 25))
+    (let ((codex-ide-renderer-markdown-render-max-chars 25))
       (insert "Use `a`.\n")
       (codex-ide--render-current-agent-message-markdown-streaming session "msg-1")
       (goto-char (point-max))
@@ -320,7 +320,7 @@ BODY may refer to the lexical variable `session'."
 
 (ert-deftest codex-ide-renderer-completion-preserves-streamed-markdown-over-size-limit ()
   (codex-ide-renderer-test-with-agent-message-buffer
-    (let ((codex-ide-markdown-render-max-chars 25))
+    (let ((codex-ide-renderer-markdown-render-max-chars 25))
       (insert "Use `a`.\n")
       (codex-ide--render-current-agent-message-markdown-streaming session "msg-1")
       (goto-char (point-min))
@@ -336,7 +336,7 @@ BODY may refer to the lexical variable `session'."
 (ert-deftest codex-ide-renderer-renders-indented-pipe-tables ()
   (with-temp-buffer
     (insert "Indented table inside a list item:\n\n    | Remote | Branch | Purpose |\n    | --- | --- | --- |\n    | upstream | main | PR base |\n    | fork | topic-branch | PR head |\n")
-    (codex-ide--render-markdown-region (point-min) (point-max) t)
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max) t)
     (should (string-match-p "^    | Remote   | Branch       | Purpose |$"
                             (buffer-string)))
     (should (string-match-p "^    |----------|--------------|---------|$"

@@ -40,6 +40,7 @@
 (require 'codex-ide-nav)
 (require 'codex-ide-utils)
 (require 'codex-ide-renderer)
+(require 'codex-ide-transcript)
 (require 'codex-ide-transient)
 (require 'codex-ide-mcp-bridge)
 
@@ -322,7 +323,7 @@ REASON is stored in the emitted payload when non-nil."
   (setq-local truncate-lines nil)
   (when codex-ide-session-enable-visual-line-mode
     (visual-line-mode 1))
-  (setq-local mode-line-process '((:eval (codex-ide--mode-line-status))))
+  (setq-local mode-line-process '((:eval (codex-ide-renderer-mode-line-status codex-ide--session))))
   (setq-local codex-ide-nav-focal-point-functions
               '(codex-ide-session-mode--focal-points))
   (add-hook 'post-command-hook #'codex-ide--sync-prompt-minor-mode nil t))
@@ -2045,7 +2046,7 @@ is merged into the stored pending request state."
         (goto-char (codex-ide--transcript-insertion-position buffer))
         (setq start-marker (copy-marker (point)))
         (insert (propertize
-                 (codex-ide--output-separator-string)
+                 (codex-ide-renderer-output-separator-string)
                  'face
                  'codex-ide-output-separator-face))
         (insert "\n")
@@ -2659,7 +2660,7 @@ regions that should remain editable after rendering."
               (length delta)))
            (codex-ide--ensure-agent-message-prefix session item-id)
            (codex-ide--append-agent-text buffer delta)
-           (when codex-ide-render-markdown-during-streaming
+           (when codex-ide-renderer-render-markdown-during-streaming
              (codex-ide--render-current-agent-message-markdown-streaming
               session
               item-id)))))
