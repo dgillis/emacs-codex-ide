@@ -1,0 +1,122 @@
+;;; codex-ide-session-mode.el --- Session buffer modes for codex-ide -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026
+
+;; Author: Duncan Gillis
+
+;;; Commentary:
+
+;; This module owns the Emacs major/minor modes used by live Codex session
+;; buffers.
+;;
+;; Its job is intentionally narrow:
+;;
+;; - Define the major mode used by transcript buffers.
+;; - Define the prompt-only minor mode and its keymap.
+;; - Define navigation integration for transcript buttons and active input.
+;; - Keep prompt-editing mode synchronized with the current point location.
+;;
+;; It does not own session lifecycle, prompt submission, or transcript mutation.
+;; Those higher-level concerns live in the session and transcript controller
+;; modules.  This separation keeps mode setup reloadable and minimizes the
+;; amount of stateful logic tied directly to Emacs mode activation.
+
+;;; Code:
+
+(require 'codex-ide-core)
+(require 'codex-ide-nav)
+(require 'codex-ide-renderer)
+
+(defvar codex-ide-session-enable-visual-line-mode)
+
+(defvar codex-ide-session-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map text-mode-map)
+    map)
+  "Keymap for `codex-ide-session-mode'.")
+
+(defvar codex-ide-session-prompt-minor-mode-map
+  (make-sparse-keymap)
+  "Keymap for `codex-ide-session-prompt-minor-mode'.")
+
+(define-key codex-ide-session-mode-map (kbd "C-c C-c") #'codex-ide-interrupt)
+(define-key codex-ide-session-mode-map (kbd "C-c RET") #'codex-ide-submit)
+(define-key codex-ide-session-mode-map (kbd "C-c C-k") #'codex-ide-interrupt)
+(define-key codex-ide-session-mode-map (kbd "C-M-p") #'codex-ide-previous-prompt-line)
+(define-key codex-ide-session-mode-map (kbd "C-M-n") #'codex-ide-next-prompt-line)
+(define-key codex-ide-session-mode-map (kbd "TAB") #'codex-ide-session-mode-nav-forward)
+(define-key codex-ide-session-mode-map (kbd "<backtab>") #'codex-ide-session-mode-nav-backward)
+(define-key codex-ide-session-prompt-minor-mode-map (kbd "M-p") #'codex-ide-previous-prompt-history)
+(define-key codex-ide-session-prompt-minor-mode-map (kbd "M-n") #'codex-ide-next-prompt-history)
+
+(define-minor-mode codex-ide-session-prompt-minor-mode
+  "Minor mode enabled only while point is in the active Codex prompt."
+  :lighter " Prompt"
+  :keymap codex-ide-session-prompt-minor-mode-map)
+
+(defun codex-ide--point-in-active-prompt-p (&optional session pos)
+  "Return non-nil when POS is inside SESSION's active prompt region."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (setq pos (or pos (point)))
+  (when-let ((overlay (and session (codex-ide-session-input-overlay session))))
+    (let ((start (overlay-start overlay))
+          (end (overlay-end overlay)))
+      (and start
+           end
+           (<= start pos)
+           (<= pos end)))))
+
+(defun codex-ide--sync-prompt-minor-mode (&optional session)
+  "Enable or disable `codex-ide-session-prompt-minor-mode' for SESSION."
+  (setq session (or session (and (boundp 'codex-ide--session) codex-ide--session)))
+  (when (and session (derived-mode-p 'codex-ide-session-mode))
+    (let ((inside (codex-ide--point-in-active-prompt-p session)))
+      (unless (eq inside codex-ide-session-prompt-minor-mode)
+        (codex-ide-session-prompt-minor-mode (if inside 1 -1))))))
+
+(defun codex-ide-session-mode--focal-points ()
+  "Return focal points for the current session buffer."
+  (let ((session (and (boundp 'codex-ide--session) codex-ide--session)))
+    (append (codex-ide-nav-collect-buttons)
+            (and session
+                 (codex-ide-nav-collect-session-input session)))))
+
+;;;###autoload
+(defun codex-ide-session-mode-nav-forward ()
+  "Move point to the next focal point in a Codex session buffer."
+  (interactive)
+  (unless (derived-mode-p 'codex-ide-session-mode)
+    (user-error "Not in a Codex session buffer"))
+  (codex-ide-nav-forward))
+
+;;;###autoload
+(defun codex-ide-session-mode-nav-backward ()
+  "Move point to the previous focal point in a Codex session buffer."
+  (interactive)
+  (unless (derived-mode-p 'codex-ide-session-mode)
+    (user-error "Not in a Codex session buffer"))
+  (codex-ide-nav-backward))
+
+(defun codex-ide--disable-session-font-lock ()
+  "Disable buffer font-lock machinery for Codex transcript buffers."
+  (when (fboundp 'jit-lock-mode)
+    (jit-lock-mode nil))
+  (when (fboundp 'font-lock-mode)
+    (font-lock-mode -1)))
+
+;;;###autoload
+(define-derived-mode codex-ide-session-mode text-mode "Codex-IDE"
+  "Major mode for Codex app-server session buffers."
+  (codex-ide--disable-session-font-lock)
+  (setq-local truncate-lines nil)
+  (when codex-ide-session-enable-visual-line-mode
+    (visual-line-mode 1))
+  (setq-local mode-line-process
+              '((:eval (codex-ide-renderer-mode-line-status codex-ide--session))))
+  (setq-local codex-ide-nav-focal-point-functions
+              '(codex-ide-session-mode--focal-points))
+  (add-hook 'post-command-hook #'codex-ide--sync-prompt-minor-mode nil t))
+
+(provide 'codex-ide-session-mode)
+
+;;; codex-ide-session-mode.el ends here

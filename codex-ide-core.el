@@ -17,7 +17,7 @@
 (require 'subr-x)
 
 (declare-function codex-ide--update-header-line "codex-ide-transcript" (&optional session))
-(declare-function codex-ide-log-message "codex-ide" (session format-string &rest args))
+(declare-function codex-ide-log-message "codex-ide-log" (session format-string &rest args))
 
 (defvar codex-ide-buffer-name-function)
 (defvar codex-ide-buffer-name-prefix)
@@ -33,6 +33,12 @@
 
 (defvar codex-ide--prompt-origin-buffer nil
   "Buffer to treat as the authoritative prompt context for one submission.")
+
+(defvar codex-ide-session-event-hook nil
+  "Hook run when a Codex session changes.
+Each hook function receives three arguments: EVENT, SESSION, and PAYLOAD.
+EVENT is a symbol naming the lifecycle change, SESSION is the affected
+`codex-ide-session' object, and PAYLOAD is a plist with event-specific data.")
 
 (defmacro codex-ide--without-undo-recording (&rest body)
   "Run BODY without recording undo entries in the current buffer."
@@ -170,6 +176,25 @@ Add this variable to `savehist-additional-variables' to persist it.")
 (defun make-codex-ide-session (&rest initargs)
   "Create a `codex-ide-session' object with INITARGS."
   (apply #'make-instance 'codex-ide-session initargs))
+
+(defun codex-ide--run-session-event (event session &rest payload)
+  "Notify listeners that SESSION changed with EVENT and PAYLOAD."
+  (when (codex-ide-session-p session)
+    (run-hook-with-args 'codex-ide-session-event-hook event session payload)))
+
+(defun codex-ide--set-session-status (session status &optional reason)
+  "Set SESSION status to STATUS and emit an event when it changes.
+REASON is stored in the emitted payload when non-nil."
+  (let ((old-status (and session (codex-ide-session-status session))))
+    (setf (codex-ide-session-status session) status)
+    (unless (equal old-status status)
+      (codex-ide--run-session-event
+       'status-changed
+       session
+       :old-status old-status
+       :status status
+       :reason reason)))
+  status)
 
 (defun codex-ide--project-name (directory)
   "Return the display name for DIRECTORY."

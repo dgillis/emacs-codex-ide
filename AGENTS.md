@@ -18,17 +18,27 @@ The architecture of this project is evolving. Some things to follow when making 
 
 ### Directory structure
 
-Following summarizes the current (not neccessarily ideal) directory structure:
+Following summarizes the intended module structure:
 
-- `codex-ide.el`: an undesirably monolithic module. Avoid adding new functionaltiy to it (where possible) and look for opportunities to extract funcitonality out.
-- `codex-ide-core.el`: baseline dependencies needed (almost) everywhere. This should not depend on anything else.
+- `codex-ide.el`: top-level entrypoint only. This should mainly hold package metadata, customization variables, and module wiring. Avoid placing substantive business logic here.
+- `codex-ide-core.el`: core session/state primitives shared across the codebase. This is the bottom dependency layer and should not depend on other `codex-ide-*.el` files.
+- `codex-ide-errors.el`: error normalization, classification, guidance text, and recovery decisions shared by session, protocol, and transcript code.
+- `codex-ide-log.el`: log buffer creation, trimming, and stderr capture. This owns implementation-facing diagnostics, not user-facing transcript rendering.
+- `codex-ide-window.el`: buffer/window display policy. This owns reuse, split, focus, and presentation decisions when showing Codex buffers.
+- `codex-ide-context.el`: prompt context extraction and payload composition. This owns Emacs/session context formatting and prompt payload assembly.
+- `codex-ide-protocol.el`: JSON-RPC transport helpers plus thread/config/model request helpers. This owns app-server request/response formatting and protocol-level bookkeeping, not transcript mutations.
+- `codex-ide-threads.el`: thread selection and thread list candidate formatting helpers.
+- `codex-ide-session-mode.el`: major/minor modes, prompt-local navigation, and mode-specific buffer behavior for session buffers.
+- `codex-ide-session.el`: session/process lifecycle. This owns CLI startup, process filters/sentinels, session creation/teardown, and primary interactive session commands.
 - `codex-ide-renderer.el`: view-oriented rendering helpers. This should focus on buffer presentation, markdown rendering, text properties, overlays, and other logic that acts on explicit inputs plus buffer state. It should not depend on other `codex-ide-*.el` files.
-- `codex-ide-transcript.el`: transcript/session controller logic. This owns the orchestration that maps Codex session state and protocol events into transcript updates, and should use `codex-ide-renderer.el` for the actual view work.
+- `codex-ide-transcript.el`: transcript controller logic. This owns the orchestration that maps Codex session state and protocol events into transcript updates, prompt submission flow, approvals, elicitation rendering, and transcript-specific state transitions. It should use `codex-ide-renderer.el` for rendering primitives rather than duplicating renderer policy.
 - `codex-ide-transient.el`: transient-based command menus and configuration UI. Treat this as command-surface glue, not the home for core business logic.
 - `codex-ide-mcp-bridge.el`: Emacs-side bridge helpers. Owns optional bridge configuration, server readiness checks, tool dispatch, and context reporting for the external bridge process.
-- `codex-ide-*.el`: Other elisp source code whose name/documentation describes its primary purpose.
+- `codex-ide-mcp-elicitation.el`: MCP elicitation payload normalization and formatting helpers shared by bridge/transcript code.
+- `codex-ide-nav.el`, `codex-ide-section.el`, `codex-ide-status-mode.el`, `codex-ide-session-list.el`, `codex-ide-session-buffer-list.el`, `codex-ide-session-thread-list.el`, `codex-ide-debug-info.el`, `codex-ide-delete-session-thread.el`, `codex-ide-utils.el`: focused support modules whose names should continue to match their single responsibility.
+- `codex-ide-*.el`: if a new concern does not fit an existing file cleanly, prefer creating a new focused module over growing an unrelated one.
 - `bin/codex-ide-mcp-server.py`: standalone MCP proxy that talks to a running Emacs via `emacsclient` and forwards JSON tool calls into `codex-ide-mcp-bridge--json-tool-call`.
-- `tests/*-tests.el`: ERT coverage for session setup, command assembly, process handling, bridge config, context composition, and transcript behavior.
+- `tests/*-tests.el`: ERT coverage organized alongside the source modules they exercise.
 
 ## Development Practices
 
@@ -53,6 +63,7 @@ Unless instructed otherwise, adhere to the practices below.
 ### Coding Conventions
 
 - When defining key maps, place the `define-key` calls at the top-level of the package so they will take effect when reloading files.
+- Use `cl` keywords when functions have many (more than 3) parameters.
 - Tests should be organized in files resembling the source code. Ex: tests for "codex-ide-foo.el" should go in "tests/codex-ide-foo-tests.el".
 
 ### Change management

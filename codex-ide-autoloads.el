@@ -25,21 +25,13 @@ Additional flags appended to the `codex app-server` command.")
 Optional model name for new or resumed threads.")
 (custom-autoload 'codex-ide-model "codex-ide" t)
 (defvar codex-ide-reasoning-effort nil "\
-Optional reasoning effort for new Codex turns.
-When non-nil, codex-ide sends this as the `effort' override on `turn/start',
-which applies to the current turn and subsequent turns for the thread.")
+Optional reasoning effort for new Codex turns.")
 (custom-autoload 'codex-ide-reasoning-effort "codex-ide" t)
 (defvar codex-ide-running-submit-action 'steer "\
-Action used by `codex-ide-submit' while a Codex turn is running.
-When set to `steer', submit additional input to the active turn with
-`turn/steer'.  When set to `queue', queue the prompt and submit it as the next
-turn after the current turn completes.")
+Action used by `codex-ide-submit' while a Codex turn is running.")
 (custom-autoload 'codex-ide-running-submit-action "codex-ide" t)
 (defvar codex-ide-session-baseline-prompt "\n- You are a Codex server running inside Emacs.\n- You can use MCP tools to inspect and interact with the running Emacs session.\n- Interpret Emacs terminology as relevant context to the user's request: buffers, regions, windows, point, mark, current file, etc.\n- Responses are rendered as Markdown in an Emacs buffer.\n- Markdown pipe tables are rendered as visible tables.\n- In table cells, wrap code-like identifiers, filenames, paths, symbols, and expressions in backticks.\n- Use markdown links for file references when appropriate, for example [`foo.el`](/tmp/foo.el#L3C2).\n- Avoid bare underscores or asterisks for code-like text inside tables; use backticks instead.\n- Do not needlessly use Emacs commands to accomplish agent tasks." "\
-Optionally baseline prompt injected into the first real prompt of a new thread.
-When set to a non-empty string, `codex-ide' prepends it once as an
-`[Emacs session context]' block on the first submitted user turn for a
-brand-new thread. Resume and continue flows do not resend it.")
+Optional baseline prompt injected into the first real prompt of a new thread.")
 (custom-autoload 'codex-ide-session-baseline-prompt "codex-ide" t)
 (defvar codex-ide-buffer-name-prefix "codex" "\
 Prefix used when creating Codex session buffer names.")
@@ -48,22 +40,13 @@ Prefix used when creating Codex session buffer names.")
 Whether to focus the Codex window after showing it.")
 (custom-autoload 'codex-ide-focus-on-open "codex-ide" t)
 (defvar codex-ide-new-session-split nil "\
-Window split direction to use when showing newly created Codex sessions.
-When nil, newly created sessions use the existing `codex-ide-display-buffer'
-behavior.  When `vertical', split the selected window left/right and show the
-session on the right.  When `horizontal', split the selected window top/bottom
-and show the session below.")
+Window split direction to use when showing newly created Codex sessions.")
 (custom-autoload 'codex-ide-new-session-split "codex-ide" t)
 (defvar codex-ide-buffer-display-when-approval-required t "\
-Whether to display a Codex buffer when it requires approval.
-When nil, approval requests are rendered into their Codex buffer and announced
-with `message', but a non-visible Codex buffer is not displayed.")
+Whether to display a Codex buffer when it requires approval.")
 (custom-autoload 'codex-ide-buffer-display-when-approval-required "codex-ide" t)
 (defconst codex-ide-display-buffer-options nil "\
-Ordered display policy keys for `codex-ide-display-buffer'.
-
-Supported keys are `:reuse-buffer-window', `:reuse-mode-window',
-`:other-window', and `:new-window'.")
+Ordered display policy keys for `codex-ide-display-buffer'.")
 (defvar codex-ide-session-enable-visual-line-mode t "\
 Whether Codex session buffers should enable `visual-line-mode' by default.")
 (custom-autoload 'codex-ide-session-enable-visual-line-mode "codex-ide" t)
@@ -80,65 +63,14 @@ Personality for new or resumed Codex threads.")
 Seconds to wait for synchronous app-server responses.")
 (custom-autoload 'codex-ide-request-timeout "codex-ide" t)
 (defvar codex-ide-log-max-lines 10000 "\
-Maximum number of lines to keep in each Codex log buffer.
-
-When a log buffer grows beyond this limit, older lines are removed from the
-top of the buffer.")
+Maximum number of lines to keep in each Codex log buffer.")
 (custom-autoload 'codex-ide-log-max-lines "codex-ide" t)
 (defvar codex-ide-log-stream-deltas nil "\
-Whether to log every streamed output delta.
-
-When nil, high-frequency text deltas are omitted from the log buffer.  Item
-start, completion, errors, and other lifecycle events are still logged.")
+Whether to log every streamed output delta.")
 (custom-autoload 'codex-ide-log-stream-deltas "codex-ide" t)
 (defvar codex-ide-resume-summary-turn-limit 100 "\
 How many recent turns to summarize when resuming a stored thread.")
 (custom-autoload 'codex-ide-resume-summary-turn-limit "codex-ide" t)
-(autoload 'codex-ide-session-mode-nav-forward "codex-ide" "\
-Move point to the next focal point in a Codex session buffer." t)
-(autoload 'codex-ide-session-mode-nav-backward "codex-ide" "\
-Move point to the previous focal point in a Codex session buffer." t)
-(autoload 'codex-ide-session-mode "codex-ide" "\
-Major mode for Codex app-server session buffers.
-
-(fn)" t)
-(autoload 'codex-ide-log-mode "codex-ide" "\
-Major mode for Codex IDE log buffers.
-
-(fn)" t)
-(autoload 'codex-ide "codex-ide" "\
-Start Codex for the current project or directory." t)
-(autoload 'codex-ide-continue "codex-ide" "\
-Resume the most recent Codex session for the current directory." t)
-(autoload 'codex-ide-show-cli-info "codex-ide" "\
-Report Codex CLI availability and version." t)
-(autoload 'codex-ide-stop "codex-ide" "\
-Stop the Codex session associated with the current session buffer." t)
-(autoload 'codex-ide-reset-current-session "codex-ide" "\
-Stop the current Codex session and start a new one in the same buffer." t)
-(autoload 'codex-ide-switch-to-buffer "codex-ide" "\
-Show the Codex buffer for the current project." t)
-(autoload 'codex-ide-interrupt "codex-ide" "\
-Interrupt the active Codex turn for the current project." t)
-(autoload 'codex-ide-prompt "codex-ide" "\
-Prompt for a Codex message in the minibuffer and submit it from the Codex buffer.
-If no live session exists for the current buffer, prompt to start one first." t)
-(autoload 'codex-ide-previous-prompt-history "codex-ide" "\
-Replace the current prompt with the previous prompt from history." t)
-(autoload 'codex-ide-next-prompt-history "codex-ide" "\
-Replace the current prompt with the next prompt from history." t)
-(autoload 'codex-ide-previous-prompt-line "codex-ide" "\
-Jump to the previous user prompt line in the session buffer." t)
-(autoload 'codex-ide-next-prompt-line "codex-ide" "\
-Jump to the next user prompt line in the session buffer." t)
-(autoload 'codex-ide-submit "codex-ide" "\
-Submit the current in-buffer prompt to Codex.
-When a turn is running, use `codex-ide-running-submit-action'." t)
-(autoload 'codex-ide-steer "codex-ide" "\
-Submit the current prompt as steering input to the active Codex turn." t)
-(autoload 'codex-ide-queue "codex-ide" "\
-Queue the current prompt as the next Codex turn." t)
-(register-definition-prefixes "codex-ide" '("codex-ide-"))
 
 
 ;;; Generated autoloads from codex-ide-mcp-bridge.el
@@ -424,7 +356,85 @@ Move point to the previous focal point in the current buffer." t)
 
 ;;; Generated autoloads from codex-ide-transcript.el
 
+(autoload 'codex-ide-prompt "codex-ide-transcript" "\
+Prompt for a Codex message in the minibuffer and submit it from the Codex buffer." t)
+(autoload 'codex-ide-previous-prompt-history "codex-ide-transcript" "\
+Replace the current prompt with the previous prompt from history." t)
+(autoload 'codex-ide-next-prompt-history "codex-ide-transcript" "\
+Replace the current prompt with the next prompt from history." t)
+(autoload 'codex-ide-previous-prompt-line "codex-ide-transcript" "\
+Jump to the previous user prompt line in the session buffer." t)
+(autoload 'codex-ide-next-prompt-line "codex-ide-transcript" "\
+Jump to the next user prompt line in the session buffer." t)
+(autoload 'codex-ide-submit "codex-ide-transcript" "\
+Submit the current in-buffer prompt to Codex." t)
+(autoload 'codex-ide-steer "codex-ide-transcript" "\
+Submit the current prompt as steering input to the active Codex turn." t)
+(autoload 'codex-ide-queue "codex-ide-transcript" "\
+Queue the current prompt as the next Codex turn." t)
 (register-definition-prefixes "codex-ide-transcript" '("codex-ide-"))
+
+
+;;; Generated autoloads from codex-ide-context.el
+
+(register-definition-prefixes "codex-ide-context" '("codex-ide--"))
+
+
+;;; Generated autoloads from codex-ide-errors.el
+
+(register-definition-prefixes "codex-ide-errors" '("codex-ide--"))
+
+
+;;; Generated autoloads from codex-ide-log.el
+
+(register-definition-prefixes "codex-ide-log" '("codex-ide-"))
+
+
+;;; Generated autoloads from codex-ide-protocol.el
+
+(register-definition-prefixes "codex-ide-protocol" '("codex-ide--"))
+
+
+;;; Generated autoloads from codex-ide-session.el
+
+(autoload 'codex-ide "codex-ide-session" "\
+Start Codex for the current project or directory." t)
+(autoload 'codex-ide-continue "codex-ide-session" "\
+Resume the most recent Codex session for the current directory." t)
+(autoload 'codex-ide-show-cli-info "codex-ide-session" "\
+Report Codex CLI availability and version." t)
+(autoload 'codex-ide-stop "codex-ide-session" "\
+Stop the Codex session associated with the current session buffer." t)
+(autoload 'codex-ide-reset-current-session "codex-ide-session" "\
+Stop the current Codex session and start a new one in the same buffer." t)
+(autoload 'codex-ide-switch-to-buffer "codex-ide-session" "\
+Show the Codex buffer for the current project." t)
+(autoload 'codex-ide-interrupt "codex-ide-session" "\
+Interrupt the active Codex turn for the current project." t)
+(register-definition-prefixes "codex-ide-session" '("codex-ide--"))
+
+
+;;; Generated autoloads from codex-ide-session-mode.el
+
+(autoload 'codex-ide-session-mode-nav-forward "codex-ide-session-mode" "\
+Move point to the next focal point in a Codex session buffer." t)
+(autoload 'codex-ide-session-mode-nav-backward "codex-ide-session-mode" "\
+Move point to the previous focal point in a Codex session buffer." t)
+(autoload 'codex-ide-session-mode "codex-ide-session-mode" "\
+Major mode for Codex app-server session buffers.
+
+(fn)" t)
+(register-definition-prefixes "codex-ide-session-mode" '("codex-ide-"))
+
+
+;;; Generated autoloads from codex-ide-threads.el
+
+(register-definition-prefixes "codex-ide-threads" '("codex-ide--"))
+
+
+;;; Generated autoloads from codex-ide-window.el
+
+(register-definition-prefixes "codex-ide-window" '("codex-ide-"))
 
 ;;; End of scraped data
 

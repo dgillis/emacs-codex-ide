@@ -36,23 +36,20 @@
 (require 'json)
 (require 'seq)
 (require 'subr-x)
+(require 'codex-ide-context)
 (require 'codex-ide-core)
+(require 'codex-ide-errors)
+(require 'codex-ide-mcp-elicitation)
 (require 'codex-ide-nav)
+(require 'codex-ide-protocol)
 (require 'codex-ide-renderer)
+(require 'codex-ide-window)
 
-(declare-function codex-ide--extract-error-text "codex-ide" (&rest values))
-(declare-function codex-ide--classify-session-error "codex-ide" (&rest values))
-(declare-function codex-ide--ensure-server-model-name "codex-ide" (&optional session))
-(declare-function codex-ide--format-session-error-summary "codex-ide" (classification &optional prefix))
-(declare-function codex-ide--server-model-name "codex-ide" (&optional session))
-(declare-function codex-ide--sanitize-ansi-text "codex-ide" (text))
-(declare-function codex-ide--session-for-current-project "codex-ide" ())
-(declare-function codex-ide--strip-emacs-context-prefix "codex-ide" (text))
-(declare-function codex-ide--sync-prompt-minor-mode "codex-ide" (&optional session))
-(declare-function codex-ide--thread-read--item-kind "codex-ide" (item))
-(declare-function codex-ide--thread-read--message-text "codex-ide" (item))
-(declare-function codex-ide--thread-read-turns "codex-ide" (thread-read))
-(declare-function codex-ide-log-message "codex-ide" (session format-string &rest args))
+(declare-function codex-ide--ensure-session-for-current-project "codex-ide-session" ())
+(declare-function codex-ide--session-for-current-project "codex-ide-session" ())
+(declare-function codex-ide--show-session-buffer "codex-ide-session" (session &key newly-created))
+(declare-function codex-ide--sync-prompt-minor-mode "codex-ide-session-mode" (&optional session))
+(declare-function codex-ide-log-message "codex-ide-log" (session format-string &rest args))
 
 (defvar codex-ide-log-max-lines)
 (defvar codex-ide-renderer-render-markdown-during-streaming)
@@ -62,6 +59,11 @@
 (defvar codex-ide-renderer-command-output-max-rendered-chars)
 (defvar codex-ide-reasoning-effort)
 (defvar codex-ide-resume-summary-turn-limit)
+(defvar codex-ide-running-submit-action)
+(defvar codex-ide-model)
+(defvar codex-ide-buffer-display-when-approval-required)
+(defvar codex-ide-display-buffer-options)
+(defvar codex-ide-log-stream-deltas)
 (defvar codex-ide--sessions)
 (defvar codex-ide-command-output-map
   (let ((map (make-sparse-keymap)))
@@ -3457,6 +3459,1265 @@ Signal an error when THREAD-READ lacks replayable transcript items."
           (codex-ide-session-output-prefix-inserted session) nil
           (codex-ide-session-item-states session) (make-hash-table :test 'equal))
     restored))
+
+(defun codex-ide--reset-session-buffer (session)
+  "Reset SESSION's transcript buffer to an empty session header."
+  (let ((buffer (codex-ide-session-buffer session))
+        (working-dir (codex-ide-session-directory session)))
+    (with-current-buffer buffer
+      (setq-local default-directory working-dir)
+      (setq-local codex-ide--session session)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "Codex session for %s\n\n"
+                        (abbreviate-file-name working-dir)))
+        (codex-ide--freeze-region (point-min) (point-max)))))
+  (setf (codex-ide-session-current-turn-id session) nil
+        (codex-ide-session-current-message-item-id session) nil
+        (codex-ide-session-current-message-prefix-inserted session) nil
+        (codex-ide-session-current-message-start-marker session) nil
+        (codex-ide-session-output-prefix-inserted session) nil
+        (codex-ide-session-item-states session) (make-hash-table :test 'equal)
+        (codex-ide-session-input-overlay session) nil
+        (codex-ide-session-input-start-marker session) nil
+        (codex-ide-session-input-prompt-start-marker session) nil
+        (codex-ide-session-prompt-history-index session) nil
+        (codex-ide-session-prompt-history-draft session) nil
+        (codex-ide-session-interrupt-requested session) nil
+        (codex-ide-session-status session) "idle"))
+
+(defun codex-ide--approval-decision (prompt choices)
+  "Prompt the user with PROMPT and return one of CHOICES."
+  (cdr (assoc (completing-read prompt choices nil t) choices)))
+
+(defun codex-ide--pending-approvals (&optional session)
+  "Return the pending approval table for SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (or (codex-ide--session-metadata-get session :pending-approvals)
+      (codex-ide--session-metadata-put
+       session
+       :pending-approvals
+       (make-hash-table :test 'equal))))
+
+(defun codex-ide--approval-display-value (value)
+  "Return a compact display string for approval VALUE."
+  (cond
+   ((stringp value) value)
+   ((symbolp value) (symbol-name value))
+   (t (format "%S" value))))
+
+(defun codex-ide--approval-result (kind value params)
+  "Build the JSON-RPC result for approval KIND with VALUE and PARAMS."
+  (pcase kind
+    ('elicitation value)
+    ('permissions
+     (if (eq value 'decline)
+         '((permissions . []))
+       `((permissions . ,(or (alist-get 'permissions params) '()))
+         (scope . ,(symbol-name value)))))
+    (_
+     `((decision . ,value)))))
+
+(defun codex-ide--mark-approval-resolved (approval label)
+  "Update APPROVAL's transcript block to show resolved LABEL."
+  (let ((buffer (marker-buffer (plist-get approval :status-marker)))
+        (status-marker (plist-get approval :status-marker))
+        (start-marker (plist-get approval :start-marker))
+        (end-marker (plist-get approval :end-marker)))
+    (when (and (buffer-live-p buffer)
+               (markerp status-marker)
+               (markerp start-marker)
+               (markerp end-marker))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t)
+              (status-pos (marker-position status-marker))
+              (block-start (marker-position start-marker))
+              (block-end (marker-position end-marker)))
+          (when status-pos
+            (save-excursion
+              (goto-char status-pos)
+              (insert (propertize "Selected: "
+                                  'face
+                                  'codex-ide-approval-label-face))
+              (insert label)
+              (insert "\n")
+              (when (and (markerp end-marker)
+                         (eq (marker-buffer end-marker) buffer))
+                (set-marker end-marker (point)))))
+          (when (and block-start block-end)
+            (remove-text-properties
+             block-start block-end
+             '(action nil mouse-face nil help-echo nil follow-link nil
+               keymap nil button nil category nil)))
+          (when (and block-start block-end)
+            (codex-ide--freeze-region block-start (marker-position end-marker))
+            (codex-ide--advance-active-boundary-after buffer end-marker)))))))
+
+(defun codex-ide--resolve-buffer-approval (session id value label)
+  "Resolve pending approval ID for SESSION as VALUE with display LABEL."
+  (let* ((approvals (codex-ide--pending-approvals session))
+         (approval (gethash id approvals)))
+    (if (not approval)
+        (message "Codex approval already resolved")
+      (remhash id approvals)
+      (codex-ide-log-message
+       session
+       "%s approval resolved as %s"
+       (capitalize (symbol-name (plist-get approval :kind)))
+       (codex-ide--approval-display-value value))
+      (codex-ide--mark-approval-resolved approval label)
+      (codex-ide--set-session-status
+       session
+       (if (codex-ide-session-current-turn-id session) "running" "idle")
+       'approval-resolved)
+      (codex-ide--update-header-line session)
+      (codex-ide--jsonrpc-send-response
+       session
+       id
+       (codex-ide--approval-result
+        (plist-get approval :kind)
+        value
+        (plist-get approval :params))))))
+
+(defun codex-ide--insert-approval-choice-button (session id label value)
+  "Insert an approval button for SESSION request ID with LABEL and VALUE."
+  (codex-ide--insert-approval-action-button
+   label
+   (lambda ()
+     (codex-ide--resolve-buffer-approval session id value label))
+   (format "Resolve Codex approval as %s" label)))
+
+(defun codex-ide--insert-approval-label (label)
+  "Insert an emphasized approval field LABEL."
+  (insert (propertize label 'face 'codex-ide-approval-label-face)))
+
+(defun codex-ide--approval-file-change-diff-text (session params)
+  "Return diff text for file-change approval PARAMS in SESSION."
+  (let* ((item-id (alist-get 'itemId params))
+         (state (and item-id (codex-ide--item-state session item-id)))
+         (streamed-diff (and state (plist-get state :diff-text))))
+    (or (seq-some
+         (lambda (candidate)
+           (when (listp candidate)
+             (let ((text (codex-ide--file-change-diff-text candidate)))
+               (when (and (stringp text)
+                          (not (string-empty-p text)))
+                 text))))
+         (list params
+               (alist-get 'item params)
+               (alist-get 'fileChange params)
+               (alist-get 'fileChangeItem params)
+               (and state (plist-get state :item))))
+        (when (and (stringp streamed-diff)
+                   (not (string-empty-p streamed-diff)))
+          streamed-diff))))
+
+(defun codex-ide--mark-approval-file-change-diff-rendered (session params)
+  "Mark the file-change item in PARAMS as having rendered its approval diff."
+  (when-let ((item-id (alist-get 'itemId params)))
+    (let ((rendered-items
+           (or (codex-ide--session-metadata-get
+                session
+                :approval-file-change-diff-rendered-items)
+               (codex-ide--session-metadata-put
+                session
+                :approval-file-change-diff-rendered-items
+                (make-hash-table :test 'equal)))))
+      (puthash item-id t rendered-items))
+    (when-let ((state (codex-ide--item-state session item-id)))
+      (codex-ide--put-item-state
+       session
+       item-id
+       (plist-put state :approval-diff-rendered t)))))
+
+(defun codex-ide--insert-approval-diff (text)
+  "Insert approval diff TEXT using file-change diff faces."
+  (let ((trimmed (and (stringp text) (string-trim-right text))))
+    (when (and trimmed (not (string-empty-p trimmed)))
+      (codex-ide--insert-approval-label "Proposed changes:")
+      (insert "\n\n")
+      (dolist (line (split-string trimmed "\n"))
+        (insert (propertize (concat line "\n")
+                            'face
+                            (codex-ide--file-change-diff-face line))))
+      (insert "\n"))))
+
+(defun codex-ide--insert-approval-detail (detail)
+  "Insert one formatted approval DETAIL entry."
+  (pcase (plist-get detail :kind)
+    ('command
+     (codex-ide--insert-approval-label "Run the following command?")
+     (insert "\n\n    ")
+     (insert (propertize (or (plist-get detail :text) "")
+                         'face
+                         'codex-ide-item-summary-face))
+     (insert "\n\n"))
+    ('diff
+     (codex-ide--insert-approval-diff (plist-get detail :text)))
+    (_
+     (when-let ((label (plist-get detail :label)))
+       (codex-ide--insert-approval-label (format "%s: " label)))
+     (insert (or (plist-get detail :text) ""))
+     (insert "\n"))))
+
+(defun codex-ide--notify-interactive-request (session message-text)
+  "Notify the user that SESSION requires attention with MESSAGE-TEXT."
+  (let ((buffer (codex-ide-session-buffer session)))
+    (message message-text (buffer-name buffer))
+    (when (or codex-ide-buffer-display-when-approval-required
+              (get-buffer-window buffer 0))
+      (codex-ide--show-session-buffer session))))
+
+(cl-defun codex-ide--render-interactive-request
+    (session id kind params &key title notify-message render-body metadata)
+  "Render an inline interactive request block for SESSION request ID."
+  (let ((buffer (codex-ide-session-buffer session))
+        (render-state nil)
+        active-boundary
+        start-marker
+        status-marker
+        end-marker)
+    (codex-ide--clear-pending-output-indicator session)
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t)
+            (restore-point (codex-ide--input-point-marker session))
+            (moving (= (point) (point-max))))
+        (codex-ide--ensure-output-spacing buffer)
+        (setq active-boundary (codex-ide--active-input-boundary-marker buffer))
+        (goto-char (codex-ide--transcript-insertion-position buffer))
+        (setq start-marker (copy-marker (point)))
+        (insert (propertize
+                 (codex-ide-renderer-output-separator-string)
+                 'face
+                 'codex-ide-output-separator-face))
+        (insert "\n")
+        (insert (propertize title 'face 'codex-ide-approval-header-face))
+        (insert "\n\n")
+        (setq render-state (funcall render-body))
+        (setq status-marker (copy-marker (point)))
+        (setq end-marker (copy-marker (point) t))
+        (codex-ide--freeze-region (marker-position start-marker)
+                                  (marker-position end-marker))
+        (when (and active-boundary
+                   (<= (marker-position active-boundary)
+                       (marker-position start-marker)))
+          (set-marker active-boundary (point)))
+        (dolist (range (plist-get render-state :writable-ranges))
+          (codex-ide--make-region-writable (marker-position (car range))
+                                           (marker-position (cdr range))))
+        (if restore-point
+            (codex-ide--restore-input-point-marker restore-point)
+          (when moving
+            (goto-char (point-max))))))
+    (puthash id
+             (append
+              (list :kind kind
+                    :params params
+                    :start-marker start-marker
+                    :status-marker status-marker
+                    :end-marker end-marker)
+              metadata
+              (plist-get render-state :metadata))
+             (codex-ide--pending-approvals session))
+    (codex-ide--set-session-status session "approval" 'approval-requested)
+    (codex-ide--update-header-line session)
+    (codex-ide--run-session-event
+     'approval-requested
+     session
+     :id id
+     :kind kind
+     :params params)
+    (codex-ide--notify-interactive-request session notify-message)))
+
+(cl-defun codex-ide--render-buffer-approval
+    (session id kind &key title details choices params)
+  "Render an inline approval block for SESSION request ID."
+  (codex-ide--render-interactive-request
+   session
+   id
+   kind
+   params
+   :title title
+   :notify-message "Codex approval required in %s"
+   :render-body
+   (lambda ()
+     (dolist (detail details)
+       (codex-ide--insert-approval-detail detail))
+     (dolist (choice choices)
+       (codex-ide--insert-approval-choice-button
+        session id (car choice) (cdr choice))
+       (insert "\n"))
+     (insert "\n")
+     nil)))
+
+(defun codex-ide--insert-approval-action-button (label callback &optional help-echo)
+  "Insert a button labeled LABEL that invokes CALLBACK."
+  (make-text-button
+   (point)
+   (progn (insert (format "[%s]" label)) (point))
+   'follow-link t
+   'keymap (codex-ide-nav-button-keymap)
+   'help-echo (or help-echo label)
+   'action (lambda (_button)
+             (funcall callback))))
+
+(defun codex-ide--schedule-interactive-request (session body on-quit on-error)
+  "Run BODY for SESSION on the next tick with shared quit/error handling."
+  (run-at-time
+   0 nil
+   (lambda ()
+     (condition-case err
+         (funcall body)
+       (quit
+        (funcall on-quit))
+       (error
+        (funcall on-error err))))))
+
+(defun codex-ide--elicitation-choice-options (field)
+  "Return button options for elicitation FIELD."
+  (pcase (plist-get field :type)
+    ("boolean"
+     (append
+      '(("true" . t)
+        ("false" . :json-false))
+      (unless (plist-get field :requiredp)
+        '(("skip" . :codex-ide-mcp-elicitation-omit)))))
+    (_
+     (let ((choices nil)
+           (values (plist-get field :enum))
+           (names (plist-get field :enum-names)))
+       (cl-mapc
+        (lambda (value label)
+          (push (cons (or label (format "%s" value)) value) choices))
+        values
+        (append names (make-list (max 0 (- (length values) (length names))) nil)))
+       (setq choices (nreverse choices))
+       (unless (plist-get field :requiredp)
+         (setq choices (append choices '(("skip" . :codex-ide-mcp-elicitation-omit)))))
+       choices))))
+
+(defun codex-ide--elicitation-choice-label (field value)
+  "Return a display label for elicitation FIELD VALUE."
+  (cond
+   ((or (null value)
+        (eq value :codex-ide-mcp-elicitation-omit))
+    (if (plist-get field :requiredp) "<unset>" "skip"))
+   ((equal (plist-get field :type) "boolean")
+    (if (eq value t) "true" "false"))
+   (t
+    (or (car (rassoc value (codex-ide--elicitation-choice-options field)))
+        (format "%s" value)))))
+
+(defun codex-ide--set-elicitation-choice-display (field label)
+  "Replace FIELD's current choice display text with LABEL."
+  (let ((start-marker (plist-get field :display-start-marker))
+        (end-marker (plist-get field :display-end-marker)))
+    (when (and (markerp start-marker)
+               (markerp end-marker)
+               (marker-buffer start-marker))
+      (with-current-buffer (marker-buffer start-marker)
+        (let ((inhibit-read-only t))
+          (save-excursion
+            (goto-char (marker-position start-marker))
+            (delete-region (marker-position start-marker)
+                           (marker-position end-marker))
+            (insert label)
+            (set-marker end-marker (point))))))))
+
+(defun codex-ide--set-elicitation-choice-value (_session _id field label value)
+  "Set FIELD for SESSION elicitation ID to VALUE and display LABEL."
+  (setcar (plist-get field :value-cell) value)
+  (codex-ide--set-elicitation-choice-display field label))
+
+(defun codex-ide--elicitation-field-raw-value (field)
+  "Return the current raw value for elicitation FIELD."
+  (pcase (plist-get field :input-kind)
+    ('choice (car (plist-get field :value-cell)))
+    (_
+     (let* ((start (marker-position (plist-get field :start-marker)))
+            (end (marker-position (plist-get field :end-marker)))
+            (text (buffer-substring-no-properties start end)))
+       (string-remove-suffix "\n" text)))))
+
+(defun codex-ide--submit-buffer-elicitation (session id)
+  "Validate and submit elicitation response for SESSION request ID."
+  (let* ((approval (gethash id (codex-ide--pending-approvals session)))
+         (fields (plist-get approval :fields))
+         (content nil))
+    (unless approval
+      (user-error "Codex elicitation already resolved"))
+    (condition-case err
+        (progn
+          (dolist (field fields)
+            (let ((value (codex-ide-mcp-elicitation-parse-field-value
+                          field
+                          (with-current-buffer (codex-ide-session-buffer session)
+                            (codex-ide--elicitation-field-raw-value field)))))
+              (unless (eq value :codex-ide-mcp-elicitation-omit)
+                (push (cons (plist-get field :name) value) content))))
+          (codex-ide--resolve-buffer-approval
+           session
+           id
+           `((action . "accept")
+             (content . ,(nreverse content)))
+           "submit"))
+      (error
+       (message "Codex elicitation error: %s" (error-message-string err))))))
+
+(defun codex-ide--render-elicitation-text-field (field writable-ranges)
+  "Render a writable text FIELD and extend WRITABLE-RANGES."
+  (let ((start nil)
+        (end nil)
+        (default (plist-get field :default)))
+    (insert "    ")
+    (setq start (copy-marker (point)))
+    (when default
+      (insert (format "%s" default)))
+    (insert "\n")
+    (setq end (copy-marker (point)))
+    (push (cons start end) writable-ranges)
+    (list
+     (append field
+             (list :input-kind 'text
+                   :start-marker start
+                   :end-marker end))
+     writable-ranges)))
+
+(defun codex-ide--render-elicitation-choice-field (session id field)
+  "Render a choice FIELD for SESSION elicitation ID."
+  (let* ((choices (codex-ide--elicitation-choice-options field))
+         (default (plist-get field :default))
+         (initial (if (or (member default (mapcar #'cdr choices))
+                          (and (null default)
+                               (not (plist-get field :requiredp))))
+                      default
+                    nil))
+         (value-cell (list initial))
+         rendered-field
+         display-start
+         display-end)
+    (insert "    Selected: ")
+    (setq display-start (copy-marker (point)))
+    (insert (codex-ide--elicitation-choice-label field initial))
+    (setq display-end (copy-marker (point) t))
+    (insert "\n")
+    (setq rendered-field
+          (append field
+                  (list :input-kind 'choice
+                        :value-cell value-cell
+                        :display-start-marker display-start
+                        :display-end-marker display-end)))
+    (dolist (choice choices)
+      (let ((label (car choice))
+            (value (cdr choice)))
+        (codex-ide--insert-approval-action-button
+         label
+         (lambda ()
+           (codex-ide--set-elicitation-choice-value
+            session id rendered-field label value)))
+        (insert " ")))
+    (insert "\n")
+    rendered-field))
+
+(defun codex-ide--insert-elicitation-field (session id field writable-ranges)
+  "Insert one elicitation FIELD and return updated state."
+  (codex-ide--insert-approval-label
+   (concat (codex-ide-mcp-elicitation-format-field-prompt field) ":"))
+  (insert "\n")
+  (let ((result
+         (if (or (plist-get field :enum)
+                 (equal (plist-get field :type) "boolean"))
+             (list (codex-ide--render-elicitation-choice-field session id field)
+                   writable-ranges)
+           (codex-ide--render-elicitation-text-field field writable-ranges))))
+    (insert "\n")
+    result))
+
+(defun codex-ide--render-buffer-elicitation (session id params)
+  "Render PARAMS as an inline elicitation block for SESSION request ID."
+  (let* ((request (codex-ide-mcp-elicitation-normalize-request params))
+         (mode (or (alist-get 'mode request) "form"))
+         (message (string-trim (or (alist-get 'message request) "")))
+         (schema (alist-get 'requestedSchema request))
+         (fields (and schema
+                      (codex-ide-mcp-elicitation-field-specs schema)))
+         (writable-ranges nil)
+         rendered-fields)
+    (codex-ide--render-interactive-request
+     session
+     id
+     'elicitation
+     request
+     :title "[Input required]"
+     :notify-message "Codex input required in %s"
+     :render-body
+     (lambda ()
+       (codex-ide--insert-approval-label "Request: ")
+       (insert (codex-ide-mcp-elicitation-format-request request))
+       (insert "\n")
+       (unless (string-empty-p message)
+         (codex-ide--insert-approval-label "Message: ")
+         (insert message)
+         (insert "\n"))
+       (when-let ((url (alist-get 'url request)))
+         (codex-ide--insert-approval-label "URL: ")
+         (insert url)
+         (insert "\n"))
+       (insert "\n")
+       (dolist (field fields)
+         (pcase-let ((`(,rendered-field ,new-ranges)
+                      (codex-ide--insert-elicitation-field
+                       session id field writable-ranges)))
+           (push rendered-field rendered-fields)
+           (setq writable-ranges new-ranges)))
+       (setq rendered-fields (nreverse rendered-fields))
+       (pcase mode
+         ("url"
+          (codex-ide--insert-approval-action-button
+           "open and continue"
+           (lambda ()
+             (browse-url (alist-get 'url request))
+             (codex-ide--resolve-buffer-approval
+              session id '((action . "accept")) "open and continue")))
+          (insert "\n")
+          (codex-ide--insert-approval-action-button
+           "continue"
+           (lambda ()
+             (codex-ide--resolve-buffer-approval
+              session id '((action . "accept")) "continue")))
+          (insert "\n"))
+         (_
+          (codex-ide--insert-approval-action-button
+           "submit"
+           (lambda ()
+             (codex-ide--submit-buffer-elicitation session id)))
+          (insert "\n")))
+       (codex-ide--insert-approval-action-button
+        "decline"
+        (lambda ()
+          (codex-ide--resolve-buffer-approval
+           session id '((action . "decline")) "decline")))
+       (insert "\n")
+       (codex-ide--insert-approval-action-button
+        "cancel"
+        (lambda ()
+          (codex-ide--resolve-buffer-approval
+           session id '((action . "cancel")) "cancel")))
+       (insert "\n\n")
+       (list :writable-ranges writable-ranges
+             :metadata (list :fields rendered-fields))))))
+
+(defun codex-ide--command-approval-choices (params)
+  "Build completion choices for a command approval request from PARAMS."
+  (let ((amendment (alist-get 'proposedExecpolicyAmendment params)))
+    (append
+     '(("accept" . "accept")
+       ("accept for session" . "acceptForSession"))
+     (when amendment
+       `((,(format "accept and allow prefix (%s)"
+                   (mapconcat #'identity amendment " "))
+          . ,`((acceptWithExecpolicyAmendment
+                . ((execpolicy_amendment . ,amendment)))))))
+     '(("decline" . "decline")
+       ("cancel turn" . "cancel")))))
+
+(defun codex-ide--handle-command-approval (&optional session id params)
+  "Handle a command approval request for SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (codex-ide--schedule-interactive-request
+   session
+   (lambda ()
+     (let* ((command (codex-ide--display-command-string
+                      (or (alist-get 'command params) "unknown command")))
+            (choices (codex-ide--command-approval-choices params)))
+       (codex-ide--render-buffer-approval
+        session
+        id
+        'command
+        :title "[Approval required]"
+        :details (delq nil
+                       (list
+                        (list :kind 'command :text command)
+                        (when-let ((reason (alist-get 'reason params)))
+                          (list :label "Reason" :text reason))))
+        :choices choices
+        :params params)))
+   (lambda ()
+     (codex-ide-log-message session "Command approval prompt quit; canceling turn")
+     (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))
+   (lambda (err)
+     (codex-ide-log-message
+      session
+      "Command approval failed: %s"
+      (error-message-string err))
+     (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))))
+
+(defun codex-ide--handle-file-change-approval (&optional session id params)
+  "Handle a file-change approval request for SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (codex-ide--schedule-interactive-request
+   session
+   (lambda ()
+     (let* ((reason (or (alist-get 'reason params) "approve file changes"))
+            (choices '(("accept" . "accept")
+                       ("accept for session" . "acceptForSession")
+                       ("decline" . "decline")
+                       ("cancel turn" . "cancel"))))
+       (codex-ide--render-buffer-approval
+        session
+        id
+        'file-change
+        :title "[Approval required]"
+        :details (delq nil
+                       (list
+                        (list :label "Approve file changes" :text reason)
+                        (when-let ((diff-text
+                                    (codex-ide--approval-file-change-diff-text
+                                     session
+                                     params)))
+                          (codex-ide--mark-approval-file-change-diff-rendered
+                           session
+                           params)
+                          (list :kind 'diff :text diff-text))))
+        :choices choices
+        :params params)))
+   (lambda ()
+     (codex-ide-log-message session "File-change approval prompt quit; canceling turn")
+     (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))
+   (lambda (err)
+     (codex-ide-log-message
+      session
+      "File-change approval failed: %s"
+      (error-message-string err))
+     (codex-ide--jsonrpc-send-response session id '((decision . "cancel"))))))
+
+(defun codex-ide--handle-permissions-approval (&optional session id params)
+  "Handle a permissions approval request for SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (codex-ide--schedule-interactive-request
+   session
+   (lambda ()
+     (let* ((permissions (or (alist-get 'permissions params) '()))
+            (choices '(("grant for turn" . turn)
+                       ("grant for session" . session)
+                       ("decline" . decline))))
+       (codex-ide--render-buffer-approval
+        session
+        id
+        'permissions
+        :title "[Approval required]"
+        :details (append
+                  (when-let ((reason (alist-get 'reason params)))
+                    (list (list :label "Reason" :text reason)))
+                  (when permissions
+                    (list (list :label "Permissions"
+                                :text (format "%S" permissions)))))
+        :choices choices
+        :params params)))
+   (lambda ()
+     (codex-ide-log-message session "Permissions approval prompt quit; declining")
+     (codex-ide--jsonrpc-send-response session id '((permissions . []))))
+   (lambda (err)
+     (codex-ide-log-message
+      session
+      "Permissions approval failed: %s"
+      (error-message-string err))
+     (codex-ide--jsonrpc-send-response session id '((permissions . []))))))
+
+(defun codex-ide--handle-elicitation-request (&optional session id params)
+  "Handle an MCP elicitation request for SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (codex-ide--schedule-interactive-request
+   session
+   (lambda ()
+     (if (and (fboundp 'codex-ide-mcp-bridge-request-exempt-from-approval-p)
+              (codex-ide-mcp-bridge-request-exempt-from-approval-p params))
+         (let ((result '((action . "accept"))))
+           (codex-ide-log-message
+            session
+            "Elicitation request resolved as %s"
+            (alist-get 'action result))
+           (codex-ide--jsonrpc-send-response session id result))
+       (codex-ide--render-buffer-elicitation session id params)))
+   (lambda ()
+     (codex-ide-log-message session "Elicitation request quit; canceling")
+     (codex-ide--jsonrpc-send-response session id '((action . "cancel"))))
+   (lambda (err)
+     (codex-ide-log-message
+      session
+      "Elicitation request failed: %s"
+      (error-message-string err))
+     (codex-ide--jsonrpc-send-error session id -32603
+                                    (error-message-string err)))))
+
+(defun codex-ide--handle-server-request (&optional session message)
+  "Handle a server-initiated request MESSAGE for SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (let ((id (alist-get 'id message))
+        (method (alist-get 'method message))
+        (params (alist-get 'params message)))
+    (codex-ide-log-message session "Received server request %s (id=%s)" method id)
+    (pcase method
+      ((or "elicitation/create"
+           "mcpServer/elicitation/request")
+       (codex-ide--handle-elicitation-request session id params))
+      ("item/commandExecution/requestApproval"
+       (codex-ide--handle-command-approval session id params))
+      ("item/fileChange/requestApproval"
+       (codex-ide--handle-file-change-approval session id params))
+      ("item/permissions/requestApproval"
+       (codex-ide--handle-permissions-approval session id params))
+      (_
+       (codex-ide-log-message session "Unsupported server request %s" method)
+       (codex-ide--append-to-buffer
+        (codex-ide-session-buffer session)
+        (format "\n[Codex requested unsupported method %s]\n" method)
+        'warning)
+       (codex-ide--jsonrpc-send-error session id -32601
+                                      (format "Unsupported method: %s" method))))))
+
+(defun codex-ide--append-notification-additional-details (session details)
+  "Append notification DETAILS to SESSION."
+  (when details
+    (codex-ide--append-to-buffer
+     (codex-ide-session-buffer session)
+     (concat "\n"
+             (mapconcat (lambda (detail) (format "  └ %s" detail)) details "\n")
+             "\n")
+     'shadow)))
+
+(defun codex-ide--handle-retryable-notification-error (session info)
+  "Render a retry notice from INFO for SESSION."
+  (let* ((message (or (alist-get 'message info) "Retrying"))
+         (notice (format "[Codex retrying] %s" message))
+         (details (codex-ide--notification-error-additional-details info)))
+    (codex-ide-log-message session "Retryable Codex error: %s" message)
+    (unless (equal notice (codex-ide--session-metadata-get session :last-retry-notice))
+      (codex-ide--session-metadata-put session :last-retry-notice notice)
+      (codex-ide--append-to-buffer
+       (codex-ide-session-buffer session)
+       (concat "\n" notice "\n"
+               (mapconcat (lambda (detail) (format "  └ %s" detail)) details "\n")
+               "\n")
+       'shadow))))
+
+(defun codex-ide--handle-notification (&optional session message)
+  "Handle a notification MESSAGE for SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (let ((method (alist-get 'method message))
+        (params (alist-get 'params message))
+        (buffer (codex-ide-session-buffer session)))
+    (codex-ide-log-message session "Received notification %s" method)
+    (pcase method
+      ("thread/started"
+       (codex-ide--remember-reasoning-effort session params)
+       (codex-ide--remember-model-name session params)
+       (when-let ((thread-id (alist-get 'id (alist-get 'thread params))))
+         (setf (codex-ide-session-thread-id session) thread-id)
+         (codex-ide--mark-session-thread-attached session)
+         (codex-ide--run-session-event
+          'thread-attached
+          session
+          :thread-id thread-id
+          :action "Started"))
+       (codex-ide-log-message
+        session
+        "Thread started: %s"
+        (codex-ide-session-thread-id session))
+       (codex-ide--set-session-status session "idle" 'thread-started)
+       (codex-ide--update-header-line session))
+      ("thread/status/changed"
+       (let* ((thread (alist-get 'thread params))
+              (status (or (alist-get 'status params)
+                          (alist-get 'status thread)))
+              (normalized-status (codex-ide--normalize-session-status status)))
+         (when normalized-status
+           (codex-ide--set-session-status
+            session
+            normalized-status
+            'thread-status-changed)))
+       (codex-ide-log-message
+        session
+        "Thread status changed to %s"
+        (codex-ide-session-status session))
+       (codex-ide--update-header-line session))
+      ("thread/tokenUsage/updated"
+       (let ((token-usage (alist-get 'tokenUsage params)))
+         (codex-ide--session-metadata-put session :token-usage token-usage)
+         (codex-ide-log-message
+          session
+          "Token usage updated: total=%s window=%s"
+          (alist-get 'totalTokens (alist-get 'total token-usage))
+          (alist-get 'modelContextWindow token-usage))
+         (codex-ide--update-header-line session)))
+      ("account/rateLimits/updated"
+       (let ((rate-limits (alist-get 'rateLimits params)))
+         (codex-ide--session-metadata-put session :rate-limits rate-limits)
+         (codex-ide-log-message
+          session
+          "Rate limits updated: used=%s%% plan=%s"
+          (alist-get 'usedPercent (alist-get 'primary rate-limits))
+          (or (alist-get 'planType rate-limits) "unknown"))
+         (codex-ide--update-header-line session)))
+      ("turn/started"
+       (codex-ide--remember-reasoning-effort session params)
+       (codex-ide--remember-or-request-model-name session params)
+       (setf (codex-ide-session-current-turn-id session)
+             (or (alist-get 'id (alist-get 'turn params))
+                 (alist-get 'turnId params))
+             (codex-ide-session-current-message-item-id session) nil
+             (codex-ide-session-current-message-prefix-inserted session) nil
+             (codex-ide-session-current-message-start-marker session) nil
+             (codex-ide-session-item-states session) (make-hash-table :test 'equal))
+       (codex-ide--set-session-status session "running" 'turn-started)
+       (codex-ide--session-metadata-put
+        session
+        :approval-file-change-diff-rendered-items
+        nil)
+       (codex-ide-log-message
+        session
+        "Turn started: %s"
+        (codex-ide-session-current-turn-id session))
+       (codex-ide--run-session-event
+        'turn-started
+        session
+        :turn-id (codex-ide-session-current-turn-id session))
+       (codex-ide--update-header-line session)
+       (unless (codex-ide-session-output-prefix-inserted session)
+         (codex-ide--begin-turn-display session)))
+      ("item/started"
+       (when-let ((item (alist-get 'item params)))
+         (when (codex-ide--remember-or-request-model-name session item)
+           (codex-ide--update-header-line session))
+         (codex-ide-log-message
+          session
+          "Item started: %s (%s)"
+          (alist-get 'id item)
+          (alist-get 'type item))
+         (codex-ide--render-item-start session item)))
+      ("item/agentMessage/delta"
+       (let ((item-id (alist-get 'itemId params))
+             (delta (or (alist-get 'delta params) "")))
+         (let ((codex-ide--current-agent-item-type "agentMessage"))
+           (when (and codex-ide-log-stream-deltas
+                      (not (string-empty-p delta)))
+             (codex-ide-log-message
+              session
+              "Agent delta for item %s (%d chars)"
+              item-id
+              (length delta)))
+           (codex-ide--ensure-agent-message-prefix session item-id)
+           (codex-ide--append-agent-text buffer delta)
+           (when codex-ide-renderer-render-markdown-during-streaming
+             (codex-ide--render-current-agent-message-markdown-streaming
+              session
+              item-id)))))
+      ("item/commandExecution/outputDelta"
+       (let ((item-id (alist-get 'itemId params))
+             (delta (or (alist-get 'delta params) "")))
+         (when codex-ide-log-stream-deltas
+           (codex-ide-log-message
+            session
+            "Command output delta for item %s (%d chars)"
+            item-id
+            (length delta)))
+         (unless (string-empty-p delta)
+           (let* ((state (or (codex-ide--item-state session item-id) '()))
+                  (state (plist-put
+                          state
+                          :output-text
+                          (concat (or (plist-get state :output-text) "")
+                                  delta))))
+             (if (or (plist-get state :summary)
+                     (plist-get state :command-output-overlay))
+                 (progn
+                   (codex-ide--put-item-state session item-id state)
+                   (codex-ide--render-command-output-delta session item-id delta))
+               (codex-ide--put-item-state
+                session
+                item-id
+                (plist-put
+                 state
+                 :pending-output-text
+                 (concat (or (plist-get state :pending-output-text) "")
+                         delta))))))))
+      ("item/fileChange/outputDelta"
+       (let ((item-id (alist-get 'itemId params))
+             (delta (or (alist-get 'delta params) "")))
+         (when codex-ide-log-stream-deltas
+           (codex-ide-log-message
+            session
+            "File-change delta for item %s (%d chars)"
+            item-id
+            (length delta)))
+         (when-let ((state (codex-ide--item-state session item-id)))
+           (codex-ide--put-item-state
+            session
+            item-id
+            (plist-put state :diff-text
+                       (concat (or (plist-get state :diff-text) "") delta))))))
+      ("item/plan/delta"
+       (when codex-ide-log-stream-deltas
+         (codex-ide-log-message
+          session
+          "Plan delta (%d chars)"
+          (length (or (alist-get 'delta params) ""))))
+       (codex-ide--render-plan-delta session params))
+      ("item/reasoning/summaryTextDelta"
+       (when codex-ide-log-stream-deltas
+         (codex-ide-log-message
+          session
+          "Reasoning summary delta (%d chars)"
+          (length (or (alist-get 'delta params)
+                      (alist-get 'text params)
+                      ""))))
+       (codex-ide--render-reasoning-delta session params))
+      ("item/completed"
+       (when-let ((item (alist-get 'item params)))
+         (when (codex-ide--remember-or-request-model-name session item)
+           (codex-ide--update-header-line session))
+         (codex-ide-log-message
+          session
+          "Item completed: %s (%s, status=%s)"
+          (alist-get 'id item)
+          (alist-get 'type item)
+          (alist-get 'status item))
+         (codex-ide--render-item-completion session item)))
+      ("turn/completed"
+       (let ((interrupted (codex-ide-session-interrupt-requested session))
+             (turn-id (codex-ide-session-current-turn-id session)))
+         (codex-ide-log-message
+          session
+          "Turn completed: %s"
+          turn-id)
+         (if turn-id
+             (progn
+               (when interrupted
+                 (codex-ide-log-message session "Turn completed after interrupt request"))
+               (codex-ide--finish-turn
+                session
+                (when interrupted "[Agent interrupted]"))
+               (codex-ide--maybe-submit-queued-prompt session))
+           (codex-ide-log-message
+            session
+            "Ignoring duplicate turn/completed notification for an already-closed turn"))))
+      ("error"
+       (let* ((codex-ide--current-agent-item-type "error")
+              (info (codex-ide--notification-error-info params))
+              (message (codex-ide--notification-error-message info))
+              (details (codex-ide--notification-error-additional-details info))
+              (detail (codex-ide--notification-error-display-detail info))
+              (classification
+               (codex-ide--classify-session-error
+                detail
+                (alist-get 'http-status info))))
+         (codex-ide-log-message session "Error notification: %S" params)
+         (if (alist-get 'will-retry info)
+             (codex-ide--handle-retryable-notification-error session info)
+           (progn
+             (codex-ide--render-session-error
+              session
+              (list message (alist-get 'http-status info))
+              "Codex notification")
+             (codex-ide--append-notification-additional-details session details)
+             (codex-ide--recover-from-session-error session classification)))))
+      ((or "notifications/elicitation/complete"
+           "mcpServer/elicitation/complete")
+       (codex-ide-log-message
+        session
+        "Elicitation completed: %s"
+        (alist-get 'elicitationId params))
+       (codex-ide--append-to-buffer
+        buffer
+        (format "\n[%s]\n"
+                (codex-ide-mcp-elicitation-format-completion params))
+        'shadow))
+      (_ nil))))
+
+(defun codex-ide--queued-prompts (session)
+  "Return SESSION's queued prompt entries."
+  (or (codex-ide--session-metadata-get session :queued-prompts)
+      '()))
+
+(defun codex-ide--set-queued-prompts (session prompts)
+  "Set SESSION's queued prompt entries to PROMPTS."
+  (codex-ide--session-metadata-put session :queued-prompts prompts))
+
+(defun codex-ide--queued-prompt-p (session)
+  "Return non-nil when SESSION has at least one queued prompt."
+  (consp (codex-ide--queued-prompts session)))
+
+(defun codex-ide--queued-prompt-entry (prompt payload)
+  "Return a queued prompt entry for PROMPT and PAYLOAD."
+  (list :prompt prompt :payload payload))
+
+(defun codex-ide--clear-queued-prompts (session)
+  "Clear SESSION's queued prompt metadata."
+  (codex-ide--set-queued-prompts session nil)
+  (codex-ide--session-metadata-put session :queued-prompt nil)
+  (codex-ide--session-metadata-put session :queued-prompt-payload nil)
+  (codex-ide--session-metadata-put session :queued-prompt-start-marker nil))
+
+(defun codex-ide--prompt-for-submission (session prompt)
+  "Return prompt text for SESSION using explicit PROMPT or the active input."
+  (or prompt
+      (if (eq (current-buffer) (codex-ide-session-buffer session))
+          (codex-ide--current-input session)
+        (read-string "Codex prompt: "))))
+
+(defun codex-ide--send-turn-start (session thread-id payload)
+  "Send a `turn/start` request for SESSION THREAD-ID using PAYLOAD."
+  (when codex-ide-reasoning-effort
+    (codex-ide--session-metadata-put
+     session
+     :reasoning-effort
+     codex-ide-reasoning-effort))
+  (codex-ide--request-sync
+   session
+   "turn/start"
+   `((threadId . ,thread-id)
+     ,@(when codex-ide-model
+         `((model . ,codex-ide-model)))
+     ,@(when codex-ide-reasoning-effort
+         `((effort . ,codex-ide-reasoning-effort)))
+     (input . ,(alist-get 'input payload)))))
+
+(defun codex-ide--after-turn-start-submitted (session payload)
+  "Update SESSION state after successfully submitting PAYLOAD."
+  (when codex-ide-model
+    (codex-ide--set-session-model-name session codex-ide-model)
+    (codex-ide--update-header-line session))
+  (codex-ide--mark-session-prompt-submitted session)
+  (when (alist-get 'included-session-context payload)
+    (codex-ide--session-metadata-put session :session-context-sent t)))
+
+(defun codex-ide--submit-queued-prompt (session)
+  "Submit SESSION's next queued prompt as a new turn."
+  (let* ((queue (codex-ide--queued-prompts session))
+         (entry (car queue))
+         (prompt (plist-get entry :prompt))
+         (payload (plist-get entry :payload))
+         (thread-id (codex-ide-session-thread-id session))
+         (draft (and (codex-ide--input-prompt-active-p session)
+                     (codex-ide--current-input session))))
+    (unless (and prompt payload)
+      (error "No queued Codex prompt"))
+    (codex-ide--set-queued-prompts session (cdr queue))
+    (codex-ide-log-message
+     session
+     "Submitting queued prompt to thread %s (%d chars)"
+     thread-id
+     (length prompt))
+    (codex-ide--delete-running-input-list session)
+    (if (codex-ide--input-prompt-active-p session)
+        (codex-ide--replace-current-input session prompt)
+      (codex-ide--insert-input-prompt session prompt))
+    (codex-ide--begin-turn-display session (alist-get 'context-summary payload))
+    (when (and draft (not (string-empty-p draft)))
+      (codex-ide--replace-current-input session draft))
+    (codex-ide--refresh-running-input-display session)
+    (redisplay)
+    (condition-case err
+        (progn
+          (codex-ide--send-turn-start session thread-id payload)
+          (codex-ide--after-turn-start-submitted session payload))
+      (error
+       (codex-ide-log-message session "Queued prompt submission failed: %s"
+                              (error-message-string err))
+       (codex-ide--reopen-input-after-submit-error session prompt err)
+       (signal (car err) (cdr err))))))
+
+(defun codex-ide--maybe-submit-queued-prompt (session)
+  "Submit SESSION's queued prompt if one exists."
+  (when (codex-ide--queued-prompt-p session)
+    (codex-ide--submit-queued-prompt session)))
+
+;;;###autoload
+(defun codex-ide-prompt ()
+  "Prompt for a Codex message in the minibuffer and submit it from the Codex buffer."
+  (interactive)
+  (let ((origin-buffer (current-buffer))
+        (session (codex-ide--ensure-session-for-current-project)))
+    (let* ((buffer (codex-ide-session-buffer session))
+           (prompt (read-from-minibuffer
+                    (format "Send prompt (%s): " (buffer-name buffer)))))
+      (unless (string-empty-p prompt)
+        (let ((window (let ((codex-ide-display-buffer-options
+                             '(:reuse-buffer-window :reuse-mode-window :new-window)))
+                        (codex-ide-display-buffer buffer))))
+          (with-selected-window window
+            (with-current-buffer buffer
+              (if (codex-ide-session-input-overlay session)
+                  (codex-ide--replace-current-input session prompt)
+                (codex-ide--insert-input-prompt session prompt))
+              (let ((codex-ide--prompt-origin-buffer origin-buffer))
+                (codex-ide--submit-prompt)))))))))
+
+;;;###autoload
+(defun codex-ide-previous-prompt-history ()
+  "Replace the current prompt with the previous prompt from history."
+  (interactive)
+  (codex-ide--browse-prompt-history -1))
+
+;;;###autoload
+(defun codex-ide-next-prompt-history ()
+  "Replace the current prompt with the next prompt from history."
+  (interactive)
+  (codex-ide--browse-prompt-history 1))
+
+;;;###autoload
+(defun codex-ide-previous-prompt-line ()
+  "Jump to the previous user prompt line in the session buffer."
+  (interactive)
+  (codex-ide--goto-prompt-line -1))
+
+;;;###autoload
+(defun codex-ide-next-prompt-line ()
+  "Jump to the next user prompt line in the session buffer."
+  (interactive)
+  (codex-ide--goto-prompt-line 1))
+
+(defun codex-ide--ensure-submittable-prompt (prompt)
+  "Signal a user error unless PROMPT has content."
+  (when (string-empty-p prompt)
+    (user-error "Prompt is empty")))
+
+(defun codex-ide--running-prompt-payload (session prompt)
+  "Build turn payload for PROMPT from SESSION's buffer."
+  (with-current-buffer (codex-ide-session-buffer session)
+    (codex-ide--compose-turn-payload prompt)))
+
+(defun codex-ide--prepare-running-prompt (session prompt)
+  "Record and freeze PROMPT for SESSION while a turn is running."
+  (codex-ide--ensure-submittable-prompt prompt)
+  (codex-ide--push-prompt-history session prompt)
+  (let ((payload (codex-ide--running-prompt-payload session prompt)))
+    (unless (eq (current-buffer) (codex-ide-session-buffer session))
+      (codex-ide--insert-input-prompt session prompt))
+    (codex-ide--freeze-active-input-prompt
+     session
+     (alist-get 'context-summary payload))
+    payload))
+
+(defun codex-ide--steer-prompt (&optional prompt)
+  "Submit PROMPT as steering input for the active Codex turn."
+  (let* ((session (codex-ide--session-for-current-project))
+         (thread-id (codex-ide-session-thread-id session))
+         (turn-id (codex-ide-session-current-turn-id session))
+         (prompt-to-send (codex-ide--prompt-for-submission session prompt))
+         payload)
+    (unless turn-id
+      (user-error "No active Codex turn to steer"))
+    (unless thread-id
+      (user-error "Codex session has no active thread"))
+    (setq payload (codex-ide--prepare-running-prompt session prompt-to-send))
+    (codex-ide-log-message
+     session
+     "Steering turn %s (%d chars)"
+     turn-id
+     (length prompt-to-send))
+    (condition-case err
+        (progn
+          (codex-ide--request-sync
+           session
+           "turn/steer"
+           `((threadId . ,thread-id)
+             (expectedTurnId . ,turn-id)
+             (input . ,(alist-get 'input payload))))
+          (codex-ide--mark-session-prompt-submitted session)
+          (when (alist-get 'included-session-context payload)
+            (codex-ide--session-metadata-put session :session-context-sent t))
+          (codex-ide--refresh-running-input-display session)
+          (message "Sent steering input to Codex"))
+      (error
+       (codex-ide-log-message session "Steering prompt failed: %s"
+                              (error-message-string err))
+       (codex-ide--reopen-input-after-submit-error session prompt-to-send err)
+       (signal (car err) (cdr err))))))
+
+(defun codex-ide--queue-prompt (&optional prompt)
+  "Queue PROMPT to run after the active Codex turn finishes."
+  (let* ((session (codex-ide--session-for-current-project))
+         (thread-id (codex-ide-session-thread-id session))
+         (turn-id (codex-ide-session-current-turn-id session))
+         (prompt-to-send (codex-ide--prompt-for-submission session prompt))
+         payload)
+    (unless turn-id
+      (user-error "No active Codex turn to queue behind"))
+    (unless thread-id
+      (user-error "Codex session has no active thread"))
+    (codex-ide--ensure-submittable-prompt prompt-to-send)
+    (codex-ide--push-prompt-history session prompt-to-send)
+    (setq payload (codex-ide--running-prompt-payload session prompt-to-send))
+    (codex-ide--set-queued-prompts
+     session
+     (append (codex-ide--queued-prompts session)
+             (list (codex-ide--queued-prompt-entry prompt-to-send payload))))
+    (when (alist-get 'included-session-context payload)
+      (codex-ide--session-metadata-put session :session-context-sent t))
+    (when (eq (current-buffer) (codex-ide-session-buffer session))
+      (codex-ide--replace-current-input session ""))
+    (codex-ide--refresh-running-input-display session)
+    (codex-ide-log-message
+     session
+     "Queued prompt after turn %s (%d chars)"
+     turn-id
+     (length prompt-to-send))
+    (message "Queued prompt for the next Codex turn")))
+
+(defun codex-ide--submit-prompt (&optional prompt)
+  "Submit PROMPT to the current Codex session."
+  (interactive)
+  (let* ((session (codex-ide--session-for-current-project))
+         (thread-id (codex-ide-session-thread-id session))
+         (prompt-to-send (codex-ide--prompt-for-submission session prompt))
+         payload)
+    (if (codex-ide-session-current-turn-id session)
+        (pcase codex-ide-running-submit-action
+          ('queue (codex-ide--queue-prompt prompt-to-send))
+          (_ (codex-ide--steer-prompt prompt-to-send)))
+      (unless thread-id
+        (user-error "Codex session has no active thread"))
+      (codex-ide--ensure-submittable-prompt prompt-to-send)
+      (codex-ide--push-prompt-history session prompt-to-send)
+      (codex-ide-log-message
+       session
+       "Sending prompt to thread %s (%d chars)"
+       thread-id
+       (length prompt-to-send))
+      (unless (eq (current-buffer) (codex-ide-session-buffer session))
+        (codex-ide--insert-input-prompt session prompt-to-send))
+      (setq payload
+            (with-current-buffer (codex-ide-session-buffer session)
+              (codex-ide--compose-turn-payload prompt-to-send)))
+      (codex-ide--begin-turn-display session (alist-get 'context-summary payload))
+      (redisplay)
+      (condition-case err
+          (progn
+            (codex-ide--send-turn-start session thread-id payload)
+            (codex-ide--after-turn-start-submitted session payload))
+        (error
+         (codex-ide-log-message session "Prompt submission failed: %s" (error-message-string err))
+         (codex-ide--reopen-input-after-submit-error session prompt-to-send err)
+         (signal (car err) (cdr err)))))))
+
+;;;###autoload
+(defun codex-ide-submit ()
+  "Submit the current in-buffer prompt to Codex."
+  (interactive)
+  (codex-ide--submit-prompt))
+
+;;;###autoload
+(defun codex-ide-steer ()
+  "Submit the current prompt as steering input to the active Codex turn."
+  (interactive)
+  (codex-ide--steer-prompt))
+
+;;;###autoload
+(defun codex-ide-queue ()
+  "Queue the current prompt as the next Codex turn."
+  (interactive)
+  (codex-ide--queue-prompt))
 
 (defun codex-ide-transcript-append-to-buffer (buffer text &optional face properties)
   "Append TEXT to BUFFER as transcript text."
