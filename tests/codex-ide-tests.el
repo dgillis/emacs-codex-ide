@@ -449,6 +449,36 @@
     (should (= (buffer-size) 4096))
     (should-not buffer-undo-list)))
 
+(ert-deftest codex-ide-renderer-append-to-buffer-inserts-at-position-and-restores-point ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (insert "alpha omega")
+    (let ((restore-point (copy-marker (point-max))))
+      (setq buffer-undo-list nil)
+      (codex-ide-renderer-append-to-buffer
+       " beta"
+       :insertion-point 6
+       :restore-point restore-point)
+      (should (equal (buffer-string) "alpha beta omega"))
+      (should (= (point) (point-max)))
+      (should-not (marker-buffer restore-point))
+      (should-not buffer-undo-list))))
+
+(ert-deftest codex-ide-renderer-append-to-buffer-runs-after-insert-hook ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (insert "hello")
+    (let (called)
+      (codex-ide-renderer-append-to-buffer
+       " world"
+       :insertion-point (point-max)
+       :after-insert
+       (lambda (start end insertion-point)
+         (setq called (list start end insertion-point
+                            (buffer-substring-no-properties start end)))))
+      (should (equal (buffer-string) "hello world"))
+      (should (equal called '(6 12 6 " world"))))))
+
 (ert-deftest codex-ide-render-markdown-region-does-not-record-undo ()
   (with-temp-buffer
     (codex-ide-session-mode)
@@ -1426,7 +1456,9 @@
       (let ((pos (match-beginning 0)))
         (should (button-at pos))
         (should-not (eq (get-text-property pos 'keymap)
-                        codex-ide-command-output-map))))))
+                        codex-ide-command-output-map))
+        (should (eq (lookup-key (get-text-property pos 'keymap) [mouse-2])
+                    #'push-button))))))
 
 (ert-deftest codex-ide-command-execution-rg-completion-counts-aggregated-output ()
   (with-temp-buffer

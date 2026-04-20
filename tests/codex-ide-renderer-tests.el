@@ -345,6 +345,149 @@ BODY may refer to the lexical variable `session'."
                             (buffer-string)))
     (should-not (string-match-p "^    |   | Remote" (buffer-string)))))
 
+(ert-deftest codex-ide-renderer-replaces-marker-region ()
+  (with-temp-buffer
+    (insert "Selected: old\n")
+    (let ((start (copy-marker 11))
+          (end (copy-marker 14 t)))
+      (codex-ide-renderer-replace-marker-region start end "new")
+      (should (equal (buffer-string) "Selected: new\n"))
+      (should (= (marker-position end) 14)))))
+
+(ert-deftest codex-ide-renderer-replaces-region ()
+  (with-temp-buffer
+    (insert "prefix old suffix")
+    (let ((range (codex-ide-renderer-replace-region 8 11 "new")))
+      (should (equal (buffer-string) "prefix new suffix"))
+      (should (equal range '(8 . 11)))
+      (should-not (get-text-property 8 'read-only)))))
+
+(ert-deftest codex-ide-renderer-inserts-read-only-newlines ()
+  (with-temp-buffer
+    (insert "Agent output")
+    (let ((range (codex-ide-renderer-insert-read-only-newlines 2)))
+      (should (equal (buffer-string) "Agent output\n\n"))
+      (should (equal range '(13 . 15)))
+      (should (get-text-property 13 'read-only))
+      (should (get-text-property 14 'read-only)))))
+
+(ert-deftest codex-ide-renderer-inserts-input-prompt-with-separator ()
+  (with-temp-buffer
+    (insert "Agent output")
+    (let* ((result (codex-ide-renderer-insert-input-prompt "draft" t))
+           (transcript-start (plist-get result :transcript-start))
+           (active-boundary (plist-get result :active-boundary))
+           (prompt-start (plist-get result :prompt-start))
+           (input-start (plist-get result :input-start)))
+      (should (equal (buffer-string) "Agent output\n\n> draft"))
+      (should (= (marker-position transcript-start) 13))
+      (should (= (marker-position active-boundary) 14))
+      (should (= (marker-position prompt-start) 15))
+      (should (= (marker-position input-start) 17))
+      (should (get-text-property (marker-position prompt-start)
+                                 'codex-ide-prompt-start)))))
+
+(ert-deftest codex-ide-renderer-inserts-running-input-list ()
+  (with-temp-buffer
+    (insert "Transcript")
+    (let* ((result (codex-ide-renderer-insert-running-input-list
+                    "Queued turns:\n  > draft\n"))
+           (delete-start (plist-get result :delete-start))
+           (boundary (plist-get result :boundary))
+           (end (plist-get result :end)))
+      (should (equal (buffer-string) "Transcript\n\nQueued turns:\n  > draft\n"))
+      (should (markerp delete-start))
+      (should (= (marker-position boundary) 12))
+      (should (= (marker-position end) (point-max))))))
+
+(ert-deftest codex-ide-renderer-inserts-context-summary ()
+  (with-temp-buffer
+    (insert "> prompt")
+    (let ((range (codex-ide-renderer-insert-context-summary "focus: foo.el:12")))
+      (should (equal (buffer-string) "> prompt\nfocus: foo.el:12"))
+      (should (= (car range) 9))
+      (should (eq (get-text-property 10 'face) 'codex-ide-item-detail-face)))))
+
+(ert-deftest codex-ide-renderer-inserts-session-header ()
+  (with-temp-buffer
+    (let ((range (codex-ide-renderer-insert-session-header "/tmp/project")))
+      (should (equal (buffer-string) "Codex session for /tmp/project\n\n"))
+      (should (= (car range) (point-min)))
+      (should (get-text-property (point-min) 'read-only)))))
+
+(ert-deftest codex-ide-renderer-inserts-approval-resolution ()
+  (with-temp-buffer
+    (let ((range (codex-ide-renderer-insert-approval-resolution
+                  "accept for session")))
+      (should (equal (buffer-string) "Selected: accept for session\n"))
+      (should (= (car range) (point-min)))
+      (should (eq (get-text-property (point-min) 'face)
+                  'codex-ide-approval-label-face)))))
+
+(ert-deftest codex-ide-renderer-inserts-approval-detail-command ()
+  (with-temp-buffer
+    (codex-ide-renderer-insert-approval-detail
+     '(:kind command :text "git status"))
+    (should (string-match-p "Run the following command?" (buffer-string)))
+    (should (string-match-p "git status" (buffer-string)))
+    (goto-char (point-min))
+    (search-forward "git status")
+    (should (eq (get-text-property (match-beginning 0) 'face)
+                'codex-ide-item-summary-face))))
+
+(ert-deftest codex-ide-renderer-inserts-command-output-body ()
+  (with-temp-buffer
+    (let* ((overlay (make-overlay (point-min) (point-min)))
+           (range (codex-ide-renderer-insert-command-output-body
+                   "line 1\nline 2\n"
+                   :keymap codex-ide-renderer-link-keymap
+                   :overlay overlay
+                   :overlay-property 'codex-ide-command-output-overlay
+                   :properties '(mouse-face highlight))))
+      (should (equal (buffer-string) "line 1\nline 2\n"))
+      (should (eq (get-text-property (car range) 'face)
+                  'codex-ide-command-output-face))
+      (should (eq (get-text-property (car range) 'keymap)
+                  codex-ide-renderer-link-keymap))
+      (should (eq (get-text-property (car range) 'mouse-face) 'highlight))
+      (should (eq (get-text-property (car range)
+                                     'codex-ide-command-output-overlay)
+                  overlay))
+      (should (get-text-property (car range) 'read-only)))))
+
+(ert-deftest codex-ide-renderer-inserts-elicitation-text-field ()
+  (with-temp-buffer
+    (let* ((result (codex-ide-renderer-insert-elicitation-field
+                    "Name" 'text "Ada" nil nil nil nil))
+           (start (plist-get result :start-marker))
+           (end (plist-get result :end-marker))
+           (ranges (plist-get result :writable-ranges)))
+      (should (equal (buffer-string)
+                     "Name:\n    Ada\n\n"))
+      (should (= (marker-position start) 11))
+      (should (= (marker-position end) 15))
+      (should (= (length ranges) 1)))))
+
+(ert-deftest codex-ide-renderer-inserts-elicitation-choice-field ()
+  (with-temp-buffer
+    (let ((chosen nil))
+      (let ((result (codex-ide-renderer-insert-elicitation-field
+                     "Mode"
+                     'choice
+                     "true"
+                     '(("true" . t) ("false" . :json-false))
+                     nil
+                     (lambda (label value)
+                       (setq chosen (cons label value)))
+                     nil)))
+        (should (string-match-p "Mode:\n    Selected: true\n" (buffer-string)))
+        (goto-char (point-min))
+        (search-forward "[false]")
+        (button-activate (button-at (match-beginning 0)))
+        (should (equal chosen '("false" . :json-false)))
+        (should (markerp (plist-get result :display-start-marker)))
+        (should (markerp (plist-get result :display-end-marker)))))))
+
 (provide 'codex-ide-renderer-tests)
 
 ;;; codex-ide-renderer-tests.el ends here

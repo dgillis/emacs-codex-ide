@@ -8,9 +8,11 @@
 
 ;; `codex-ide-renderer' owns the view layer for transcript presentation.
 ;; It is responsible for operations that act on explicit buffer state and
-;; explicit inputs such as regions, markers, text properties, overlays, and
-;; render options.  This includes markdown rendering, prompt/transcript styling,
-;; separator formatting, file-link activation, and lightweight status display
+;; explicit inputs such as regions, markers, text properties, overlays, render
+;; options, and insertion callbacks supplied by higher-level modules.  This
+;; includes markdown rendering, prompt/transcript styling, separator formatting,
+;; file-link activation, transcript block insertion helpers, command-output
+;; presentation, approval/elicitation widgets, and lightweight status display
 ;; helpers.
 ;;
 ;; This file should stay usable as a view utility without requiring the rest of
@@ -22,11 +24,11 @@
 ;; it.
 ;;
 ;; Keep business logic out of this file.  Item interpretation, transcript
-;; lifecycle, prompt management, error classification, and replay of stored
-;; thread data belong in controller-oriented modules such as
-;; `codex-ide-transcript.el'.  When in doubt, code belongs here only if it can
-;; be described as "take this input and current buffer state, then render or
-;; restyle the view".
+;; lifecycle, prompt management, insertion-position policy, error
+;; classification, and replay decisions for stored thread data belong in
+;; controller-oriented modules such as `codex-ide-transcript.el'.  When in
+;; doubt, code belongs here only if it can be described as "take explicit
+;; inputs plus current buffer state, then insert, update, or restyle the view".
 
 ;;; Code:
 
@@ -278,6 +280,64 @@
       (add-text-properties (line-beginning-position) (1+ (line-beginning-position))
                            `(,codex-ide-prompt-start-property t)))))
 
+(defun codex-ide-renderer-insert-input-prompt (&optional initial-text separate-output-p)
+  "Insert a writable prompt at point and return prompt markers.
+When INITIAL-TEXT is non-nil, seed the editable region with it.
+When SEPARATE-OUTPUT-P is non-nil, insert a blank line before the prompt and
+return an active-boundary marker in the result plist.
+
+Return a plist containing `:transcript-start', `:active-boundary',
+`:prompt-start', and `:input-start' markers."
+  (let (transcript-start
+        active-boundary
+        prompt-start
+        input-start)
+    (setq transcript-start (copy-marker (point)))
+    (unless (or (= (point) (point-min))
+                (bolp))
+      (insert "\n"))
+    (when separate-output-p
+      (setq active-boundary (copy-marker (point)))
+      (insert "\n"))
+    (setq prompt-start (copy-marker (point)))
+    (codex-ide-renderer-insert-prompt-prefix)
+    (setq input-start (copy-marker (point)))
+    (when initial-text
+      (insert initial-text))
+    (list :transcript-start transcript-start
+          :active-boundary active-boundary
+          :prompt-start prompt-start
+          :input-start input-start)))
+
+(defun codex-ide-renderer-insert-context-summary (text)
+  "Insert context summary TEXT on its own line and return (START . END)."
+  (let ((start (point)))
+    (insert "\n")
+    (insert (propertize text 'face 'codex-ide-item-detail-face))
+    (cons start (point))))
+
+(defun codex-ide-renderer-insert-running-input-list (text)
+  "Insert running-input summary TEXT at point-max and return its markers.
+Return a plist containing `:delete-start', `:boundary', and `:end' markers."
+  (let (delete-start boundary end)
+    (setq delete-start (copy-marker (point) t))
+    (unless (or (= (point) (point-min))
+                (bolp))
+      (insert "\n"))
+    (setq boundary (copy-marker (point)))
+    (insert "\n")
+    (insert (propertize text 'face 'codex-ide-item-detail-face))
+    (setq end (copy-marker (point)))
+    (list :delete-start delete-start
+          :boundary boundary
+          :end end)))
+
+(defun codex-ide-renderer-insert-session-header (working-dir)
+  "Insert the initial session header for WORKING-DIR and return (START . END)."
+  (codex-ide-renderer-insert-read-only
+   (format "Codex session for %s\n\n"
+           (abbreviate-file-name working-dir))))
+
 (defun codex-ide-renderer-output-separator-string ()
   "Return the separator rule used between transcript sections."
   (concat (make-string 72 ?-) "\n"))
@@ -331,6 +391,394 @@
       (forward-line (1- line)))
     (when column
       (move-to-column (max 0 (1- column))))))
+
+(defun codex-ide-renderer-insert-action-button
+    (label callback &optional help-echo keymap properties)
+  "Insert a button labeled LABEL that invokes CALLBACK.
+HELP-ECHO, KEYMAP, and PROPERTIES are applied to the created button."
+  (let ((button-keymap (if keymap
+                           (make-composed-keymap keymap button-map)
+                         button-map)))
+  (apply
+   #'make-text-button
+   (point)
+   (progn (insert (format "[%s]" label)) (point))
+   (append
+    (list 'follow-link t
+          'keymap button-keymap
+          'help-echo (or help-echo label)
+          'action (lambda (_button)
+                    (funcall callback)))
+    properties))))
+
+(defun codex-ide-renderer-insert-approval-label (label)
+  "Insert an emphasized approval field LABEL."
+  (insert (propertize label 'face 'codex-ide-approval-label-face)))
+
+(defun codex-ide-renderer-insert-approval-diff (text face-fn)
+  "Insert approval diff TEXT using FACE-FN for each line."
+  (let ((trimmed (and (stringp text) (string-trim-right text))))
+    (when (and trimmed (not (string-empty-p trimmed)))
+      (codex-ide-renderer-insert-approval-label "Proposed changes:")
+      (insert "\n\n")
+      (dolist (line (split-string trimmed "\n"))
+        (insert (propertize (concat line "\n")
+                            'face
+                            (funcall face-fn line))))
+      (insert "\n"))))
+
+(cl-defun codex-ide-renderer-insert-command-output-header
+    (overlay prefix-text toggle-fn open-fn
+             &key keymap overlay-property)
+  "Insert a command-output header for OVERLAY using PREFIX-TEXT.
+TOGGLE-FN and OPEN-FN receive OVERLAY when invoked."
+  (let ((prefix-start (point)))
+    (insert prefix-text)
+    (add-text-properties
+     prefix-start
+     (point)
+     (list 'face 'codex-ide-item-detail-face
+           'keymap keymap
+           'help-echo "RET toggles command output"
+           overlay-property overlay))
+    (codex-ide-renderer-insert-action-button
+     (if (overlay-get overlay :folded) "expand" "fold")
+     (lambda ()
+       (funcall toggle-fn overlay))
+     "Toggle command output"
+     keymap
+     (list overlay-property overlay))
+    (when (overlay-get overlay :truncated)
+      (insert " ")
+      (codex-ide-renderer-insert-action-button
+       "full output"
+       (lambda ()
+         (funcall open-fn overlay))
+       "Open full command output in a separate buffer"
+       keymap
+       (list overlay-property overlay)))
+    (insert "\n")))
+
+(cl-defun codex-ide-renderer-insert-read-only
+    (text &optional face properties)
+  "Insert TEXT at point as frozen transcript text.
+When FACE is non-nil, apply it to the inserted text.  PROPERTIES is appended
+to the inserted region.  Return (START . END)."
+  (let ((start (point)))
+    (insert text)
+    (unless (or face
+                (plist-member properties 'face)
+                (text-property-not-all 0 (length text) 'face nil text))
+      (remove-text-properties start (point) '(face nil)))
+    (when (or face properties)
+      (add-text-properties
+       start
+       (point)
+       (append (when face (list 'face face))
+               properties)))
+    (codex-ide-renderer-freeze-region start (point))
+    (cons start (point))))
+
+(defun codex-ide-renderer-insert-read-only-newlines (count)
+  "Insert COUNT newline characters at point as frozen transcript text.
+Return (START . END)."
+  (codex-ide-renderer-insert-read-only (make-string count ?\n)))
+
+(cl-defun codex-ide-renderer-append-to-buffer
+    (text &key insertion-point face properties restore-point
+          preserve-point move-point-to-end after-insert)
+  "Insert frozen transcript TEXT into the current buffer.
+When INSERTION-POINT is non-nil, insert there; otherwise insert at point.
+When FACE is non-nil, apply it to the inserted text.  PROPERTIES is appended
+to the inserted region.
+
+When RESTORE-POINT is a marker, restore point to it and clear it after
+insertion.  When PRESERVE-POINT is non-nil and RESTORE-POINT is nil, restore
+point to its original location after insertion.  When MOVE-POINT-TO-END is
+non-nil and neither restoration mode is used, move point to `point-max'.
+
+When AFTER-INSERT is non-nil, call it with three arguments: START, END, and
+the resolved insertion position.
+
+Return (START . END)."
+  (codex-ide-renderer--without-undo-recording
+    (let* ((inhibit-read-only t)
+           (resolved-insertion-point (or insertion-point (point)))
+           (original-point (and preserve-point
+                                (not (markerp restore-point))
+                                (copy-marker (point) t)))
+           range)
+      (goto-char resolved-insertion-point)
+      (setq range
+            (codex-ide-renderer-insert-read-only text face properties))
+      (when after-insert
+        (funcall after-insert
+                 (car range)
+                 (cdr range)
+                 resolved-insertion-point))
+      (cond
+       ((markerp restore-point)
+        (when (marker-buffer restore-point)
+          (goto-char restore-point))
+        (set-marker restore-point nil))
+       (original-point
+        (goto-char original-point)
+        (set-marker original-point nil))
+       (move-point-to-end
+        (goto-char (point-max))))
+      range)))
+
+(defun codex-ide-renderer-insert-output-spacing ()
+  "Insert the transcript spacing needed before a new output block.
+Return (START . END)."
+  (let ((start (point)))
+    (cond
+     ((= (point) (point-min)))
+     ((and (eq (char-before (point)) ?\n)
+           (save-excursion
+             (forward-char -1)
+             (or (bobp)
+                 (eq (char-before (point)) ?\n)))))
+     ((eq (char-before (point)) ?\n)
+      (insert "\n"))
+     (t
+      (insert "\n\n")))
+    (codex-ide-renderer-freeze-region start (point))
+    (cons start (point))))
+
+(defun codex-ide-renderer-insert-output-separator (&optional properties)
+  "Insert the standard transcript separator at point.
+PROPERTIES is appended to the inserted region.  Return (START . END)."
+  (codex-ide-renderer-insert-read-only
+   (codex-ide-renderer-output-separator-string)
+   'codex-ide-output-separator-face
+   properties))
+
+(defun codex-ide-renderer-insert-restored-transcript-separator (&optional properties)
+  "Insert the restored-transcript separator at point.
+PROPERTIES is appended to the inserted region.  Return (START . END)."
+  (codex-ide-renderer-insert-read-only
+   (codex-ide-renderer-restored-transcript-separator-string)
+   'codex-ide-output-separator-face
+   properties))
+
+(defun codex-ide-renderer-insert-pending-indicator (text)
+  "Insert pending-indicator TEXT at point and return (START . END INSERTED-TEXT)."
+  (let* ((inserted-text
+          (concat (if (or (= (point) (point-min)) (bolp))
+                      ""
+                    "\n")
+                  text))
+         (range (codex-ide-renderer-insert-read-only inserted-text 'shadow)))
+    (list (car range) (cdr range) inserted-text)))
+
+(defun codex-ide-renderer-delete-matching-text (start text)
+  "Delete TEXT at START when it matches exactly.
+Return non-nil when deletion occurred."
+  (when (and start
+             (<= start (point-max)))
+    (save-excursion
+      (goto-char start)
+      (when (looking-at (regexp-quote text))
+        (delete-region start (match-end 0))
+        t))))
+
+(cl-defun codex-ide-renderer-replace-region
+    (start end text &optional face properties)
+  "Replace the region from START to END with TEXT.
+When FACE is non-nil, apply it to the inserted text.  PROPERTIES is appended
+to the inserted region.  Return (START . END)."
+  (delete-region start end)
+  (goto-char start)
+  (let ((insert-start (point)))
+    (insert text)
+    (when (or face properties)
+      (add-text-properties
+       insert-start
+       (point)
+       (append (when face (list 'face face))
+               properties)))
+    (cons insert-start (point))))
+
+(defun codex-ide-renderer-replace-marker-region (start-marker end-marker text)
+  "Replace text between START-MARKER and END-MARKER with TEXT.
+Return (START . END) for the inserted text."
+  (let ((range (codex-ide-renderer-replace-region
+                (marker-position start-marker)
+                (marker-position end-marker)
+                text)))
+    (set-marker end-marker (cdr range))
+    range))
+
+(cl-defun codex-ide-renderer-insert-command-output-body
+    (display-text &key keymap overlay overlay-property properties)
+  "Insert DISPLAY-TEXT as a frozen command-output body.
+KEYMAP is applied to the body text.  OVERLAY is attached via OVERLAY-PROPERTY.
+PROPERTIES is appended to the inserted region.  Return (START . END)."
+  (codex-ide-renderer-insert-read-only
+   display-text
+   'codex-ide-command-output-face
+   (append
+    (list 'keymap keymap
+          'help-echo "RET toggles command output"
+          overlay-property overlay)
+    properties)))
+
+(defun codex-ide-renderer-insert-shell-command-detail (command &optional properties)
+  "Insert COMMAND as an indented shell-highlighted detail line.
+PROPERTIES is appended to the inserted region.  Return (START . END)."
+  (let ((start (point))
+        command-start
+        command-end)
+    (insert "  $ ")
+    (remove-text-properties start (point) '(face nil))
+    (setq command-start (point))
+    (insert command)
+    (setq command-end (point))
+    (insert "\n")
+    (add-text-properties
+     start
+     (point)
+     (append (list 'face 'codex-ide-item-detail-face)
+             properties))
+    (let ((inhibit-message t)
+          (message-log-max nil))
+      (codex-ide-renderer-fontify-code-block-region
+       command-start command-end "sh"))
+    (codex-ide-renderer-freeze-region start (point))
+    (cons start (point))))
+
+(defun codex-ide-renderer-insert-restored-user-message (text)
+  "Insert restored user TEXT at point and return (START . END)."
+  (codex-ide-renderer-insert-output-spacing)
+  (let ((prompt-start (point)))
+    (codex-ide-renderer-insert-prompt-prefix)
+    (insert text)
+    (codex-ide-renderer-style-user-prompt-region prompt-start (point))
+    (codex-ide-renderer-freeze-region prompt-start (point))
+    (insert "\n\n")
+    (codex-ide-renderer-freeze-region prompt-start (point))
+    (cons prompt-start (point))))
+
+(defun codex-ide-renderer-insert-interactive-request-shell (title render-body)
+  "Insert a standard interactive-request shell with TITLE.
+RENDER-BODY is called to insert request-specific body content.
+Return (START STATUS END RENDER-STATE)."
+  (let ((start (point))
+        render-state
+        status
+        end)
+    (codex-ide-renderer-insert-output-spacing)
+    (codex-ide-renderer-insert-output-separator)
+    (codex-ide-renderer-insert-read-only "\n")
+    (codex-ide-renderer-insert-read-only title 'codex-ide-approval-header-face)
+    (codex-ide-renderer-insert-read-only "\n\n")
+    (setq render-state (funcall render-body))
+    (setq status (point))
+    (setq end (point))
+    (list start status end render-state)))
+
+(defun codex-ide-renderer-insert-approval-resolution (label)
+  "Insert a resolved approval LABEL line and return (START . END)."
+  (let ((start (point)))
+    (insert (propertize "Selected: "
+                        'face
+                        'codex-ide-approval-label-face))
+    (insert label)
+    (insert "\n")
+    (cons start (point))))
+
+(defun codex-ide-renderer-insert-approval-detail (detail &optional diff-face-fn)
+  "Insert one formatted approval DETAIL at point.
+When DETAIL is a diff block, use DIFF-FACE-FN to choose faces."
+  (pcase (plist-get detail :kind)
+    ('command
+     (codex-ide-renderer-insert-approval-label "Run the following command?")
+     (insert "\n\n    ")
+     (insert (propertize (or (plist-get detail :text) "")
+                         'face
+                         'codex-ide-item-summary-face))
+     (insert "\n\n"))
+    ('diff
+     (codex-ide-renderer-insert-approval-diff
+      (plist-get detail :text)
+      (or diff-face-fn #'ignore)))
+    (_
+     (when-let ((label (plist-get detail :label)))
+       (codex-ide-renderer-insert-approval-label (format "%s: " label)))
+     (insert (or (plist-get detail :text) ""))
+     (insert "\n"))))
+
+(defun codex-ide-renderer-insert-elicitation-text-field (default writable-ranges)
+  "Insert a writable elicitation text field with DEFAULT.
+Extend WRITABLE-RANGES and return (START END UPDATED-RANGES)."
+  (let ((start nil)
+        (end nil))
+    (insert "    ")
+    (setq start (copy-marker (point)))
+    (when default
+      (insert (format "%s" default)))
+    (insert "\n")
+    (setq end (copy-marker (point)))
+    (push (cons start end) writable-ranges)
+    (list start end writable-ranges)))
+
+(defun codex-ide-renderer-insert-elicitation-choice-field
+    (initial choices set-choice-fn button-keymap)
+  "Insert an elicitation choice field at point.
+INITIAL is the current display label.  CHOICES is an alist of label/value pairs.
+SET-CHOICE-FN is called with LABEL and VALUE when a choice is selected.
+BUTTON-KEYMAP is passed to the rendered action buttons.
+
+Return (DISPLAY-START DISPLAY-END)."
+  (let (display-start display-end)
+    (insert "    Selected: ")
+    (setq display-start (copy-marker (point)))
+    (insert initial)
+    (setq display-end (copy-marker (point) t))
+    (insert "\n")
+    (dolist (choice choices)
+      (let ((label (car choice))
+            (value (cdr choice)))
+        (codex-ide-renderer-insert-action-button
+         label
+         (lambda ()
+           (funcall set-choice-fn label value))
+         nil
+         button-keymap)
+        (insert " ")))
+    (insert "\n")
+    (list display-start display-end)))
+
+(defun codex-ide-renderer-insert-elicitation-field
+    (prompt type initial choices writable-ranges set-choice-fn button-keymap)
+  "Insert one elicitation field at point and return its view state.
+PROMPT is the user-facing label.  TYPE is either `choice' or `text'.  INITIAL
+is the initial display value or default field content.  CHOICES is used for
+choice fields.  WRITABLE-RANGES is extended for text fields.  SET-CHOICE-FN
+and BUTTON-KEYMAP are used for choice buttons.
+
+Return a plist containing inserted markers and updated writable ranges."
+  (codex-ide-renderer-insert-approval-label (concat prompt ":"))
+  (insert "\n")
+  (let ((result
+         (pcase type
+           ('choice
+            (pcase-let ((`(,display-start ,display-end)
+                         (codex-ide-renderer-insert-elicitation-choice-field
+                          initial choices set-choice-fn button-keymap)))
+              (list :display-start-marker display-start
+                    :display-end-marker display-end
+                    :writable-ranges writable-ranges)))
+           (_
+            (pcase-let ((`(,start ,end ,new-ranges)
+                         (codex-ide-renderer-insert-elicitation-text-field
+                          initial writable-ranges)))
+              (list :start-marker start
+                    :end-marker end
+                    :writable-ranges new-ranges))))))
+    (insert "\n")
+    result))
 
 (defun codex-ide-renderer--clear-markdown-properties (start end)
   "Clear Codex markdown rendering properties between START and END."
@@ -559,6 +1007,10 @@
         language
         mode))
      (codex-ide-renderer--markdown-language-mode-candidates language))))
+
+(defun codex-ide-renderer-fontify-code-block-region (start end language)
+  "Apply syntax highlighting to region START END using LANGUAGE."
+  (codex-ide-renderer--fontify-code-block-region start end language))
 
 (defun codex-ide-renderer--render-fenced-code-blocks (start end)
   "Render fenced code blocks between START and END."
