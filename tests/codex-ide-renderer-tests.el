@@ -387,6 +387,16 @@ BODY may refer to the lexical variable `session'."
       (should (get-text-property (marker-position prompt-start)
                                  'codex-ide-prompt-start)))))
 
+(ert-deftest codex-ide-renderer-input-prompt-prefix-is-read-only ()
+  (with-temp-buffer
+    (let* ((result (codex-ide-renderer-insert-input-prompt "draft"))
+           (prompt-start (marker-position (plist-get result :prompt-start)))
+           (input-start (marker-position (plist-get result :input-start))))
+      (should (get-text-property prompt-start 'read-only))
+      (goto-char input-start)
+      (should-error (delete-backward-char 1) :type 'text-read-only)
+      (should (equal (buffer-string) "> draft")))))
+
 (ert-deftest codex-ide-renderer-inserts-running-input-list ()
   (with-temp-buffer
     (insert "Transcript")
