@@ -261,7 +261,10 @@
    (propertize
     "> "
     'face 'codex-ide-user-prompt-face
-    codex-ide-prompt-start-property t)))
+    codex-ide-prompt-start-property t
+    'read-only t
+    'rear-nonsticky '(read-only)
+    'front-sticky '(read-only))))
 
 (defun codex-ide-renderer-line-has-prompt-start-p (&optional pos)
   "Return non-nil when POS is on a line beginning with a prompt."
