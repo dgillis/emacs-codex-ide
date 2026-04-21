@@ -191,9 +191,13 @@
 (defconst codex-ide-agent-item-type-property 'codex-ide-agent-item-type
   "Text property storing the originating agent item type for transcript text.")
 
+(defconst codex-ide-item-result-overlay-property
+  'codex-ide-item-result-overlay
+  "Text property storing an expandable item-result overlay.")
+
 (defconst codex-ide-command-output-overlay-property
-  'codex-ide-command-output-overlay
-  "Text property storing a command output block overlay.")
+  codex-ide-item-result-overlay-property
+  "Compatibility alias for `codex-ide-item-result-overlay-property'.")
 
 (defun codex-ide-renderer-status-label (status)
   "Return a display label for STATUS."

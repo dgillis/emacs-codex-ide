@@ -1429,14 +1429,51 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
        (mapconcat (lambda (line) (concat "    " line)) lines "\n")
        (if ends-with-newline "\n" "")))))
 
-(defun codex-ide--command-output-header-prefix-text (overlay)
-  "Return the non-action header text for command output OVERLAY."
+(defun codex-ide--json-encode-string-or-nil (value)
+  "Return VALUE JSON-encoded when possible, or nil on encoding failure."
+  (when value
+    (condition-case nil
+        (json-encode value)
+      (error nil))))
+
+(defun codex-ide--mcp-result-text (item)
+  "Return a transcript-ready result string for MCP tool call ITEM."
+  (let ((result
+         (or (alist-get 'result item)
+             (alist-get 'output item)
+             (alist-get 'content item)
+             (alist-get 'response item))))
+    (cond
+     ((stringp result) result)
+     ((null result) nil)
+     ((vectorp result)
+      (or (let ((parts nil))
+            (mapc
+             (lambda (entry)
+               (let ((text (alist-get 'text entry)))
+                 (when (and (stringp text)
+                            (not (string-empty-p text)))
+                   (push text parts))))
+             result)
+            (when parts
+              (string-join (nreverse parts) "\n\n")))
+          (codex-ide--json-encode-string-or-nil result)))
+     ((listp result)
+      (or (alist-get 'text result)
+          (codex-ide--json-encode-string-or-nil result)))
+     (t
+      (codex-ide--json-encode-string-or-nil result)))))
+
+(defun codex-ide--item-result-header-prefix-text (overlay)
+  "Return the non-action header text for item result OVERLAY."
   (let* ((line-count (overlay-get overlay :line-count))
          (visible-line-count (overlay-get overlay :visible-line-count))
          (truncated (overlay-get overlay :truncated))
          (line-label (if (= line-count 1) "line" "lines"))
-         (complete (overlay-get overlay :complete)))
-    (format "  └ output: %d %s%s%s "
+         (complete (overlay-get overlay :complete))
+         (label (or (overlay-get overlay :label) "output")))
+    (format "  └ %s: %d %s%s%s "
+            label
             line-count
             line-label
             (if truncated
@@ -1444,27 +1481,102 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
               "")
             (if complete "" ", streaming"))))
 
-(defun codex-ide--command-output-text (overlay)
-  "Return the full output text for command output OVERLAY."
+(defun codex-ide--item-result-text (overlay)
+  "Return the full result text for item result OVERLAY."
   (let* ((session (overlay-get overlay :session))
          (item-id (overlay-get overlay :item-id))
          (state (and session item-id
                      (codex-ide--item-state session item-id))))
-    (or (plist-get state :output-text)
+    (or (plist-get state :item-result-text)
+        (plist-get state :output-text)
+        (overlay-get overlay :item-result-fallback-text)
         (overlay-get overlay :output-fallback-text)
         "")))
 
-(defun codex-ide--command-output-buffer-name (overlay)
-  "Return the buffer name for full command output OVERLAY."
+(defun codex-ide--item-result-buffer-name (overlay)
+  "Return the buffer name for full item result OVERLAY."
   (let* ((session (overlay-get overlay :session))
          (item-id (overlay-get overlay :item-id))
+         (item-type (overlay-get overlay :item-type))
          (directory (and session (codex-ide-session-directory session)))
          (project (and directory
                        (file-name-nondirectory
                         (directory-file-name directory)))))
-    (format "*codex-output[%s:%s]*"
+    (format (if (equal item-type "commandExecution")
+                "*codex-output[%s:%s]*"
+              "*codex-item-result[%s:%s]*")
             (or project "session")
-            (or item-id "command"))))
+            (or item-id "item"))))
+
+(defun codex-ide--item-result-header-text (overlay)
+  "Return the optional header text for full item result OVERLAY."
+  (let* ((session (overlay-get overlay :session))
+         (item-id (overlay-get overlay :item-id))
+         (state (and session item-id
+                     (codex-ide--item-state session item-id)))
+         (item (plist-get state :item))
+         (item-type (and (listp item) (alist-get 'type item))))
+    (pcase item-type
+      ("commandExecution"
+       (when-let ((command (alist-get 'command item)))
+         (concat "$ " (codex-ide--display-command-string command))))
+      ("mcpToolCall"
+       (format "%s/%s"
+               (or (alist-get 'server item) "mcp")
+               (or (alist-get 'tool item) "tool")))
+      (_ nil))))
+
+(defun codex-ide--open-item-result-overlay (overlay)
+  "Open full item result for OVERLAY in a separate buffer."
+  (unless (overlayp overlay)
+    (user-error "No item result at point"))
+  (let* ((output (codex-ide--item-result-text overlay))
+         (header (codex-ide--item-result-header-text overlay))
+         (buffer (get-buffer-create
+                  (codex-ide--item-result-buffer-name overlay))))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (when header
+          (insert header "\n\n"))
+        (insert output)
+        (unless (or (string-empty-p output)
+                    (string-suffix-p "\n" output))
+          (insert "\n"))
+        (goto-char (point-min))
+        (special-mode)
+        (setq-local buffer-undo-list t)
+        (when (bound-and-true-p visual-line-mode)
+          (visual-line-mode -1))
+        (when (bound-and-true-p font-lock-mode)
+          (font-lock-mode -1))))
+    (pop-to-buffer buffer)))
+
+(defun codex-ide--toggle-item-result-overlay (overlay)
+  "Toggle item result OVERLAY.
+Return non-nil when OVERLAY was toggled."
+  (when (and (overlayp overlay)
+             (buffer-live-p (overlay-buffer overlay)))
+    (let ((folded (not (overlay-get overlay :folded))))
+      (overlay-put overlay :folded folded)
+      (overlay-put overlay 'invisible (and folded t))
+      (codex-ide--set-item-result-header overlay)
+      (codex-ide--set-item-result-body
+       overlay
+       (or (overlay-get overlay :display-text) ""))
+      t)))
+
+(defun codex-ide--command-output-header-prefix-text (overlay)
+  "Return the non-action header text for command output OVERLAY."
+  (codex-ide--item-result-header-prefix-text overlay))
+
+(defun codex-ide--command-output-text (overlay)
+  "Return the full output text for command output OVERLAY."
+  (codex-ide--item-result-text overlay))
+
+(defun codex-ide--command-output-buffer-name (overlay)
+  "Return the buffer name for full command output OVERLAY."
+  (codex-ide--item-result-buffer-name overlay))
 
 (defun codex-ide--command-output-command-text (overlay)
   "Return the display command associated with command output OVERLAY."
@@ -1479,56 +1591,31 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
 
 (defun codex-ide--open-command-output-overlay (overlay)
   "Open full command output for OVERLAY in a separate buffer."
-  (unless (overlayp overlay)
-    (user-error "No command output at point"))
-  (let* ((output (codex-ide--command-output-text overlay))
-         (command (codex-ide--command-output-command-text overlay))
-         (buffer (get-buffer-create
-                  (codex-ide--command-output-buffer-name overlay))))
-    (with-current-buffer buffer
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (when command
-          (insert "$ " command "\n\n"))
-        (insert output)
-        (unless (or (string-empty-p output)
-                    (string-suffix-p "\n" output))
-          (insert "\n"))
-        (goto-char (point-min))
-        (special-mode)
-        (setq-local buffer-undo-list t)
-        (when (bound-and-true-p visual-line-mode)
-          (visual-line-mode -1))
-        (when (bound-and-true-p font-lock-mode)
-          (font-lock-mode -1))))
-    (pop-to-buffer buffer)))
+  (codex-ide--open-item-result-overlay overlay))
 
 (defun codex-ide--toggle-command-output-overlay (overlay)
   "Toggle command output OVERLAY.
 Return non-nil when OVERLAY was toggled."
-  (when (and (overlayp overlay)
-             (buffer-live-p (overlay-buffer overlay)))
-    (let ((folded (not (overlay-get overlay :folded))))
-      (overlay-put overlay :folded folded)
-      (overlay-put overlay 'invisible (and folded t))
-      (codex-ide--set-command-output-header overlay)
-      (codex-ide--set-command-output-body
-       overlay
-       (or (overlay-get overlay :display-text) ""))
-      t)))
+  (codex-ide--toggle-item-result-overlay overlay))
+
+(defun codex-ide-open-item-result-at-point (&optional pos)
+  "Open full item result for the result block at POS.
+Return non-nil when an item result block was found."
+  (interactive)
+  (if-let ((overlay (codex-ide--item-result-overlay-at-point pos)))
+      (progn
+        (codex-ide--open-item-result-overlay overlay)
+        t)
+    (user-error "No item result at point")))
 
 (defun codex-ide-open-command-output-at-point (&optional pos)
   "Open full command output for the output block at POS.
 Return non-nil when a command output block was found."
   (interactive)
-  (if-let ((overlay (codex-ide--command-output-overlay-at-point pos)))
-      (progn
-        (codex-ide--open-command-output-overlay overlay)
-        t)
-    (user-error "No command output at point")))
+  (codex-ide-open-item-result-at-point pos))
 
-(defun codex-ide--set-command-output-header (overlay)
-  "Refresh the visible header for command output OVERLAY."
+(defun codex-ide--set-item-result-header (overlay)
+  "Refresh the visible header for item result OVERLAY."
   (let ((buffer (overlay-buffer overlay))
         (header-start (overlay-get overlay :header-start))
         (header-end (overlay-get overlay :header-end))
@@ -1553,11 +1640,11 @@ Return non-nil when a command output block was found."
               (delete-region start (marker-position header-end))
               (codex-ide-renderer-insert-command-output-header
                overlay
-               (codex-ide--command-output-header-prefix-text overlay)
-               #'codex-ide--toggle-command-output-overlay
-               #'codex-ide--open-command-output-overlay
+               (codex-ide--item-result-header-prefix-text overlay)
+               #'codex-ide--toggle-item-result-overlay
+               #'codex-ide--open-item-result-overlay
                :keymap codex-ide-command-output-map
-               :overlay-property codex-ide-command-output-overlay-property)
+               :overlay-property codex-ide-item-result-overlay-property)
               (set-marker header-start start)
               (set-marker header-end (point))
               (set-marker body-start (point))
@@ -1574,7 +1661,11 @@ Return non-nil when a command output block was found."
                 (when moving
                   (goto-char (point-max)))))))))))
 
-(defun codex-ide--set-command-output-body (overlay display-text)
+(defun codex-ide--set-command-output-header (overlay)
+  "Refresh the visible header for command output OVERLAY."
+  (codex-ide--set-item-result-header overlay))
+
+(defun codex-ide--set-item-result-body (overlay display-text)
   "Refresh OVERLAY's visible body using DISPLAY-TEXT.
 When OVERLAY is folded, remove the body text from the transcript buffer."
   (let ((buffer (overlay-buffer overlay))
@@ -1584,7 +1675,9 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                (markerp body-start)
                (markerp body-end))
       (with-current-buffer buffer
-        (let ((codex-ide--current-agent-item-type "commandExecution"))
+        (let ((codex-ide--current-agent-item-type
+               (or (overlay-get overlay :item-type)
+                   "commandExecution")))
           (codex-ide--maybe-save-transcript-position (marker-position body-start)
             (codex-ide--without-undo-recording
               (let ((inhibit-read-only t)
@@ -1601,7 +1694,7 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                    display-text
                    :keymap codex-ide-command-output-map
                    :overlay overlay
-                   :overlay-property codex-ide-command-output-overlay-property
+                   :overlay-property codex-ide-item-result-overlay-property
                    :properties (overlay-get overlay :body-properties))
                   (codex-ide--freeze-region start (point)))
                 (set-marker body-end (point))
@@ -1614,22 +1707,30 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                   (when moving
                     (goto-char (point-max))))))))))))
 
-(defun codex-ide--ensure-command-output-block (session item-id)
-  "Return the command output overlay for ITEM-ID in SESSION, creating it."
+(defun codex-ide--set-command-output-body (overlay display-text)
+  "Refresh OVERLAY's visible body using DISPLAY-TEXT.
+When OVERLAY is folded, remove the body text from the transcript buffer."
+  (codex-ide--set-item-result-body overlay display-text))
+
+(defun codex-ide--ensure-item-result-block (session item-id)
+  "Return the item result overlay for ITEM-ID in SESSION, creating it."
   (let* ((state (codex-ide--item-state session item-id))
-         (existing (plist-get state :command-output-overlay)))
+         (existing (or (plist-get state :item-result-overlay)
+                       (plist-get state :command-output-overlay))))
     (if (and (overlayp existing) (buffer-live-p (overlay-buffer existing)))
         existing
       (let ((buffer (codex-ide-session-buffer session))
             overlay)
         (when (buffer-live-p buffer)
           (with-current-buffer buffer
-            (let ((codex-ide--current-agent-item-type "commandExecution"))
+            (let ((codex-ide--current-agent-item-type
+                   (or (plist-get state :type) "commandExecution")))
               (codex-ide--without-undo-recording
                 (let* ((inhibit-read-only t)
                        (restore-point (codex-ide--input-point-marker session))
                        (moving (and (= (point) (point-max)) (not restore-point)))
-                       (anchor (plist-get state :command-output-anchor-marker))
+                       (anchor (or (plist-get state :item-result-anchor-marker)
+                                   (plist-get state :command-output-anchor-marker)))
                        (active-boundary (codex-ide--active-input-boundary-marker buffer))
                        (insertion-position
                         (if (and (markerp anchor)
@@ -1649,9 +1750,13 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                     (setq header-start (copy-marker (point)))
                     (setq overlay (make-overlay (point) (point) buffer nil nil))
                     (overlay-put overlay 'face 'codex-ide-command-output-face)
+                    (overlay-put overlay codex-ide-item-result-overlay-property overlay)
                     (overlay-put overlay codex-ide-command-output-overlay-property overlay)
                     (overlay-put overlay :session session)
                     (overlay-put overlay :item-id item-id)
+                    (overlay-put overlay :item-type (plist-get state :type))
+                    (overlay-put overlay :label (or (plist-get state :item-result-label)
+                                                    "output"))
                     (overlay-put overlay :header-start header-start)
                     (overlay-put overlay :display-text "")
                     (overlay-put overlay :line-count 0)
@@ -1663,11 +1768,11 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                     (overlay-put overlay :body-properties nil)
                     (codex-ide-renderer-insert-command-output-header
                      overlay
-                     (codex-ide--command-output-header-prefix-text overlay)
-                     #'codex-ide--toggle-command-output-overlay
-                     #'codex-ide--open-command-output-overlay
+                     (codex-ide--item-result-header-prefix-text overlay)
+                     #'codex-ide--toggle-item-result-overlay
+                     #'codex-ide--open-item-result-overlay
                      :keymap codex-ide-command-output-map
-                     :overlay-property codex-ide-command-output-overlay-property)
+                     :overlay-property codex-ide-item-result-overlay-property)
                     (setq header-end (copy-marker (point)))
                     (setq body-start (copy-marker (point)))
                     (setq body-end (copy-marker (point)))
@@ -1689,18 +1794,29 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                       (codex-ide--restore-input-point-marker restore-point))
                      (moving
                       (goto-char (point-max)))))))))
-        (setq state (plist-put state :command-output-overlay overlay))
-        (setq state (plist-put state :command-output-anchor-marker nil))
+        (setq state (plist-put state :item-result-overlay overlay))
+        (setq state (plist-put state :item-result-anchor-marker nil))
+        (when (equal (plist-get state :type) "commandExecution")
+          (setq state (plist-put state :command-output-overlay overlay))
+          (setq state (plist-put state :command-output-anchor-marker nil)))
         (codex-ide--put-item-state session item-id state)
         overlay)))))
 
-(defun codex-ide--append-command-output-text (session item-id text)
-  "Append command output TEXT for ITEM-ID in SESSION."
+(defun codex-ide--ensure-command-output-block (session item-id)
+  "Return the command output overlay for ITEM-ID in SESSION, creating it."
+  (codex-ide--ensure-item-result-block session item-id))
+
+(defun codex-ide--append-item-result-text (session item-id text)
+  "Append item result TEXT for ITEM-ID in SESSION."
   (when (and (stringp text) (not (string-empty-p text)))
-    (when-let ((overlay (codex-ide--ensure-command-output-block session item-id)))
-      (let ((state-output-text
-             (plist-get (codex-ide--item-state session item-id) :output-text))
-            (previous (or (overlay-get overlay :output-fallback-text) ""))
+    (when-let ((overlay (codex-ide--ensure-item-result-block session item-id)))
+      (let* ((state (codex-ide--item-state session item-id))
+             (state-output-text
+              (or (plist-get state :item-result-text)
+                  (plist-get state :output-text)))
+             (previous (or (overlay-get overlay :item-result-fallback-text)
+                           (overlay-get overlay :output-fallback-text)
+                           ""))
             output-text
             visible-range
             visible-output
@@ -1721,7 +1837,9 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                   (and truncated
                        (codex-ide--command-output-truncation-notice))
                   ""))
-        (overlay-put overlay :output-fallback-text output-text)
+        (overlay-put overlay :item-result-fallback-text output-text)
+        (when (equal (plist-get state :type) "commandExecution")
+          (overlay-put overlay :output-fallback-text output-text))
         (let* ((line-count (codex-ide--command-output-line-count output-text))
                (visible-line-count
                 (codex-ide--command-output-line-count visible-output)))
@@ -1737,55 +1855,75 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
           (overlay-put overlay
                        :body-properties
                        (codex-ide--current-agent-text-properties)))
-        (codex-ide--set-command-output-header overlay)
-        (codex-ide--set-command-output-body
+        (codex-ide--set-item-result-header overlay)
+        (codex-ide--set-item-result-body
          overlay
          (or (overlay-get overlay :display-text) ""))))))
+
+(defun codex-ide--append-command-output-text (session item-id text)
+  "Append command output TEXT for ITEM-ID in SESSION."
+  (codex-ide--append-item-result-text session item-id text))
 
 (defun codex-ide--render-command-output-delta (session item-id delta)
   "Render streamed command output DELTA for ITEM-ID in SESSION."
   (codex-ide--append-command-output-text session item-id delta))
 
-(defun codex-ide--complete-command-output-block (session item-id output)
-  "Ensure command output for ITEM-ID is rendered and folded after completion."
+(defun codex-ide--complete-item-result-block (session item-id output)
+  "Ensure item result for ITEM-ID is rendered and folded after completion."
   (let* ((state (codex-ide--item-state session item-id))
-         (overlay (plist-get state :command-output-overlay)))
+         (overlay (or (plist-get state :item-result-overlay)
+                      (plist-get state :command-output-overlay))))
     (when (and (stringp output)
                (not (string-empty-p output))
                (not (and (overlayp overlay)
                          (buffer-live-p (overlay-buffer overlay)))))
-      (codex-ide--append-command-output-text session item-id output)
+      (codex-ide--append-item-result-text session item-id output)
       (setq state (codex-ide--item-state session item-id)
-            overlay (plist-get state :command-output-overlay)))
+            overlay (or (plist-get state :item-result-overlay)
+                        (plist-get state :command-output-overlay))))
     (when (and (overlayp overlay)
                (buffer-live-p (overlay-buffer overlay)))
       (overlay-put overlay :complete t)
       (overlay-put overlay :folded t)
       (overlay-put overlay 'invisible t)
-      (codex-ide--set-command-output-header overlay)
-      (codex-ide--set-command-output-body
+      (codex-ide--set-item-result-header overlay)
+      (codex-ide--set-item-result-body
        overlay
        (or (overlay-get overlay :display-text) "")))))
 
-(defun codex-ide--command-output-overlay-at-point (&optional pos)
-  "Return the command output overlay at POS, or nil."
+(defun codex-ide--complete-command-output-block (session item-id output)
+  "Ensure command output for ITEM-ID is rendered and folded after completion."
+  (codex-ide--complete-item-result-block session item-id output))
+
+(defun codex-ide--item-result-overlay-at-point (&optional pos)
+  "Return the item result overlay at POS, or nil."
   (let* ((pos (or pos (point)))
-         (overlay (get-char-property pos codex-ide-command-output-overlay-property)))
+         (overlay (get-char-property pos codex-ide-item-result-overlay-property)))
     (cond
      ((overlayp overlay) overlay)
      ((and (> pos (point-min))
            (overlayp (get-char-property
                       (1- pos)
-                      codex-ide-command-output-overlay-property)))
-      (get-char-property (1- pos) codex-ide-command-output-overlay-property))
+                      codex-ide-item-result-overlay-property)))
+      (get-char-property (1- pos) codex-ide-item-result-overlay-property))
      (t nil))))
+
+(defun codex-ide--command-output-overlay-at-point (&optional pos)
+  "Return the command output overlay at POS, or nil."
+  (codex-ide--item-result-overlay-at-point pos))
+
+(defun codex-ide-toggle-item-result-at-point (&optional pos)
+  "Toggle an item result block at POS.
+Return non-nil when an item result block was found."
+  (interactive)
+  (when-let ((overlay (codex-ide--item-result-overlay-at-point pos)))
+    (codex-ide--toggle-item-result-overlay overlay)))
 
 (defun codex-ide-toggle-command-output-at-point (&optional pos)
   "Toggle a command output block at POS.
 Return non-nil when a command output block was found."
   (interactive)
-  (when-let ((overlay (codex-ide--command-output-overlay-at-point pos)))
-    (codex-ide--toggle-command-output-overlay overlay)))
+  (codex-ide-toggle-item-result-at-point pos))
 
 (defun codex-ide--command-search-summary (command)
   "Return a semantic search summary for COMMAND, or nil."
@@ -2054,17 +2192,28 @@ Return non-nil when a command output block was found."
                        (codex-ide--display-command-argv
                         (alist-get 'command item))))))
           (setq state (plist-put state :details-rendered t))
-          (when (equal item-type "commandExecution")
-            ;; Keep delayed command output anchored directly after the command
+          (when (member item-type '("commandExecution" "mcpToolCall"))
+            ;; Keep delayed item result output anchored directly after the item
             ;; block; later transcript inserts should not move this placeholder
             ;; forward.
             (setq state
                   (plist-put state
-                             :command-output-anchor-marker
+                             :item-result-anchor-marker
                              (with-current-buffer buffer
                                (copy-marker
                                 (codex-ide--transcript-insertion-position
                                  buffer))))))
+          (setq state
+                (plist-put state
+                           :item-result-label
+                           (if (equal item-type "mcpToolCall")
+                               "result"
+                             "output")))
+          (when (equal item-type "commandExecution")
+            (setq state
+                  (plist-put state
+                             :command-output-anchor-marker
+                             (plist-get state :item-result-anchor-marker))))
           (setq state (plist-put state :saw-output nil))
           (codex-ide--put-item-state session item-id state))
         (when-let ((pending-output
@@ -2171,6 +2320,13 @@ Return non-nil when a command output block was found."
             (codex-ide--item-detail-line "declined")
             'warning)))))
         ("mcpToolCall"
+         (when-let ((result-text (codex-ide--mcp-result-text item)))
+           (let ((state (or (codex-ide--item-state session item-id) '())))
+             (codex-ide--put-item-state
+              session
+              item-id
+              (plist-put state :item-result-text result-text)))
+           (codex-ide--complete-item-result-block session item-id result-text))
          (when-let ((error-info (alist-get 'error item)))
            (codex-ide--append-agent-text
             buffer

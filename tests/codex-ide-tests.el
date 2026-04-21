@@ -1357,6 +1357,89 @@
         (should-not (overlay-get overlay 'invisible))
         (should (string-match-p "    hello\n    world" (buffer-string)))))))
 
+(ert-deftest codex-ide-mcp-tool-call-renders-expandable-result-block ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "mcp-1")
+         (type . "mcpToolCall")
+         (server . "emacs")
+         (tool . "get_buffer_text")
+         (arguments . ((buffer . "scratch")))))
+      (codex-ide--render-item-completion
+       session
+       '((id . "mcp-1")
+         (type . "mcpToolCall")
+         (status . "completed")
+         (result . ((text . "line 1\nline 2\n")))))
+      (goto-char (point-min))
+      (search-forward "* Called emacs/get_buffer_text")
+      (should (search-forward "result: 2 lines [expand]" nil t))
+      (let ((overlay (get-char-property
+                      (match-beginning 0)
+                      codex-ide-item-result-overlay-property)))
+        (should (overlayp overlay))
+        (should (overlay-get overlay 'invisible))
+        (should-not (string-match-p "    line 1\n    line 2" (buffer-string)))
+        (codex-ide-toggle-item-result-at-point (match-beginning 0))
+        (should-not (overlay-get overlay 'invisible))
+        (should (string-match-p "result: 2 lines \\[fold\\]"
+                                (buffer-string)))
+        (should (string-match-p "    line 1\n    line 2"
+                                (buffer-string)))))))
+
+(ert-deftest codex-ide-mcp-tool-call-result-stays-with-call-when-created-late ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "mcp-1")
+         (type . "mcpToolCall")
+         (server . "emacs")
+         (tool . "get_buffer_text")))
+      (codex-ide--handle-notification
+       session
+       '((method . "item/agentMessage/delta")
+         (params . ((itemId . "msg-1")
+                    (delta . "Later assistant text\n")))))
+      (codex-ide--render-item-completion
+       session
+       '((id . "mcp-1")
+         (type . "mcpToolCall")
+         (status . "completed")
+         (result . ((text . "tool result\n")))))
+      (codex-ide--render-item-completion
+       session
+       '((id . "msg-1")
+         (type . "agentMessage")
+         (status . "completed")))
+      (goto-char (point-min))
+      (search-forward "* Called emacs/get_buffer_text")
+      (let ((call-pos (match-beginning 0)))
+        (search-forward "result: 1 line [expand]")
+        (let ((result-pos (match-beginning 0)))
+          (search-forward "Later assistant text")
+          (let ((assistant-pos (match-beginning 0)))
+            (should (< call-pos result-pos))
+            (should (< result-pos assistant-pos))))))))
+
 (ert-deftest codex-ide-command-output-stays-with-command-when-created-after-later-transcript-text ()
   (with-temp-buffer
     (codex-ide-session-mode)
