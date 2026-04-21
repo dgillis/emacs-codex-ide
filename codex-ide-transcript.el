@@ -82,6 +82,14 @@
 (defvar codex-ide--current-agent-item-type nil
   "Item type associated with the agent transcript text being inserted.")
 
+(defvar codex-ide--preserve-transcript-window-follow-anchor t
+  "When non-nil, transcript window restoration may keep following the anchor.
+
+Streaming transcript appends should leave this enabled so windows already
+tracking the live tail keep doing so.  Interactive in-place rewrites, such as
+expanding or folding a command output block, should bind this to nil so the
+clicked window stays where it was.")
+
 (defun codex-ide--update-mode-line (&optional session)
   "Refresh the mode line indicator for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
@@ -204,7 +212,8 @@ at the bottom of the live session."
    (lambda (window)
      (list :window window
            :follow-anchor
-           (codex-ide--transcript-window-follows-anchor-p window anchor)
+           (and codex-ide--preserve-transcript-window-follow-anchor
+                (codex-ide--transcript-window-follows-anchor-p window anchor))
            :start-marker (copy-marker (window-start window))
            :point-marker (copy-marker (window-point window))))
    (get-buffer-window-list (current-buffer) nil t)))
@@ -1557,7 +1566,8 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
 Return non-nil when OVERLAY was toggled."
   (when (and (overlayp overlay)
              (buffer-live-p (overlay-buffer overlay)))
-    (let ((folded (not (overlay-get overlay :folded))))
+    (let ((folded (not (overlay-get overlay :folded)))
+          (codex-ide--preserve-transcript-window-follow-anchor nil))
       (overlay-put overlay :folded folded)
       (overlay-put overlay 'invisible (and folded t))
       (codex-ide--set-item-result-header overlay)

@@ -1676,6 +1676,71 @@
         (should-not (string-match-p "    hello\n    world"
                                     (buffer-string)))))))
 
+(ert-deftest codex-ide-command-output-toggle-preserves-window-when-in-place ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-command-output-toggle-window*")))
+      (unwind-protect
+          (let ((window (selected-window)))
+            (with-current-buffer buffer
+              (erase-buffer)
+              (codex-ide-session-mode)
+              (let ((session (make-codex-ide-session
+                              :directory default-directory
+                              :buffer buffer
+                              :status "idle"
+                              :item-states (make-hash-table :test 'equal))))
+                (setq-local codex-ide--session session)
+                (dotimes (n 120)
+                  (codex-ide--append-agent-text
+                   buffer
+                   (format "context %03d\n" n)))
+                (codex-ide--insert-input-prompt session "submitted prompt")
+                (codex-ide--begin-turn-display session)
+                (codex-ide--render-item-start
+                 session
+                 '((id . "call-1")
+                   (type . "commandExecution")
+                   (command . ["echo" "hello"])))
+                (codex-ide--render-item-completion
+                 session
+                 '((id . "call-1")
+                   (type . "commandExecution")
+                   (status . "completed")
+                   (exitCode . 0)
+                   (aggregatedOutput . "hello\nworld\n")))
+                (let ((inhibit-read-only t))
+                  (goto-char (point-max))
+                  (dotimes (n 200)
+                    (insert (format "tail %03d\n" n)))))
+              (goto-char (point-min))
+              (search-forward "[expand]")
+              (let ((toggle-pos (match-beginning 0)))
+                (set-window-buffer window buffer)
+                (set-window-point window toggle-pos)
+                (set-window-start window
+                                  (save-excursion
+                                    (goto-char toggle-pos)
+                                    (forward-line -3)
+                                    (point))
+                                  t)
+                (redisplay t)
+                (let ((window-start-before (window-start window))
+                      (window-point-before (window-point window)))
+                  (codex-ide-toggle-command-output-at-point toggle-pos)
+                  (should (= (window-start window) window-start-before))
+                  (should (= (window-point window) window-point-before))
+                  (should (< (window-point window)
+                             (with-current-buffer buffer
+                               (point-max))))
+                  (should (overlay-get
+                           (get-char-property
+                            toggle-pos
+                            codex-ide-command-output-overlay-property)
+                           'invisible))))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
 (ert-deftest codex-ide-command-output-header-controls-are-scoped ()
   (with-temp-buffer
     (codex-ide-session-mode)
