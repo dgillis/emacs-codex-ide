@@ -635,6 +635,138 @@
       (should (= (point) (point-max)))
       (should (equal (codex-ide--current-input session) "steer draft")))))
 
+(ert-deftest codex-ide-streaming-append-preserves-scrolled-transcript-window ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-transcript-window*")))
+      (unwind-protect
+          (let* ((top-window (selected-window))
+                 (bottom-window (split-window-below)))
+            (ignore-errors
+              (window-resize top-window
+                             (- 8 (window-total-height top-window))))
+            (with-current-buffer buffer
+              (erase-buffer)
+              (dotimes (line 400)
+                (insert (format "line %02d\n" line))))
+            (set-window-buffer top-window buffer)
+            (set-window-buffer bottom-window buffer)
+            (set-window-start top-window (point-min) t)
+            (set-window-point top-window (point-min))
+            (with-selected-window bottom-window
+              (goto-char (point-max))
+              (recenter -1))
+            (redisplay t)
+            (cl-letf (((symbol-function 'codex-ide--transcript-window-follows-anchor-p)
+                       (lambda (window _anchor)
+                         (eq window bottom-window))))
+              (let ((top-start (window-start top-window))
+                    (top-point (window-point top-window)))
+                (with-current-buffer buffer
+                  (codex-ide--append-to-buffer buffer "streamed tail\n"))
+                (should (= (window-start top-window) top-start))
+                (should (= (window-point top-window) top-point))
+                (should (>= (window-end bottom-window t)
+                            (with-current-buffer buffer
+                              (point-max)))))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest codex-ide-streaming-follow-tail-when-buffer-end-is-visible ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-transcript-end-visible*")))
+      (unwind-protect
+          (let ((window (selected-window)))
+            (with-current-buffer buffer
+              (erase-buffer)
+              (dotimes (line 80)
+                (insert (format "line %02d\n" line)))
+              (insert "> live prompt\n"))
+            (set-window-buffer window buffer)
+            (with-selected-window window
+              (goto-char (point-max))
+              (recenter -1))
+            (let ((anchor (with-current-buffer buffer
+                            (save-excursion
+                              (goto-char (point-max))
+                              (forward-line -1)
+                              (point)))))
+              (should (< anchor
+                         (with-current-buffer buffer (point-max))))
+              (should (>= (window-end window t)
+                          (with-current-buffer buffer (point-max))))
+              (should (> (window-point window)
+                         (window-start window)))
+              (with-current-buffer buffer
+                (should (codex-ide--transcript-window-follows-anchor-p
+                         window
+                         anchor)))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest codex-ide-streaming-append-advances-window-that-was-following-tail ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-transcript-follow-tail*")))
+      (unwind-protect
+          (let ((window (selected-window)))
+            (with-current-buffer buffer
+              (erase-buffer)
+              (dotimes (line 80)
+                (insert (format "line %02d\n" line))))
+            (set-window-buffer window buffer)
+            (with-selected-window window
+              (goto-char (point-max))
+              (recenter -1))
+            (dotimes (n 3)
+              (with-current-buffer buffer
+                (codex-ide--append-to-buffer buffer (format "delta %d\n" n)))
+              (should (>= (window-end window t)
+                          (with-current-buffer buffer
+                            (point-max))))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest codex-ide-streaming-markdown-render-preserves-scrolled-transcript-window ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-markdown-window*")))
+      (unwind-protect
+          (let* ((top-window (selected-window))
+                 (bottom-window (split-window-below)))
+            (ignore-errors
+              (window-resize top-window
+                             (- 8 (window-total-height top-window))))
+            (with-current-buffer buffer
+              (erase-buffer)
+              (dotimes (line 400)
+                (insert (format "context %02d\n" line)))
+              (insert "\nUse `code` here.\n"))
+            (set-window-buffer top-window buffer)
+            (set-window-buffer bottom-window buffer)
+            (set-window-start top-window (point-min) t)
+            (set-window-point top-window (point-min))
+            (with-selected-window bottom-window
+              (goto-char (point-max))
+              (recenter -1))
+            (redisplay t)
+            (cl-letf (((symbol-function 'codex-ide--transcript-window-follows-anchor-p)
+                       (lambda (window _anchor)
+                         (eq window bottom-window))))
+              (let ((top-start (window-start top-window))
+                    (top-point (window-point top-window)))
+                (with-current-buffer buffer
+                  (codex-ide--maybe-render-markdown-region (point-min) (point-max)))
+                (should (= (window-start top-window) top-start))
+                (should (= (window-point top-window) top-point))
+                (with-selected-window bottom-window
+                  (goto-char (point-max))
+                  (search-backward "code")
+                  (should (get-text-property (point) 'codex-ide-markdown))))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
 (ert-deftest codex-ide-finish-turn-separates-active-prompt-from-output ()
   (with-temp-buffer
     (codex-ide-session-mode)
