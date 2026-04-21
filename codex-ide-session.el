@@ -142,7 +142,6 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
   (when session
     (let ((process (codex-ide-session-process session))
           (stderr-process (codex-ide-session-stderr-process session))
-          (log-buffer (codex-ide-session-log-buffer session))
           (directory (codex-ide-session-directory session))
           (buffer (codex-ide-session-buffer session))
           (thread-id (codex-ide-session-thread-id session))
@@ -160,10 +159,8 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
        :thread-id thread-id
        :status status)
       (codex-ide--cleanup-session session)
-      (when (and kill-log-buffer
-                 (buffer-live-p log-buffer))
-        (let ((kill-buffer-query-functions nil))
-          (kill-buffer log-buffer))))))
+      (when kill-log-buffer
+        (codex-ide--kill-log-buffer session)))))
 
 (defun codex-ide--handle-session-buffer-killed ()
   "Clean up the owning Codex session when its session buffer is killed."
@@ -241,7 +238,6 @@ protocol requests such as thread listing."
                      :name-suffix name-suffix
                      :buffer buffer
                      :query-only query-only
-                     :log-buffer nil
                      :created-at (codex-ide--timestamp-now)
                      :request-counter 0
                      :pending-requests (make-hash-table :test 'equal)
@@ -277,17 +273,15 @@ protocol requests such as thread listing."
             (process-put stderr-process 'codex-session session)
             (when buffer
               (codex-ide--initialize-session-buffer session buffer working-dir))
-            (codex-ide--ensure-log-buffer session)
             (set-process-query-on-exit-flag process nil)
             (set-process-query-on-exit-flag stderr-process nil)
             (codex-ide--set-session session)
             (codex-ide-log-message
              session
              (if buffer
-                 "Created session buffer %s and log buffer %s"
-               "Created query-only session and log buffer %s")
-             (and buffer (buffer-name buffer))
-             (buffer-name (codex-ide-session-log-buffer session)))
+                 "Created session buffer %s"
+               "Created query-only session")
+             (and buffer (buffer-name buffer)))
             (codex-ide-log-message
              session
              "Starting process: %s"

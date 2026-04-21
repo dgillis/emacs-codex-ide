@@ -190,7 +190,7 @@
           (let ((session (car codex-ide--sessions)))
             (should (codex-ide-session-query-only session))
             (should-not (codex-ide-session-buffer session))
-            (should (buffer-live-p (codex-ide-session-log-buffer session)))))))))
+            (should (buffer-live-p (codex-ide-test--log-buffer session)))))))))
 
 (ert-deftest codex-ide-status-keeps-all-sibling-headings-visible-when-entries-are-collapsed ()
   (let* ((root-dir (codex-ide-test--make-temp-project))

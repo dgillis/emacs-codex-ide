@@ -45,6 +45,29 @@
         (let ((kill-buffer-query-functions nil))
           (kill-buffer buffer))))))
 
+(defun codex-ide-test--log-buffer-name (session)
+  "Return the computed log buffer name for SESSION."
+  (if (codex-ide-session-query-only session)
+      (codex-ide--append-buffer-name-suffix
+       (format "*%s-log[%s]-query*"
+               codex-ide-buffer-name-prefix
+               (file-name-nondirectory
+                (directory-file-name (codex-ide-session-directory session))))
+       (and (integerp (codex-ide-session-name-suffix session))
+            (> (codex-ide-session-name-suffix session) 0)
+            (codex-ide-session-name-suffix session)))
+    (replace-regexp-in-string
+     "\\*$" "-log*"
+     (if (buffer-live-p (codex-ide-session-buffer session))
+         (buffer-name (codex-ide-session-buffer session))
+       (codex-ide--session-buffer-name
+        (codex-ide-session-directory session)
+        (codex-ide-session-name-suffix session))))))
+
+(defun codex-ide-test--log-buffer (session)
+  "Return SESSION's computed log buffer, if any."
+  (get-buffer (codex-ide-test--log-buffer-name session)))
+
 (defmacro codex-ide-test-with-fixture (directory &rest body)
   "Run BODY in an isolated codex-ide fixture rooted at DIRECTORY."
   (declare (indent 1) (debug t))
@@ -57,6 +80,7 @@
 	          (codex-ide-persisted-project-state (make-hash-table :test 'equal))
           (codex-ide--session-metadata (make-hash-table :test 'eq))
           (codex-ide-session-baseline-prompt nil)
+          (codex-ide-logging-enabled t)
           (codex-ide-new-session-split nil)
           (codex-ide-want-mcp-bridge 'prompt)
           (codex-ide-new-session-split nil)

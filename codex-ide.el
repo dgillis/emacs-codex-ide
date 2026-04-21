@@ -176,6 +176,12 @@
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-logging-enabled nil
+  "Whether codex-ide should create and write diagnostic log buffers."
+  :type 'boolean
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-log-stream-deltas nil
   "Whether to log every streamed output delta."
   :type 'boolean
@@ -186,6 +192,15 @@
   "How many recent turns to summarize when resuming a stored thread."
   :type 'integer
   :group 'codex-ide)
+
+;;;###autoload
+(defun codex-ide-toggle-logging-enabled ()
+  "Toggle `codex-ide-logging-enabled' interactively."
+  (interactive)
+  (setq codex-ide-logging-enabled
+        (not codex-ide-logging-enabled))
+  (message "codex-ide logging %s"
+           (if codex-ide-logging-enabled "enabled" "disabled")))
 
 (require 'codex-ide-core)
 (require 'codex-ide-errors)

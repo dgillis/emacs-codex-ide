@@ -81,6 +81,13 @@
     (should-not (codex-ide--environment-variable-value "COLORTERM" env))
     (should-not (codex-ide--environment-variable-value "CLICOLOR" env))))
 
+(ert-deftest codex-ide-toggle-logging-enabled-flips-state ()
+  (let ((codex-ide-logging-enabled nil))
+    (codex-ide-toggle-logging-enabled)
+    (should codex-ide-logging-enabled)
+    (codex-ide-toggle-logging-enabled)
+    (should-not codex-ide-logging-enabled)))
+
 (ert-deftest codex-ide-create-process-session-builds-buffers-and-registers-session ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
@@ -97,10 +104,10 @@
             (should (derived-mode-p 'codex-ide-session-mode))
             (should visual-line-mode)
             (should (string-match-p "Codex session for" (buffer-string))))
-          (with-current-buffer (codex-ide-session-log-buffer session)
+          (with-current-buffer (codex-ide-test--log-buffer session)
             (should (derived-mode-p 'codex-ide-log-mode))
             (should (equal (buffer-name)
-                           (format "*%s-log[%s]*"
+                           (format "*%s[%s]-log*"
                                    codex-ide-buffer-name-prefix
                                    (file-name-nondirectory
                                     (directory-file-name project-dir)))))
@@ -122,16 +129,26 @@
           (should (codex-ide-test-process-p (codex-ide-session-process session)))
           (should (memq session codex-ide--sessions))
           (should-not (codex-ide-session-buffer session))
-          (should (buffer-live-p (codex-ide-session-log-buffer session)))
+          (should (buffer-live-p (codex-ide-test--log-buffer session)))
           (should-not (eq session
                           (codex-ide--last-active-session-for-directory project-dir)))
-          (with-current-buffer (codex-ide-session-log-buffer session)
+          (with-current-buffer (codex-ide-test--log-buffer session)
             (should (derived-mode-p 'codex-ide-log-mode))
             (should (equal (buffer-name)
                            (format "*%s-log[%s]-query*"
                                    codex-ide-buffer-name-prefix
                                    (file-name-nondirectory
                                     (directory-file-name project-dir)))))))))))
+
+(ert-deftest codex-ide-create-process-session-skips-log-buffer-when-logging-disabled ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((codex-ide-logging-enabled nil))
+          (let ((session (codex-ide--create-process-session)))
+            (should (string= (codex-ide-session-directory session)
+                             (directory-file-name (file-truename project-dir))))
+            (should-not (get-buffer (codex-ide-test--log-buffer-name session)))))))))
 
 (ert-deftest codex-ide-create-process-session-emits-created-event ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -427,8 +444,8 @@
                                  codex-ide-buffer-name-prefix
                                  (file-name-nondirectory
                                   (directory-file-name project-dir)))))
-          (should (equal (buffer-name (codex-ide-session-log-buffer second))
-                         (format "*%s-log[%s]<1>*"
+          (should (equal (codex-ide-test--log-buffer-name second)
+                         (format "*%s[%s]<1>-log*"
                                  codex-ide-buffer-name-prefix
                                  (file-name-nondirectory
                                   (directory-file-name project-dir)))))
@@ -1858,7 +1875,7 @@
             (should (string= (codex-ide-session-status session) "idle"))
             (should (codex-ide-session-query-only session))
             (should-not (codex-ide-session-buffer session))
-            (should (buffer-live-p (codex-ide-session-log-buffer session)))))))))
+            (should (buffer-live-p (codex-ide-test--log-buffer session)))))))))
 
 (ert-deftest codex-ide-show-session-buffer-errors-for-query-only-session ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -3145,7 +3162,7 @@
           (codex-ide--stderr-filter
            stderr-process
            "\x1b[2m2026-04-09T16:58:08.078004Z\x1b[0m \x1b[31mERROR\x1b[0m failed to connect\n")
-          (with-current-buffer (codex-ide-session-log-buffer session)
+          (with-current-buffer (codex-ide-test--log-buffer session)
             (let ((text (buffer-string)))
               (should (string-match-p "stderr: 2026-04-09T16:58:08.078004Z ERROR failed to connect" text))
               (should-not (string-match-p "\x1b\\[" text))))
@@ -3239,7 +3256,7 @@
               (should-not (string-match-p "Inspect the session log for details" text))
               (should-not (string-match-p "\\[Codex notification:" text))
               (should (codex-ide--input-prompt-active-p session))))
-          (with-current-buffer (codex-ide-session-log-buffer session)
+          (with-current-buffer (codex-ide-test--log-buffer session)
             (should (string-match-p "Retryable Codex error: Reconnecting... 2/5"
                                     (buffer-string)))))))))
 
@@ -3354,7 +3371,7 @@
             (let ((marker (get-text-property (1- (point)) codex-ide-log-marker-property)))
               (should (markerp marker))
               (should (eq (marker-buffer marker)
-                          (codex-ide-session-log-buffer session)))
+                          (codex-ide-test--log-buffer session)))
               (with-current-buffer (marker-buffer marker)
                 (goto-char marker)
                 (should (looking-at-p

@@ -26,12 +26,40 @@
 (require 'codex-ide-core)
 (require 'codex-ide-errors)
 
+(defvar codex-ide-logging-enabled)
 (defvar codex-ide-log-max-lines)
 
 (define-derived-mode codex-ide-log-mode special-mode "Codex-IDE-Log"
   "Major mode for Codex IDE log buffers."
   (buffer-disable-undo)
   (setq-local truncate-lines t))
+
+(defun codex-ide--log-buffer-name-from-session-buffer-name (buffer-name)
+  "Return a log buffer name derived from transcript BUFFER-NAME."
+  (if (string-match "\\`\\(.*\\)\\*\\'" buffer-name)
+      (concat (match-string 1 buffer-name) "-log*")
+    (concat buffer-name "-log")))
+
+(defun codex-ide--query-log-buffer-name (session)
+  "Return the computed query-session log buffer name for SESSION."
+  (codex-ide--append-buffer-name-suffix
+   (format "*%s-log[%s]-query*"
+           codex-ide-buffer-name-prefix
+           (codex-ide--project-name (codex-ide-session-directory session)))
+   (and (integerp (codex-ide-session-name-suffix session))
+        (> (codex-ide-session-name-suffix session) 0)
+        (codex-ide-session-name-suffix session))))
+
+(defun codex-ide--log-buffer-name (session)
+  "Return the computed log buffer name for SESSION."
+  (if (codex-ide-session-query-only session)
+      (codex-ide--query-log-buffer-name session)
+    (codex-ide--log-buffer-name-from-session-buffer-name
+     (if (buffer-live-p (codex-ide-session-buffer session))
+         (buffer-name (codex-ide-session-buffer session))
+       (codex-ide--session-buffer-name
+        (codex-ide-session-directory session)
+        (codex-ide-session-name-suffix session))))))
 
 (defun codex-ide--initialize-log-buffer (buffer directory)
   "Prepare BUFFER for logging for DIRECTORY."
@@ -45,22 +73,12 @@
 
 (defun codex-ide--ensure-log-buffer (session)
   "Return SESSION's log buffer, creating it when needed."
-  (or (and (buffer-live-p (codex-ide-session-log-buffer session))
-           (codex-ide-session-log-buffer session))
-      (let* ((directory (codex-ide-session-directory session))
-             (buffer (get-buffer-create
-                      (if (codex-ide-session-query-only session)
-                          (codex-ide--query-log-buffer-name
-                           directory
-                           (and (integerp (codex-ide-session-name-suffix session))
-                                (> (codex-ide-session-name-suffix session) 0)
-                                (codex-ide-session-name-suffix session)))
-                        (codex-ide--log-buffer-name
-                         directory
-                         (codex-ide-session-name-suffix session))))))
-        (codex-ide--initialize-log-buffer buffer directory)
-        (setf (codex-ide-session-log-buffer session) buffer)
-        buffer)))
+  (when codex-ide-logging-enabled
+    (or (get-buffer (codex-ide--log-buffer-name session))
+        (let* ((directory (codex-ide-session-directory session))
+               (buffer (get-buffer-create (codex-ide--log-buffer-name session))))
+          (codex-ide--initialize-log-buffer buffer directory)
+          buffer))))
 
 (defun codex-ide--trim-log-buffer ()
   "Trim the current log buffer to `codex-ide-log-max-lines'."
@@ -75,18 +93,24 @@
 
 (defun codex-ide-log-message (session format-string &rest args)
   "Append a formatted log line for SESSION using FORMAT-STRING and ARGS."
-  (let ((buffer (codex-ide--ensure-log-buffer session))
-        (text (apply #'format format-string args)))
-    (with-current-buffer buffer
-      (let ((inhibit-read-only t)
-            (marker nil))
-        (goto-char (point-max))
-        (setq marker (copy-marker (point)))
-        (insert (format "[%s] %s\n"
-                        (format-time-string "%Y-%m-%d %H:%M:%S")
-                        text))
-        (codex-ide--trim-log-buffer)
-        marker))))
+  (when-let ((buffer (codex-ide--ensure-log-buffer session)))
+    (let ((text (apply #'format format-string args)))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t)
+              (marker nil))
+          (goto-char (point-max))
+          (setq marker (copy-marker (point)))
+          (insert (format "[%s] %s\n"
+                          (format-time-string "%Y-%m-%d %H:%M:%S")
+                          text))
+          (codex-ide--trim-log-buffer)
+          marker)))))
+
+(defun codex-ide--kill-log-buffer (session)
+  "Kill SESSION's currently computed log buffer, if live."
+  (when-let ((buffer (get-buffer (codex-ide--log-buffer-name session))))
+    (let ((kill-buffer-query-functions nil))
+      (kill-buffer buffer))))
 
 (defun codex-ide--stderr-filter (process chunk)
   "Append stderr CHUNK from PROCESS to the owning session log."

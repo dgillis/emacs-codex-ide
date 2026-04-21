@@ -72,7 +72,7 @@ Add this variable to `savehist-additional-variables' to persist it.")
     :initform nil
     :accessor codex-ide-session-directory)
    (name-suffix
-    :initarg :name-suffix
+   :initarg :name-suffix
     :initform nil
     :accessor codex-ide-session-name-suffix)
    (process
@@ -87,10 +87,6 @@ Add this variable to `savehist-additional-variables' to persist it.")
     :initarg :buffer
     :initform nil
     :accessor codex-ide-session-buffer)
-   (log-buffer
-    :initarg :log-buffer
-    :initform nil
-    :accessor codex-ide-session-log-buffer)
    (thread-id
     :initarg :thread-id
     :initform nil
@@ -225,22 +221,6 @@ When SUFFIX is nil, return BUFFER-NAME unchanged."
   "Generate the Codex session buffer name for DIRECTORY and SUFFIX."
   (codex-ide--append-buffer-name-suffix
    (funcall codex-ide-buffer-name-function directory)
-   suffix))
-
-(defun codex-ide--log-buffer-name (directory &optional suffix)
-  "Generate the Codex log buffer name for DIRECTORY and SUFFIX."
-  (codex-ide--append-buffer-name-suffix
-   (format "*%s-log[%s]*"
-           codex-ide-buffer-name-prefix
-           (codex-ide--project-name directory))
-   suffix))
-
-(defun codex-ide--query-log-buffer-name (directory &optional suffix)
-  "Generate the query-session log buffer name for DIRECTORY and SUFFIX."
-  (codex-ide--append-buffer-name-suffix
-   (format "*%s-log[%s]-query*"
-           codex-ide-buffer-name-prefix
-           (codex-ide--project-name directory))
    suffix))
 
 (defun codex-ide--normalize-session-status (status)
