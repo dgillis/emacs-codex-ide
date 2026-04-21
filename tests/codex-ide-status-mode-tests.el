@@ -165,7 +165,7 @@
               (forward-line 1)
               (should (invisible-p (point))))))))))
 
-(ert-deftest codex-ide-status-cold-start-creates-query-session-buffer-header-and-prompt ()
+(ert-deftest codex-ide-status-cold-start-creates-query-only-session ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (requests nil))
     (codex-ide-test-with-fixture project-dir
@@ -188,18 +188,9 @@
                          '("initialize")))
           (should (= (length codex-ide--sessions) 1))
           (let ((session (car codex-ide--sessions)))
-            (should (codex-ide--input-prompt-active-p session))
-            (with-current-buffer (codex-ide-session-buffer session)
-              (should (string-match-p
-                       (concat "^Codex session for "
-                               (regexp-quote
-                                 (abbreviate-file-name
-                                 (codex-ide--normalize-directory project-dir))))
-                       (buffer-string)))
-              (should (markerp
-                       (codex-ide-session-input-prompt-start-marker session)))
-              (should (markerp
-                       (codex-ide-session-input-start-marker session))))))))))
+            (should (codex-ide-session-query-only session))
+            (should-not (codex-ide-session-buffer session))
+            (should (buffer-live-p (codex-ide-test--log-buffer session)))))))))
 
 (ert-deftest codex-ide-status-keeps-all-sibling-headings-visible-when-entries-are-collapsed ()
   (let* ((root-dir (codex-ide-test--make-temp-project))

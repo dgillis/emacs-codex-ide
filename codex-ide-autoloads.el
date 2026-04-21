@@ -65,12 +65,17 @@ Seconds to wait for synchronous app-server responses.")
 (defvar codex-ide-log-max-lines 10000 "\
 Maximum number of lines to keep in each Codex log buffer.")
 (custom-autoload 'codex-ide-log-max-lines "codex-ide" t)
+(defvar codex-ide-logging-enabled nil "\
+Whether codex-ide should create and write diagnostic log buffers.")
+(custom-autoload 'codex-ide-logging-enabled "codex-ide" t)
 (defvar codex-ide-log-stream-deltas nil "\
 Whether to log every streamed output delta.")
 (custom-autoload 'codex-ide-log-stream-deltas "codex-ide" t)
 (defvar codex-ide-resume-summary-turn-limit 100 "\
 How many recent turns to summarize when resuming a stored thread.")
 (custom-autoload 'codex-ide-resume-summary-turn-limit "codex-ide" t)
+(autoload 'codex-ide-toggle-logging-enabled "codex-ide" "\
+Toggle `codex-ide-logging-enabled' interactively." t)
 
 
 ;;; Generated autoloads from codex-ide-mcp-bridge.el

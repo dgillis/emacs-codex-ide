@@ -20,7 +20,8 @@
 (defun codex-ide-test--prompt-prefix-at-line ()
   "Return the visible prompt prefix string at the current line."
   (save-excursion
-    (beginning-of-line)
+    (let ((inhibit-field-text-motion t))
+      (beginning-of-line))
     (buffer-substring-no-properties
      (point)
      (min (+ (point) 2) (line-end-position)))))
@@ -81,6 +82,13 @@
     (should-not (codex-ide--environment-variable-value "COLORTERM" env))
     (should-not (codex-ide--environment-variable-value "CLICOLOR" env))))
 
+(ert-deftest codex-ide-toggle-logging-enabled-flips-state ()
+  (let ((codex-ide-logging-enabled nil))
+    (codex-ide-toggle-logging-enabled)
+    (should codex-ide-logging-enabled)
+    (codex-ide-toggle-logging-enabled)
+    (should-not codex-ide-logging-enabled)))
+
 (ert-deftest codex-ide-create-process-session-builds-buffers-and-registers-session ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
@@ -97,10 +105,10 @@
             (should (derived-mode-p 'codex-ide-session-mode))
             (should visual-line-mode)
             (should (string-match-p "Codex session for" (buffer-string))))
-          (with-current-buffer (codex-ide-session-log-buffer session)
+          (with-current-buffer (codex-ide-test--log-buffer session)
             (should (derived-mode-p 'codex-ide-log-mode))
             (should (equal (buffer-name)
-                           (format "*%s-log[%s]*"
+                           (format "*%s[%s]-log*"
                                    codex-ide-buffer-name-prefix
                                    (file-name-nondirectory
                                     (directory-file-name project-dir)))))
@@ -110,6 +118,38 @@
                               (codex-ide-session-process session))
                              'codex-session)
                   session)))))))
+
+(ert-deftest codex-ide-create-query-session-registers-headless-session ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-query-session)))
+          (should (string= (codex-ide-session-directory session)
+                           (directory-file-name (file-truename project-dir))))
+          (should (codex-ide-session-query-only session))
+          (should (codex-ide-test-process-p (codex-ide-session-process session)))
+          (should (memq session codex-ide--sessions))
+          (should-not (codex-ide-session-buffer session))
+          (should (buffer-live-p (codex-ide-test--log-buffer session)))
+          (should-not (eq session
+                          (codex-ide--last-active-session-for-directory project-dir)))
+          (with-current-buffer (codex-ide-test--log-buffer session)
+            (should (derived-mode-p 'codex-ide-log-mode))
+            (should (equal (buffer-name)
+                           (format "*%s-log[%s]-query*"
+                                   codex-ide-buffer-name-prefix
+                                   (file-name-nondirectory
+                                    (directory-file-name project-dir)))))))))))
+
+(ert-deftest codex-ide-create-process-session-skips-log-buffer-when-logging-disabled ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((codex-ide-logging-enabled nil))
+          (let ((session (codex-ide--create-process-session)))
+            (should (string= (codex-ide-session-directory session)
+                             (directory-file-name (file-truename project-dir))))
+            (should-not (get-buffer (codex-ide-test--log-buffer-name session)))))))))
 
 (ert-deftest codex-ide-create-process-session-emits-created-event ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -405,8 +445,8 @@
                                  codex-ide-buffer-name-prefix
                                  (file-name-nondirectory
                                   (directory-file-name project-dir)))))
-          (should (equal (buffer-name (codex-ide-session-log-buffer second))
-                         (format "*%s-log[%s]<1>*"
+          (should (equal (codex-ide-test--log-buffer-name second)
+                         (format "*%s[%s]<1>-log*"
                                  codex-ide-buffer-name-prefix
                                  (file-name-nondirectory
                                   (directory-file-name project-dir)))))
@@ -594,6 +634,138 @@
       (codex-ide--ensure-output-spacing (current-buffer))
       (should (= (point) (point-max)))
       (should (equal (codex-ide--current-input session) "steer draft")))))
+
+(ert-deftest codex-ide-streaming-append-preserves-scrolled-transcript-window ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-transcript-window*")))
+      (unwind-protect
+          (let* ((top-window (selected-window))
+                 (bottom-window (split-window-below)))
+            (ignore-errors
+              (window-resize top-window
+                             (- 8 (window-total-height top-window))))
+            (with-current-buffer buffer
+              (erase-buffer)
+              (dotimes (line 400)
+                (insert (format "line %02d\n" line))))
+            (set-window-buffer top-window buffer)
+            (set-window-buffer bottom-window buffer)
+            (set-window-start top-window (point-min) t)
+            (set-window-point top-window (point-min))
+            (with-selected-window bottom-window
+              (goto-char (point-max))
+              (recenter -1))
+            (redisplay t)
+            (cl-letf (((symbol-function 'codex-ide--transcript-window-follows-anchor-p)
+                       (lambda (window _anchor)
+                         (eq window bottom-window))))
+              (let ((top-start (window-start top-window))
+                    (top-point (window-point top-window)))
+                (with-current-buffer buffer
+                  (codex-ide--append-to-buffer buffer "streamed tail\n"))
+                (should (= (window-start top-window) top-start))
+                (should (= (window-point top-window) top-point))
+                (should (>= (window-end bottom-window t)
+                            (with-current-buffer buffer
+                              (point-max)))))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest codex-ide-streaming-follow-tail-when-buffer-end-is-visible ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-transcript-end-visible*")))
+      (unwind-protect
+          (let ((window (selected-window)))
+            (with-current-buffer buffer
+              (erase-buffer)
+              (dotimes (line 80)
+                (insert (format "line %02d\n" line)))
+              (insert "> live prompt\n"))
+            (set-window-buffer window buffer)
+            (with-selected-window window
+              (goto-char (point-max))
+              (recenter -1))
+            (let ((anchor (with-current-buffer buffer
+                            (save-excursion
+                              (goto-char (point-max))
+                              (forward-line -1)
+                              (point)))))
+              (should (< anchor
+                         (with-current-buffer buffer (point-max))))
+              (should (>= (window-end window t)
+                          (with-current-buffer buffer (point-max))))
+              (should (> (window-point window)
+                         (window-start window)))
+              (with-current-buffer buffer
+                (should (codex-ide--transcript-window-follows-anchor-p
+                         window
+                         anchor)))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest codex-ide-streaming-append-advances-window-that-was-following-tail ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-transcript-follow-tail*")))
+      (unwind-protect
+          (let ((window (selected-window)))
+            (with-current-buffer buffer
+              (erase-buffer)
+              (dotimes (line 80)
+                (insert (format "line %02d\n" line))))
+            (set-window-buffer window buffer)
+            (with-selected-window window
+              (goto-char (point-max))
+              (recenter -1))
+            (dotimes (n 3)
+              (with-current-buffer buffer
+                (codex-ide--append-to-buffer buffer (format "delta %d\n" n)))
+              (should (>= (window-end window t)
+                          (with-current-buffer buffer
+                            (point-max))))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest codex-ide-streaming-markdown-render-preserves-scrolled-transcript-window ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-markdown-window*")))
+      (unwind-protect
+          (let* ((top-window (selected-window))
+                 (bottom-window (split-window-below)))
+            (ignore-errors
+              (window-resize top-window
+                             (- 8 (window-total-height top-window))))
+            (with-current-buffer buffer
+              (erase-buffer)
+              (dotimes (line 400)
+                (insert (format "context %02d\n" line)))
+              (insert "\nUse `code` here.\n"))
+            (set-window-buffer top-window buffer)
+            (set-window-buffer bottom-window buffer)
+            (set-window-start top-window (point-min) t)
+            (set-window-point top-window (point-min))
+            (with-selected-window bottom-window
+              (goto-char (point-max))
+              (recenter -1))
+            (redisplay t)
+            (cl-letf (((symbol-function 'codex-ide--transcript-window-follows-anchor-p)
+                       (lambda (window _anchor)
+                         (eq window bottom-window))))
+              (let ((top-start (window-start top-window))
+                    (top-point (window-point top-window)))
+                (with-current-buffer buffer
+                  (codex-ide--maybe-render-markdown-region (point-min) (point-max)))
+                (should (= (window-start top-window) top-start))
+                (should (= (window-point top-window) top-point))
+                (with-selected-window bottom-window
+                  (goto-char (point-max))
+                  (search-backward "code")
+                  (should (get-text-property (point) 'codex-ide-markdown))))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
 
 (ert-deftest codex-ide-finish-turn-separates-active-prompt-from-output ()
   (with-temp-buffer
@@ -1834,15 +2006,11 @@
                                        (nreverse requests))
                            '("initialize")))
             (should (string= (codex-ide-session-status session) "idle"))
-            (should (codex-ide--input-prompt-active-p session))
-            (with-current-buffer (codex-ide-session-buffer session)
-              (should (string-prefix-p "Codex session for " (buffer-string)))
-              (should (markerp
-                       (codex-ide-session-input-prompt-start-marker session)))
-              (should (markerp
-                       (codex-ide-session-input-start-marker session))))))))))
+            (should (codex-ide-session-query-only session))
+            (should-not (codex-ide-session-buffer session))
+            (should (buffer-live-p (codex-ide-test--log-buffer session)))))))))
 
-(ert-deftest codex-ide-show-session-buffer-preserves-prompt-on-idle-query-session ()
+(ert-deftest codex-ide-show-session-buffer-errors-for-query-only-session ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (requests nil))
     (codex-ide-test-with-fixture project-dir
@@ -1852,24 +2020,17 @@
                      (push method requests)
                      (pcase method
                        ("initialize" '((ok . t)))
-                       (_ (ert-fail (format "Unexpected method %s" method))))))
-                  ((symbol-function 'codex-ide-display-buffer)
-                   (lambda (_buffer) (selected-window))))
+                       (_ (ert-fail (format "Unexpected method %s" method)))))))
           (let ((session (codex-ide--ensure-query-session-for-thread-selection
                           project-dir)))
-            (should (codex-ide--input-prompt-active-p session))
-            (codex-ide--show-session-buffer session)
+            (should-error (codex-ide--show-session-buffer session)
+                          :type 'user-error)
             (should (equal (seq-remove (lambda (method)
                                          (equal method "config/read"))
                                        (nreverse requests))
-                           '("initialize")))
-            (should (codex-ide--input-prompt-active-p session))
-            (with-current-buffer (codex-ide-session-buffer session)
-              (goto-char (marker-position
-                          (codex-ide-session-input-start-marker session)))
-              (should (eolp)))))))))
+                           '("initialize")))))))))
 
-(ert-deftest codex-ide-show-or-resume-thread-reuses-idle-threadless-session ()
+(ert-deftest codex-ide-show-or-resume-thread-creates-real-session-from-query-only-session ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (requests nil)
         (thread-read
@@ -1896,16 +2057,17 @@
                    (lambda (_buffer) (selected-window))))
           (let ((query-session (codex-ide--ensure-query-session-for-thread-selection
                                 project-dir)))
-            (codex-ide--show-session-buffer query-session)
             (setq requests nil)
             (let ((session (codex-ide--show-or-resume-thread "thread-reused-1"
                                                              project-dir)))
-              (should (eq session query-session))
-              (should (= (length codex-ide--sessions) 1))
+              (should-not (eq session query-session))
+              (should (= (length codex-ide--sessions) 2))
+              (should (codex-ide-session-query-only query-session))
+              (should-not (codex-ide-session-query-only session))
               (should (equal (seq-remove (lambda (method)
                                            (equal method "config/read"))
                                          (nreverse requests))
-                             '("thread/read" "thread/resume")))
+                             '("initialize" "thread/read" "thread/resume")))
               (should (string= (codex-ide-session-thread-id session)
                                "thread-reused-1"))
               (with-current-buffer (codex-ide-session-buffer session)
@@ -3133,7 +3295,7 @@
           (codex-ide--stderr-filter
            stderr-process
            "\x1b[2m2026-04-09T16:58:08.078004Z\x1b[0m \x1b[31mERROR\x1b[0m failed to connect\n")
-          (with-current-buffer (codex-ide-session-log-buffer session)
+          (with-current-buffer (codex-ide-test--log-buffer session)
             (let ((text (buffer-string)))
               (should (string-match-p "stderr: 2026-04-09T16:58:08.078004Z ERROR failed to connect" text))
               (should-not (string-match-p "\x1b\\[" text))))
@@ -3227,7 +3389,7 @@
               (should-not (string-match-p "Inspect the session log for details" text))
               (should-not (string-match-p "\\[Codex notification:" text))
               (should (codex-ide--input-prompt-active-p session))))
-          (with-current-buffer (codex-ide-session-log-buffer session)
+          (with-current-buffer (codex-ide-test--log-buffer session)
             (should (string-match-p "Retryable Codex error: Reconnecting... 2/5"
                                     (buffer-string)))))))))
 
@@ -3342,7 +3504,7 @@
             (let ((marker (get-text-property (1- (point)) codex-ide-log-marker-property)))
               (should (markerp marker))
               (should (eq (marker-buffer marker)
-                          (codex-ide-session-log-buffer session)))
+                          (codex-ide-test--log-buffer session)))
               (with-current-buffer (marker-buffer marker)
                 (goto-char marker)
                 (should (looking-at-p
@@ -4170,6 +4332,35 @@
             (goto-char (marker-position
                         (codex-ide-session-input-start-marker session)))
             (should (looking-at-p "draft")))))))))
+
+(ert-deftest codex-ide-input-prompt-uses-fields-to-skip-prefix-at-bol ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "first line\nsecond line")
+            (goto-char (marker-position
+                        (codex-ide-session-input-prompt-start-marker session)))
+            (should (eq (get-text-property (point) 'field)
+                        'codex-ide-prompt-prefix))
+            (goto-char (marker-position
+                        (codex-ide-session-input-start-marker session)))
+            (should (eq (get-char-property (point) 'field)
+                        'codex-ide-active-input))
+            (goto-char (point-max))
+            (forward-line -1)
+            (end-of-line)
+            (move-beginning-of-line 1)
+            (should (= (point) (line-beginning-position)))
+            (goto-char (point-max))
+            (forward-line -1)
+            (forward-char 3)
+            (move-beginning-of-line 0)
+            (should (= (point)
+                       (marker-position
+                        (codex-ide-session-input-start-marker session))))
+            (should (looking-at-p "first line"))))))))
 
 (ert-deftest codex-ide-reopen-input-after-submit-error-resets-turn-state ()
   (let ((project-dir (codex-ide-test--make-temp-project)))

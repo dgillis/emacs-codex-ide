@@ -72,7 +72,7 @@ Add this variable to `savehist-additional-variables' to persist it.")
     :initform nil
     :accessor codex-ide-session-directory)
    (name-suffix
-    :initarg :name-suffix
+   :initarg :name-suffix
     :initform nil
     :accessor codex-ide-session-name-suffix)
    (process
@@ -87,10 +87,6 @@ Add this variable to `savehist-additional-variables' to persist it.")
     :initarg :buffer
     :initform nil
     :accessor codex-ide-session-buffer)
-   (log-buffer
-    :initarg :log-buffer
-    :initform nil
-    :accessor codex-ide-session-log-buffer)
    (thread-id
     :initarg :thread-id
     :initform nil
@@ -170,7 +166,11 @@ Add this variable to `savehist-additional-variables' to persist it.")
    (status
     :initarg :status
     :initform "starting"
-    :accessor codex-ide-session-status))
+    :accessor codex-ide-session-status)
+   (query-only
+    :initarg :query-only
+    :initform nil
+    :accessor codex-ide-session-query-only))
   "State for a Codex app-server session.")
 
 (defun make-codex-ide-session (&rest initargs)
@@ -221,14 +221,6 @@ When SUFFIX is nil, return BUFFER-NAME unchanged."
   "Generate the Codex session buffer name for DIRECTORY and SUFFIX."
   (codex-ide--append-buffer-name-suffix
    (funcall codex-ide-buffer-name-function directory)
-   suffix))
-
-(defun codex-ide--log-buffer-name (directory &optional suffix)
-  "Generate the Codex log buffer name for DIRECTORY and SUFFIX."
-  (codex-ide--append-buffer-name-suffix
-   (format "*%s-log[%s]*"
-           codex-ide-buffer-name-prefix
-           (codex-ide--project-name directory))
    suffix))
 
 (defun codex-ide--normalize-session-status (status)
@@ -313,7 +305,9 @@ The first live session in a workspace uses no suffix."
   (let* ((sessions (codex-ide--sessions-for-directory
                     (or directory (codex-ide--get-working-directory))
                     t))
-         (used-suffixes (mapcar #'codex-ide-session-name-suffix sessions))
+         (used-suffixes
+          (mapcar #'codex-ide-session-name-suffix
+                  (seq-remove #'codex-ide--query-only-session-p sessions)))
          (suffix nil))
     (while (member suffix used-suffixes)
       (setq suffix (if suffix (1+ suffix) 1)))
@@ -323,6 +317,11 @@ The first live session in a workspace uses no suffix."
   "Return non-nil when SESSION is a live `codex-ide-session' object."
   (and (codex-ide-session-p session)
        (process-live-p (codex-ide-session-process session))))
+
+(defun codex-ide--query-only-session-p (session)
+  "Return non-nil when SESSION is query-only."
+  (and (codex-ide-session-p session)
+       (codex-ide-session-query-only session)))
 
 (defun codex-ide--timestamp-now ()
   "Return the current time as a sortable timestamp."
@@ -374,14 +373,18 @@ When LIVE-ONLY is non-nil, only include sessions with live processes."
 (defun codex-ide--last-active-session-for-directory (&optional directory)
   "Return the most recently active live Codex session for DIRECTORY."
   (codex-ide--most-recent-session
-   (codex-ide--sessions-for-directory
-    (or directory (codex-ide--get-working-directory))
-    t)))
+   (seq-remove
+    #'codex-ide--query-only-session-p
+    (codex-ide--sessions-for-directory
+     (or directory (codex-ide--get-working-directory))
+     t))))
 
 (defun codex-ide--last-active-session ()
   "Return the most recently active live Codex session across all projects."
   (codex-ide--most-recent-session
-   (seq-filter #'codex-ide--live-session-p codex-ide--sessions)))
+   (seq-remove
+    #'codex-ide--query-only-session-p
+    (seq-filter #'codex-ide--live-session-p codex-ide--sessions))))
 
 (defun codex-ide--live-session-directories ()
   "Return directories that currently have live Codex sessions."

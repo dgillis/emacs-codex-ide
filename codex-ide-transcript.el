@@ -181,6 +181,67 @@ at the bottom of the live session."
       (goto-char marker))
     (set-marker marker nil)))
 
+(defun codex-ide--transcript-window-follows-anchor-p (window anchor)
+  "Return non-nil when WINDOW is already following transcript ANCHOR."
+  (let ((anchor-pos (and anchor
+                         (if (markerp anchor)
+                             (marker-position anchor)
+                           anchor)))
+        (buffer-end (point-max))
+        (window-point-pos (window-point window))
+        (window-start-pos (window-start window))
+        (window-end-pos (window-end window t)))
+    (and (window-live-p window)
+         (eq (window-buffer window) (current-buffer))
+         (or (>= window-point-pos anchor-pos)
+             (>= window-end-pos anchor-pos)
+             (and (>= window-end-pos buffer-end)
+                  (> window-point-pos window-start-pos))))))
+
+(defun codex-ide--capture-transcript-window-positions (&optional anchor)
+  "Capture current-buffer window positions relative to transcript ANCHOR."
+  (mapcar
+   (lambda (window)
+     (list :window window
+           :follow-anchor
+           (codex-ide--transcript-window-follows-anchor-p window anchor)
+           :start-marker (copy-marker (window-start window))
+           :point-marker (copy-marker (window-point window))))
+   (get-buffer-window-list (current-buffer) nil t)))
+
+(defun codex-ide--restore-transcript-window-positions (states)
+  "Restore transcript window positions recorded in STATES."
+  (dolist (state states)
+    (let ((window (plist-get state :window))
+          (follow-anchor (plist-get state :follow-anchor))
+          (start-marker (plist-get state :start-marker))
+          (point-marker (plist-get state :point-marker))
+          (tail-pos (point-max)))
+      (unwind-protect
+          (when (and (window-live-p window)
+                     (eq (window-buffer window) (current-buffer))
+                     (markerp point-marker)
+                     (marker-buffer point-marker))
+            (if follow-anchor
+                (set-window-point window tail-pos)
+              (when (and (markerp start-marker)
+                         (marker-buffer start-marker))
+                (set-window-start window (marker-position start-marker) t))
+              (set-window-point window (marker-position point-marker))))
+        (when (markerp start-marker)
+          (set-marker start-marker nil))
+        (when (markerp point-marker)
+          (set-marker point-marker nil))))))
+
+(defmacro codex-ide--maybe-save-transcript-position (anchor &rest body)
+  "Run BODY while preserving non-following transcript windows around ANCHOR."
+  (declare (indent 1) (debug (form body)))
+  `(let ((window-states
+          (codex-ide--capture-transcript-window-positions ,anchor)))
+     (unwind-protect
+         (progn ,@body)
+       (codex-ide--restore-transcript-window-positions window-states))))
+
 (defun codex-ide--ensure-active-input-prompt-spacing (session)
   "Ensure SESSION's live prompt is separated from preceding output."
   (let ((buffer (codex-ide-session-buffer session))
@@ -251,19 +312,20 @@ inserted text."
              (advance-active-boundary
               (and active-boundary
                    (= insertion-position (marker-position active-boundary)))))
-        (codex-ide-renderer-append-to-buffer
-         text
-         :insertion-point insertion-position
-         :face face
-         :properties properties
-         :restore-point restore-point
-         :preserve-point t
-         :move-point-to-end moving
-         :after-insert
-         (lambda (_start end inserted-at)
-           (codex-ide--advance-append-boundary-after buffer inserted-at end)
-           (when advance-active-boundary
-             (set-marker active-boundary end))))))))
+        (codex-ide--maybe-save-transcript-position insertion-position
+          (codex-ide-renderer-append-to-buffer
+           text
+           :insertion-point insertion-position
+           :face face
+           :properties properties
+           :restore-point restore-point
+           :preserve-point t
+           :move-point-to-end moving
+           :after-insert
+           (lambda (_start end inserted-at)
+             (codex-ide--advance-append-boundary-after buffer inserted-at end)
+             (when advance-active-boundary
+               (set-marker active-boundary end)))))))))
 
 (defun codex-ide--append-agent-text (buffer text &optional face properties)
   "Append agent-originated TEXT to BUFFER with FACE and PROPERTIES."
@@ -284,18 +346,19 @@ inserted text."
              (advance-active-boundary
               (and active-boundary
                    (= insertion-position (marker-position active-boundary)))))
-        (codex-ide-renderer-append-to-buffer
-         ""
-         :insertion-point insertion-position
-         :restore-point restore-point
-         :preserve-point t
-         :after-insert
-         (lambda (_start _end inserted-at)
-           (goto-char inserted-at)
-           (let ((range (codex-ide-renderer-insert-output-spacing)))
-             (codex-ide--advance-append-boundary-after buffer inserted-at (cdr range))
-             (when advance-active-boundary
-               (set-marker active-boundary (cdr range))))))))))
+        (codex-ide--maybe-save-transcript-position insertion-position
+          (codex-ide-renderer-append-to-buffer
+           ""
+           :insertion-point insertion-position
+           :restore-point restore-point
+           :preserve-point t
+           :after-insert
+           (lambda (_start _end inserted-at)
+             (goto-char inserted-at)
+             (let ((range (codex-ide-renderer-insert-output-spacing)))
+               (codex-ide--advance-append-boundary-after buffer inserted-at (cdr range))
+               (when advance-active-boundary
+                 (set-marker active-boundary (cdr range)))))))))))
 
 (defun codex-ide--append-output-separator (buffer)
   "Append a transcript separator rule to BUFFER."
@@ -325,31 +388,32 @@ inserted text."
                (advance-active-boundary
                 (and active-boundary
                      (= insertion-position (marker-position active-boundary)))))
-          (codex-ide-renderer-append-to-buffer
-           ""
-           :insertion-point insertion-position
-           :restore-point restore-point
-           :preserve-point t
-           :move-point-to-end moving
-           :after-insert
-           (lambda (start end inserted-at)
-             (ignore start end)
-             (goto-char inserted-at)
-             (pcase-let ((`(,indicator-start ,indicator-end ,inserted-text)
-                          (codex-ide-renderer-insert-pending-indicator
-                           indicator-text)))
-               (codex-ide--advance-append-boundary-after
-                buffer inserted-at indicator-end)
-               (when advance-active-boundary
-                 (set-marker active-boundary indicator-end))
-               (codex-ide--session-metadata-put
-                session
-                :pending-output-indicator-marker
-                (copy-marker indicator-start))
-               (codex-ide--session-metadata-put
-                session
-                :pending-output-indicator-text
-                inserted-text)))))))))
+          (codex-ide--maybe-save-transcript-position insertion-position
+            (codex-ide-renderer-append-to-buffer
+             ""
+             :insertion-point insertion-position
+             :restore-point restore-point
+             :preserve-point t
+             :move-point-to-end moving
+             :after-insert
+             (lambda (start end inserted-at)
+               (ignore start end)
+               (goto-char inserted-at)
+               (pcase-let ((`(,indicator-start ,indicator-end ,inserted-text)
+                            (codex-ide-renderer-insert-pending-indicator
+                             indicator-text)))
+                 (codex-ide--advance-append-boundary-after
+                  buffer inserted-at indicator-end)
+                 (when advance-active-boundary
+                   (set-marker active-boundary indicator-end))
+                 (codex-ide--session-metadata-put
+                  session
+                  :pending-output-indicator-marker
+                  (copy-marker indicator-start))
+                 (codex-ide--session-metadata-put
+                  session
+                  :pending-output-indicator-text
+                  inserted-text))))))))))
 
 (defun codex-ide--clear-pending-output-indicator (session)
   "Remove SESSION's pending-output indicator, if it is still present."
@@ -367,14 +431,15 @@ inserted text."
           (let* ((restore-point (codex-ide--input-point-marker session))
                  (moving (and (= (point) (point-max)) (not restore-point)))
                  (start (marker-position marker)))
-            (codex-ide-renderer--without-undo-recording
-              (let ((inhibit-read-only t))
-                (codex-ide-renderer-delete-matching-text start indicator-text)
-                (cond
-                 (restore-point
-                  (codex-ide--restore-input-point-marker restore-point))
-                 (moving
-                  (goto-char (point-max)))))))))
+            (codex-ide--maybe-save-transcript-position start
+              (codex-ide-renderer--without-undo-recording
+                (let ((inhibit-read-only t))
+                  (codex-ide-renderer-delete-matching-text start indicator-text)
+                  (cond
+                   (restore-point
+                    (codex-ide--restore-input-point-marker restore-point))
+                   (moving
+                    (goto-char (point-max))))))))))
       (set-marker marker nil))
     (codex-ide--session-metadata-put
      session
@@ -694,11 +759,12 @@ When DRAFT is nil, preserve the current active prompt text."
           (and active-boundary-at-end
                (copy-marker end t))))
     (unwind-protect
-        (prog1
-            (codex-ide-renderer-maybe-render-markdown-region
-             start end allow-trailing-tables)
-          (when render-end-marker
-            (set-marker active-boundary (marker-position render-end-marker))))
+        (codex-ide--maybe-save-transcript-position end
+          (prog1
+              (codex-ide-renderer-maybe-render-markdown-region
+               start end allow-trailing-tables)
+            (when render-end-marker
+              (set-marker active-boundary (marker-position render-end-marker)))))
       (when render-end-marker
         (set-marker render-end-marker nil)))))
 
@@ -777,12 +843,13 @@ Optionally seed it with INITIAL-TEXT."
              (point))
             (let ((overlay (make-overlay
                             (marker-position
-                             (codex-ide-session-input-prompt-start-marker session))
+                             (codex-ide-session-input-start-marker session))
                             (point-max)
                             buffer
                             t
                             t)))
               (overlay-put overlay 'face 'codex-ide-user-prompt-face)
+              (overlay-put overlay 'field 'codex-ide-active-input)
               (setf (codex-ide-session-input-overlay session) overlay))
             (when moving
               (goto-char (point-max)))
@@ -1473,38 +1540,39 @@ Return non-nil when a command output block was found."
                (markerp body-start)
                (markerp body-end))
       (with-current-buffer buffer
-        (codex-ide--without-undo-recording
-          (let ((inhibit-read-only t)
-                (restore-point (codex-ide--input-point-marker
-                                (codex-ide--session-for-buffer buffer)))
-                (moving (= (point) (point-max)))
-                (body-empty (= (marker-position body-start)
-                               (marker-position body-end)))
-                (start (marker-position header-start)))
-            (goto-char start)
-            (delete-region start (marker-position header-end))
-            (codex-ide-renderer-insert-command-output-header
-             overlay
-             (codex-ide--command-output-header-prefix-text overlay)
-             #'codex-ide--toggle-command-output-overlay
-             #'codex-ide--open-command-output-overlay
-             :keymap codex-ide-command-output-map
-             :overlay-property codex-ide-command-output-overlay-property)
-            (set-marker header-start start)
-            (set-marker header-end (point))
-            (set-marker body-start (point))
-            (when body-empty
-              (set-marker body-end (point)))
-            (move-overlay overlay
-                          (marker-position body-start)
-                          (marker-position body-end))
-            (codex-ide--advance-active-boundary-after buffer body-end)
-            (codex-ide--freeze-region (marker-position header-start)
-                                      (marker-position header-end))
-            (if restore-point
-                (codex-ide--restore-input-point-marker restore-point)
-              (when moving
-                (goto-char (point-max))))))))))
+        (codex-ide--maybe-save-transcript-position (marker-position header-start)
+          (codex-ide--without-undo-recording
+            (let ((inhibit-read-only t)
+                  (restore-point (codex-ide--input-point-marker
+                                  (codex-ide--session-for-buffer buffer)))
+                  (moving (= (point) (point-max)))
+                  (body-empty (= (marker-position body-start)
+                                 (marker-position body-end)))
+                  (start (marker-position header-start)))
+              (goto-char start)
+              (delete-region start (marker-position header-end))
+              (codex-ide-renderer-insert-command-output-header
+               overlay
+               (codex-ide--command-output-header-prefix-text overlay)
+               #'codex-ide--toggle-command-output-overlay
+               #'codex-ide--open-command-output-overlay
+               :keymap codex-ide-command-output-map
+               :overlay-property codex-ide-command-output-overlay-property)
+              (set-marker header-start start)
+              (set-marker header-end (point))
+              (set-marker body-start (point))
+              (when body-empty
+                (set-marker body-end (point)))
+              (move-overlay overlay
+                            (marker-position body-start)
+                            (marker-position body-end))
+              (codex-ide--advance-active-boundary-after buffer body-end)
+              (codex-ide--freeze-region (marker-position header-start)
+                                        (marker-position header-end))
+              (if restore-point
+                  (codex-ide--restore-input-point-marker restore-point)
+                (when moving
+                  (goto-char (point-max)))))))))))
 
 (defun codex-ide--set-command-output-body (overlay display-text)
   "Refresh OVERLAY's visible body using DISPLAY-TEXT.
@@ -1517,33 +1585,34 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                (markerp body-end))
       (with-current-buffer buffer
         (let ((codex-ide--current-agent-item-type "commandExecution"))
-          (codex-ide--without-undo-recording
-            (let ((inhibit-read-only t)
-                  (restore-point (codex-ide--input-point-marker
-                                  (codex-ide--session-for-buffer buffer)))
-                  (moving (= (point) (point-max)))
-                  start)
-              (delete-region (marker-position body-start)
-                             (marker-position body-end))
-              (goto-char (marker-position body-start))
-              (setq start (point))
-              (unless (overlay-get overlay :folded)
-                (codex-ide-renderer-insert-command-output-body
-                 display-text
-                 :keymap codex-ide-command-output-map
-                 :overlay overlay
-                 :overlay-property codex-ide-command-output-overlay-property
-                 :properties (overlay-get overlay :body-properties))
-                (codex-ide--freeze-region start (point)))
-              (set-marker body-end (point))
-              (move-overlay overlay
-                            (marker-position body-start)
-                            (marker-position body-end))
-              (codex-ide--advance-active-boundary-after buffer body-end)
-              (if restore-point
-                  (codex-ide--restore-input-point-marker restore-point)
-                (when moving
-                  (goto-char (point-max)))))))))))
+          (codex-ide--maybe-save-transcript-position (marker-position body-start)
+            (codex-ide--without-undo-recording
+              (let ((inhibit-read-only t)
+                    (restore-point (codex-ide--input-point-marker
+                                    (codex-ide--session-for-buffer buffer)))
+                    (moving (= (point) (point-max)))
+                    start)
+                (delete-region (marker-position body-start)
+                               (marker-position body-end))
+                (goto-char (marker-position body-start))
+                (setq start (point))
+                (unless (overlay-get overlay :folded)
+                  (codex-ide-renderer-insert-command-output-body
+                   display-text
+                   :keymap codex-ide-command-output-map
+                   :overlay overlay
+                   :overlay-property codex-ide-command-output-overlay-property
+                   :properties (overlay-get overlay :body-properties))
+                  (codex-ide--freeze-region start (point)))
+                (set-marker body-end (point))
+                (move-overlay overlay
+                              (marker-position body-start)
+                              (marker-position body-end))
+                (codex-ide--advance-active-boundary-after buffer body-end)
+                (if restore-point
+                    (codex-ide--restore-input-point-marker restore-point)
+                  (when moving
+                    (goto-char (point-max))))))))))))
 
 (defun codex-ide--ensure-command-output-block (session item-id)
   "Return the command output overlay for ITEM-ID in SESSION, creating it."
@@ -1575,54 +1644,55 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                        header-end
                        body-start
                        body-end)
-                  (goto-char insertion-position)
-                  (setq header-start (copy-marker (point)))
-                  (setq overlay (make-overlay (point) (point) buffer nil nil))
-                  (overlay-put overlay 'face 'codex-ide-command-output-face)
-                  (overlay-put overlay codex-ide-command-output-overlay-property overlay)
-                  (overlay-put overlay :session session)
-                  (overlay-put overlay :item-id item-id)
-                  (overlay-put overlay :header-start header-start)
-                  (overlay-put overlay :display-text "")
-                  (overlay-put overlay :line-count 0)
-                  (overlay-put overlay :visible-line-count 0)
-                  (overlay-put overlay :truncated nil)
-                  (overlay-put overlay :folded initial-folded)
-                  (overlay-put overlay :complete nil)
-                  (overlay-put overlay 'invisible (and initial-folded t))
-                  (overlay-put overlay :body-properties nil)
-                  (codex-ide-renderer-insert-command-output-header
-                   overlay
-                   (codex-ide--command-output-header-prefix-text overlay)
-                   #'codex-ide--toggle-command-output-overlay
-                   #'codex-ide--open-command-output-overlay
-                   :keymap codex-ide-command-output-map
-                   :overlay-property codex-ide-command-output-overlay-property)
-                  (setq header-end (copy-marker (point)))
-                  (setq body-start (copy-marker (point)))
-                  (setq body-end (copy-marker (point)))
-                  (overlay-put overlay :header-end header-end)
-                  (overlay-put overlay :body-start body-start)
-                  (overlay-put overlay :body-end body-end)
-                  (codex-ide--freeze-region (marker-position header-start)
-                                            (marker-position header-end))
-                  (codex-ide--advance-append-boundary-after
-                   buffer
-                   insertion-position
-                   (point))
-                  (when advance-active-boundary
-                    (set-marker active-boundary (point)))
-                  (when (markerp anchor)
-                    (set-marker anchor nil))
-                  (cond
-                   (restore-point
-                    (codex-ide--restore-input-point-marker restore-point))
-                   (moving
-                    (goto-char (point-max))))))))
-          (setq state (plist-put state :command-output-overlay overlay))
-          (setq state (plist-put state :command-output-anchor-marker nil))
-          (codex-ide--put-item-state session item-id state)
-          overlay)))))
+                  (codex-ide--maybe-save-transcript-position insertion-position
+                    (goto-char insertion-position)
+                    (setq header-start (copy-marker (point)))
+                    (setq overlay (make-overlay (point) (point) buffer nil nil))
+                    (overlay-put overlay 'face 'codex-ide-command-output-face)
+                    (overlay-put overlay codex-ide-command-output-overlay-property overlay)
+                    (overlay-put overlay :session session)
+                    (overlay-put overlay :item-id item-id)
+                    (overlay-put overlay :header-start header-start)
+                    (overlay-put overlay :display-text "")
+                    (overlay-put overlay :line-count 0)
+                    (overlay-put overlay :visible-line-count 0)
+                    (overlay-put overlay :truncated nil)
+                    (overlay-put overlay :folded initial-folded)
+                    (overlay-put overlay :complete nil)
+                    (overlay-put overlay 'invisible (and initial-folded t))
+                    (overlay-put overlay :body-properties nil)
+                    (codex-ide-renderer-insert-command-output-header
+                     overlay
+                     (codex-ide--command-output-header-prefix-text overlay)
+                     #'codex-ide--toggle-command-output-overlay
+                     #'codex-ide--open-command-output-overlay
+                     :keymap codex-ide-command-output-map
+                     :overlay-property codex-ide-command-output-overlay-property)
+                    (setq header-end (copy-marker (point)))
+                    (setq body-start (copy-marker (point)))
+                    (setq body-end (copy-marker (point)))
+                    (overlay-put overlay :header-end header-end)
+                    (overlay-put overlay :body-start body-start)
+                    (overlay-put overlay :body-end body-end)
+                    (codex-ide--freeze-region (marker-position header-start)
+                                              (marker-position header-end))
+                    (codex-ide--advance-append-boundary-after
+                     buffer
+                     insertion-position
+                     (point))
+                    (when advance-active-boundary
+                      (set-marker active-boundary (point)))
+                    (when (markerp anchor)
+                      (set-marker anchor nil))
+                    (cond
+                     (restore-point
+                      (codex-ide--restore-input-point-marker restore-point))
+                     (moving
+                      (goto-char (point-max)))))))))
+        (setq state (plist-put state :command-output-overlay overlay))
+        (setq state (plist-put state :command-output-anchor-marker nil))
+        (codex-ide--put-item-state session item-id state)
+        overlay)))))
 
 (defun codex-ide--append-command-output-text (session item-id text)
   "Append command output TEXT for ITEM-ID in SESSION."
@@ -1748,20 +1818,21 @@ Return non-nil when a command output block was found."
                (advance-active-boundary
                 (and active-boundary
                      (= insertion-position (marker-position active-boundary))))
-              end)
-          (goto-char insertion-position)
-          (setq end
-                (cdr
-                 (codex-ide-renderer-insert-shell-command-detail
-                  command
-                  (codex-ide--current-agent-text-properties))))
-          (codex-ide--advance-append-boundary-after buffer insertion-position end)
-          (when advance-active-boundary
-            (set-marker active-boundary end))
-          (if moving
-              (goto-char (point-max))
-            (goto-char original-point))
-          (set-marker original-point nil))))))
+               end)
+          (codex-ide--maybe-save-transcript-position insertion-position
+            (goto-char insertion-position)
+            (setq end
+                  (cdr
+                   (codex-ide-renderer-insert-shell-command-detail
+                    command
+                    (codex-ide--current-agent-text-properties))))
+            (codex-ide--advance-append-boundary-after buffer insertion-position end)
+            (when advance-active-boundary
+              (set-marker active-boundary end))
+            (if moving
+                (goto-char (point-max))
+              (goto-char original-point))
+            (set-marker original-point nil)))))))
 
 (defun codex-ide--item-detail-block (text)
   "Format TEXT as a block of indented detail lines."

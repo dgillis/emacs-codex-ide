@@ -19,6 +19,25 @@
   "Log a codex-ide integration message using FORMAT-STRING and ARGS."
   (apply #'message (concat "codex-ide-it: " format-string) args))
 
+(defun codex-ide-integration--log-buffer-name (session)
+  "Return the computed log buffer name for SESSION."
+  (if (codex-ide-session-query-only session)
+      (codex-ide--append-buffer-name-suffix
+       (format "*%s-log[%s]-query*"
+               codex-ide-buffer-name-prefix
+               (file-name-nondirectory
+                (directory-file-name (codex-ide-session-directory session))))
+       (and (integerp (codex-ide-session-name-suffix session))
+            (> (codex-ide-session-name-suffix session) 0)
+            (codex-ide-session-name-suffix session)))
+    (replace-regexp-in-string
+     "\\*$" "-log*"
+     (if (buffer-live-p (codex-ide-session-buffer session))
+         (buffer-name (codex-ide-session-buffer session))
+       (codex-ide--session-buffer-name
+        (codex-ide-session-directory session)
+        (codex-ide-session-name-suffix session))))))
+
 (defun codex-ide-integration--enabled-p ()
   "Return non-nil when real Codex integration tests are explicitly enabled."
   (member (getenv "CODEX_IDE_INTEGRATION_TESTS") '("1" "true" "yes")))
@@ -187,9 +206,10 @@ TIMEOUT is in seconds.  DESCRIPTION is included in timeout errors."
               (codex-ide-integration--tail
                (codex-ide-session-buffer session))
             "<no session>")
-          (if (and session (codex-ide-session-log-buffer session))
+          (if (and session
+                   (get-buffer (codex-ide-integration--log-buffer-name session)))
               (codex-ide-integration--tail
-               (codex-ide-session-log-buffer session))
+               (get-buffer (codex-ide-integration--log-buffer-name session)))
             "<no log buffer>")))
 
 (defun codex-ide-integration--configure ()
@@ -254,7 +274,7 @@ TIMEOUT is in seconds.  DESCRIPTION is included in timeout errors."
         (codex-ide-integration--log "deleting stderr process")
         (delete-process (codex-ide-session-stderr-process session))))
     (dolist (buffer (list (codex-ide-session-buffer session)
-                          (codex-ide-session-log-buffer session)))
+                          (get-buffer (codex-ide-integration--log-buffer-name session))))
       (when (buffer-live-p buffer)
         (codex-ide-integration--log "killing buffer %s" (buffer-name buffer))
         (let ((kill-buffer-query-functions nil))
