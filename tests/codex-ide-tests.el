@@ -705,6 +705,46 @@
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
+(ert-deftest codex-ide-session-mode-records-tail-follow-cooldown-after-navigation ()
+  (save-window-excursion
+    (delete-other-windows)
+    (with-temp-buffer
+      (insert "alpha\nbeta\n")
+      (codex-ide-session-mode)
+      (switch-to-buffer (current-buffer))
+      (goto-char (point-min))
+      (setq-local codex-ide-session-mode--last-point (point))
+      (setq-local codex-ide-session-mode--last-window-start (window-start))
+      (goto-char (point-max))
+      (cl-letf (((symbol-function 'float-time)
+                 (lambda (&optional _time) 10.0)))
+        (codex-ide-session-mode--record-tail-follow-cooldown))
+      (should (= (window-parameter (selected-window)
+                                   'codex-ide-tail-follow-paused-until)
+                 (+ 10.0 codex-ide-transcript-tail-follow-navigation-cooldown))))))
+
+(ert-deftest codex-ide-transcript-window-follow-respects-navigation-cooldown ()
+  (save-window-excursion
+    (delete-other-windows)
+    (with-temp-buffer
+      (insert "alpha\nbeta\ngamma\n")
+      (switch-to-buffer (current-buffer))
+      (goto-char (point-max))
+      (recenter -1)
+      (let ((window (selected-window))
+            (anchor (point-max)))
+        (set-window-parameter window 'codex-ide-tail-follow-paused-until 11.0)
+        (cl-letf (((symbol-function 'float-time)
+                   (lambda (&optional _time) 10.0)))
+          (should-not (codex-ide--transcript-window-follows-anchor-p
+                       window
+                       anchor)))
+        (cl-letf (((symbol-function 'float-time)
+                   (lambda (&optional _time) 12.0)))
+          (should (codex-ide--transcript-window-follows-anchor-p
+                   window
+                   anchor)))))))
+
 (ert-deftest codex-ide-streaming-append-advances-window-that-was-following-tail ()
   (save-window-excursion
     (delete-other-windows)

@@ -28,6 +28,7 @@
 (require 'codex-ide-renderer)
 
 (defvar codex-ide-session-enable-visual-line-mode)
+(defvar codex-ide-transcript-tail-follow-navigation-cooldown)
 
 (defvar codex-ide-session-mode-map
   (let ((map (make-sparse-keymap)))
@@ -48,6 +49,12 @@
 (define-key codex-ide-session-mode-map (kbd "<backtab>") #'codex-ide-session-mode-nav-backward)
 (define-key codex-ide-session-prompt-minor-mode-map (kbd "M-p") #'codex-ide-previous-prompt-history)
 (define-key codex-ide-session-prompt-minor-mode-map (kbd "M-n") #'codex-ide-next-prompt-history)
+
+(defvar-local codex-ide-session-mode--last-point nil
+  "Last observed point used for transcript tail-follow cooldown tracking.")
+
+(defvar-local codex-ide-session-mode--last-window-start nil
+  "Last observed `window-start' for transcript tail-follow cooldown tracking.")
 
 (define-minor-mode codex-ide-session-prompt-minor-mode
   "Minor mode enabled only while point is in the active Codex prompt."
@@ -104,6 +111,25 @@
   (when (fboundp 'font-lock-mode)
     (font-lock-mode -1)))
 
+(defun codex-ide-session-mode--record-tail-follow-cooldown ()
+  "Pause transcript tail following briefly after user navigation."
+  (when-let ((window (and (derived-mode-p 'codex-ide-session-mode)
+                          (eq (window-buffer (selected-window)) (current-buffer))
+                          (selected-window))))
+    (let ((point-pos (point))
+          (window-start-pos (window-start window)))
+      (unless (or (null codex-ide-session-mode--last-point)
+                  (null codex-ide-session-mode--last-window-start))
+        (when (or (/= point-pos codex-ide-session-mode--last-point)
+                  (/= window-start-pos codex-ide-session-mode--last-window-start))
+          (set-window-parameter
+           window
+           'codex-ide-tail-follow-paused-until
+           (+ (float-time)
+              codex-ide-transcript-tail-follow-navigation-cooldown))))
+      (setq codex-ide-session-mode--last-point point-pos
+            codex-ide-session-mode--last-window-start window-start-pos))))
+
 ;;;###autoload
 (define-derived-mode codex-ide-session-mode text-mode "Codex-IDE"
   "Major mode for Codex app-server session buffers."
@@ -115,7 +141,13 @@
               '((:eval (codex-ide-renderer-mode-line-status codex-ide--session))))
   (setq-local codex-ide-nav-focal-point-functions
               '(codex-ide-session-mode--focal-points))
-  (add-hook 'post-command-hook #'codex-ide--sync-prompt-minor-mode nil t))
+  (setq-local codex-ide-session-mode--last-point (point))
+  (setq-local codex-ide-session-mode--last-window-start nil)
+  (add-hook 'post-command-hook #'codex-ide--sync-prompt-minor-mode nil t)
+  (add-hook 'post-command-hook
+            #'codex-ide-session-mode--record-tail-follow-cooldown
+            nil
+            t))
 
 (provide 'codex-ide-session-mode)
 

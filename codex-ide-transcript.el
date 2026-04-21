@@ -69,6 +69,7 @@
 (defvar codex-ide-display-buffer-options)
 (defvar codex-ide-log-stream-deltas)
 (defvar codex-ide--sessions)
+(defvar codex-ide-transcript-tail-follow-navigation-cooldown)
 (defvar codex-ide-command-output-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'codex-ide-toggle-command-output-at-point)
@@ -89,6 +90,11 @@ Streaming transcript appends should leave this enabled so windows already
 tracking the live tail keep doing so.  Interactive in-place rewrites, such as
 expanding or folding a command output block, should bind this to nil so the
 clicked window stays where it was.")
+
+(defcustom codex-ide-transcript-tail-follow-navigation-cooldown 0.5
+  "Seconds to pause transcript tail following after user navigation."
+  :type 'number
+  :group 'codex-ide)
 
 (defun codex-ide--update-mode-line (&optional session)
   "Refresh the mode line indicator for SESSION."
@@ -198,9 +204,14 @@ at the bottom of the live session."
         (buffer-end (point-max))
         (window-point-pos (window-point window))
         (window-start-pos (window-start window))
-        (window-end-pos (window-end window t)))
+        (window-end-pos (window-end window t))
+        (paused-until (window-parameter
+                       window
+                       'codex-ide-tail-follow-paused-until)))
     (and (window-live-p window)
          (eq (window-buffer window) (current-buffer))
+         (not (and (numberp paused-until)
+                   (< (float-time) paused-until)))
          (or (>= window-point-pos anchor-pos)
              (>= window-end-pos anchor-pos)
              (and (>= window-end-pos buffer-end)
