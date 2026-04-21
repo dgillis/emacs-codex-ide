@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from dataclasses import dataclass
 import json
 import os
@@ -162,7 +163,10 @@ class EmacsProxy:
 
     def _tool_call_expression(self, name: str, params: dict[str, Any]) -> str:
         payload = json.dumps({"name": name, "params": params}, separators=(",", ":"), ensure_ascii=True)
-        return f"(codex-ide-mcp-bridge--json-tool-call {self._elisp_string(payload)})"
+        return (
+            "(base64-encode-string "
+            f"(encode-coding-string (codex-ide-mcp-bridge--json-tool-call {self._elisp_string(payload)}) 'utf-8) t)"
+        )
 
     def call_tool(self, name: str, params: dict[str, Any] | None = None) -> Any:
         params = params or {}
@@ -174,24 +178,21 @@ class EmacsProxy:
         completed = subprocess.run(
             command,
             capture_output=True,
-            text=True,
             check=False,
         )
         debug_log("dispatch return code:", completed.returncode)
         debug_log("dispatch stdout:", repr(completed.stdout))
         debug_log("dispatch stderr:", repr(completed.stderr))
         if completed.returncode != 0:
-            stderr = completed.stderr.strip() or completed.stdout.strip() or "emacsclient failed"
-            raise RuntimeError(stderr)
+            stderr = completed.stderr.strip() or completed.stdout.strip() or b"emacsclient failed"
+            raise RuntimeError(stderr.decode("utf-8", errors="replace"))
         try:
-            # Explanation for double decoding: the elisp output is a quoted Elisp string
-            # of a JSON value. So we need to decode once to remove the outer quotes to
-            # get the actual JSON string then again to convert it to a python object.
-            decoded = json.loads(completed.stdout)
-            if isinstance(decoded, str):
-                return json.loads(decoded)
-            return decoded
-        except (ValueError, json.JSONDecodeError) as exc:
+            encoded = json.loads(completed.stdout.decode("utf-8"))
+            if not isinstance(encoded, str):
+                raise RuntimeError("invalid bridge response: expected base64 string")
+            decoded = base64.b64decode(encoded)
+            return json.loads(decoded.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, base64.binascii.Error) as exc:
             raise RuntimeError(f"invalid bridge response: {exc}") from exc
 
 

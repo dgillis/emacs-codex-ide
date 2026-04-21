@@ -94,7 +94,7 @@
 - Responses are rendered as Markdown in an Emacs buffer.
 - Markdown pipe tables are rendered as visible tables.
 - In table cells, wrap code-like identifiers, filenames, paths, symbols, and expressions in backticks.
-- Use markdown links for file references when appropriate, for example [`foo.el`](/tmp/foo.el#L3C2).
+- Use markdown links for code references, for example [`foo.el`](/tmp/foo.el#L3C2).
 - Avoid bare underscores or asterisks for code-like text inside tables; use backticks instead.
 - Do not needlessly use Emacs commands to accomplish agent tasks."
   "Optional baseline prompt injected into the first real prompt of a new thread."

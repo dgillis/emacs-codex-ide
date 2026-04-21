@@ -63,6 +63,8 @@
           (should (equal (aref argv 0) "-s"))
           (should (equal (aref argv 1) "testsrv"))
           (should (equal (aref argv 2) "--eval"))
+          (should (string-match-p "base64-encode-string"
+                                  (aref argv 3)))
           (should (string-match-p "codex-ide-mcp-bridge--json-tool-call"
                                   (aref argv 3)))
           (with-current-buffer output-buffer
@@ -84,6 +86,7 @@
         (progn
           (with-temp-file mock-emacsclient
             (insert "#!/usr/bin/env python3\n")
+            (insert "import base64\n")
             (insert "import json\n")
             (insert "import sys\n")
             (insert "expr = sys.argv[-1]\n")
@@ -96,7 +99,8 @@
             (insert "    response = {'buffer': 'example.el', 'diagnostics': [{'severity': 'error', 'message': 'Boom'}]}\n")
             (insert "elif 'lisp_check_parens' in expr:\n")
             (insert "    response = {'path': '/tmp/example.el', 'balanced': False, 'mismatch': True, 'line': 9, 'column': 2, 'point': 123}\n")
-            (insert "print(json.dumps(json.dumps(response, separators=(',', ':'))))\n"))
+            (insert "payload = json.dumps(response, separators=(',', ':'), ensure_ascii=False).encode('utf-8')\n")
+            (insert "print(json.dumps(base64.b64encode(payload).decode('ascii')))\n"))
           (set-file-modes mock-emacsclient #o755)
           (with-current-buffer input-buffer
             (dolist (message
@@ -211,6 +215,68 @@
                 (should (string-match-p "\"Boom\"" diagnostics-text))
                 (should (string-match-p "\"balanced\": false" parens-text))
                 (should (string-match-p "\"point\": 123" parens-text))))))
+      (when (file-exists-p mock-emacsclient)
+        (delete-file mock-emacsclient))
+      (kill-buffer input-buffer)
+      (kill-buffer output-buffer))))
+
+(ert-deftest codex-ide-mcp-script-decodes-base64-bridge-response-with-control-and-unicode-text ()
+  (let ((script-path (expand-file-name "bin/codex-ide-mcp-server.py"
+                                       codex-ide-test--root-directory))
+        (mock-emacsclient (make-temp-file "codex-ide-emacsclient-" nil ".py"))
+        (input-buffer (generate-new-buffer " *codex-ide-mcp-control-input*"))
+        (output-buffer (generate-new-buffer " *codex-ide-mcp-control-output*")))
+    (unwind-protect
+        (progn
+          (with-temp-file mock-emacsclient
+            (insert "#!/usr/bin/env python3\n")
+            (insert "import base64\n")
+            (insert "import json\n")
+            (insert "payload = json.dumps({'buffer': 'example.el', 'text': 'alpha\\u000bbeta\\n└'}, separators=(',', ':'), ensure_ascii=False).encode('utf-8')\n")
+            (insert "print(json.dumps(base64.b64encode(payload).decode('ascii')))\n"))
+          (set-file-modes mock-emacsclient #o755)
+          (with-current-buffer input-buffer
+            (let ((json-object-type 'alist)
+                  (json-array-type 'list)
+                  (json-key-type 'string))
+              (insert
+               (json-encode
+                '((jsonrpc . "2.0")
+                  (id . 1)
+                  (method . "tools/call")
+                  (params . ((name . "get_buffer_text")
+                             (arguments . ((buffer . "example.el")))))))
+               "\n")))
+          (should
+           (equal
+            (with-current-buffer input-buffer
+              (call-process-region
+               (point-min)
+               (point-max)
+               "python3"
+               nil
+               output-buffer
+               nil
+               script-path
+               "--emacsclient"
+               mock-emacsclient))
+            0))
+          (with-current-buffer output-buffer
+            (goto-char (point-min))
+            (let* ((json-object-type 'alist)
+                   (json-array-type 'list)
+                   (json-key-type 'string)
+                   (response (json-read-from-string
+                              (buffer-substring-no-properties
+                               (line-beginning-position)
+                               (line-end-position))))
+                   (text (alist-get "text"
+                                    (car (alist-get "content"
+                                                    (alist-get "result" response nil nil #'equal)
+                                                    nil nil #'equal))
+                                    nil nil #'equal)))
+              (should (string-match-p "\"buffer\": \"example.el\"" text))
+              (should (string-match-p "\"text\": \"alpha\\\\u000bbeta\\\\n\\\\u2514\"" text)))))
       (when (file-exists-p mock-emacsclient)
         (delete-file mock-emacsclient))
       (kill-buffer input-buffer)
