@@ -111,6 +111,28 @@
                              'codex-session)
                   session)))))))
 
+(ert-deftest codex-ide-create-query-session-registers-headless-session ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-query-session)))
+          (should (string= (codex-ide-session-directory session)
+                           (directory-file-name (file-truename project-dir))))
+          (should (codex-ide-session-query-only session))
+          (should (codex-ide-test-process-p (codex-ide-session-process session)))
+          (should (memq session codex-ide--sessions))
+          (should-not (codex-ide-session-buffer session))
+          (should (buffer-live-p (codex-ide-session-log-buffer session)))
+          (should-not (eq session
+                          (codex-ide--last-active-session-for-directory project-dir)))
+          (with-current-buffer (codex-ide-session-log-buffer session)
+            (should (derived-mode-p 'codex-ide-log-mode))
+            (should (equal (buffer-name)
+                           (format "*%s-log[%s]-query*"
+                                   codex-ide-buffer-name-prefix
+                                   (file-name-nondirectory
+                                    (directory-file-name project-dir)))))))))))
+
 (ert-deftest codex-ide-create-process-session-emits-created-event ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (events nil))
@@ -1834,15 +1856,11 @@
                                        (nreverse requests))
                            '("initialize")))
             (should (string= (codex-ide-session-status session) "idle"))
-            (should (codex-ide--input-prompt-active-p session))
-            (with-current-buffer (codex-ide-session-buffer session)
-              (should (string-prefix-p "Codex session for " (buffer-string)))
-              (should (markerp
-                       (codex-ide-session-input-prompt-start-marker session)))
-              (should (markerp
-                       (codex-ide-session-input-start-marker session))))))))))
+            (should (codex-ide-session-query-only session))
+            (should-not (codex-ide-session-buffer session))
+            (should (buffer-live-p (codex-ide-session-log-buffer session)))))))))
 
-(ert-deftest codex-ide-show-session-buffer-preserves-prompt-on-idle-query-session ()
+(ert-deftest codex-ide-show-session-buffer-errors-for-query-only-session ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (requests nil))
     (codex-ide-test-with-fixture project-dir
@@ -1852,24 +1870,17 @@
                      (push method requests)
                      (pcase method
                        ("initialize" '((ok . t)))
-                       (_ (ert-fail (format "Unexpected method %s" method))))))
-                  ((symbol-function 'codex-ide-display-buffer)
-                   (lambda (_buffer) (selected-window))))
+                       (_ (ert-fail (format "Unexpected method %s" method)))))))
           (let ((session (codex-ide--ensure-query-session-for-thread-selection
                           project-dir)))
-            (should (codex-ide--input-prompt-active-p session))
-            (codex-ide--show-session-buffer session)
+            (should-error (codex-ide--show-session-buffer session)
+                          :type 'user-error)
             (should (equal (seq-remove (lambda (method)
                                          (equal method "config/read"))
                                        (nreverse requests))
-                           '("initialize")))
-            (should (codex-ide--input-prompt-active-p session))
-            (with-current-buffer (codex-ide-session-buffer session)
-              (goto-char (marker-position
-                          (codex-ide-session-input-start-marker session)))
-              (should (eolp)))))))))
+                           '("initialize")))))))))
 
-(ert-deftest codex-ide-show-or-resume-thread-reuses-idle-threadless-session ()
+(ert-deftest codex-ide-show-or-resume-thread-creates-real-session-from-query-only-session ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (requests nil)
         (thread-read
@@ -1896,16 +1907,17 @@
                    (lambda (_buffer) (selected-window))))
           (let ((query-session (codex-ide--ensure-query-session-for-thread-selection
                                 project-dir)))
-            (codex-ide--show-session-buffer query-session)
             (setq requests nil)
             (let ((session (codex-ide--show-or-resume-thread "thread-reused-1"
                                                              project-dir)))
-              (should (eq session query-session))
-              (should (= (length codex-ide--sessions) 1))
+              (should-not (eq session query-session))
+              (should (= (length codex-ide--sessions) 2))
+              (should (codex-ide-session-query-only query-session))
+              (should-not (codex-ide-session-query-only session))
               (should (equal (seq-remove (lambda (method)
                                            (equal method "config/read"))
                                          (nreverse requests))
-                             '("thread/read" "thread/resume")))
+                             '("initialize" "thread/read" "thread/resume")))
               (should (string= (codex-ide-session-thread-id session)
                                "thread-reused-1"))
               (with-current-buffer (codex-ide-session-buffer session)

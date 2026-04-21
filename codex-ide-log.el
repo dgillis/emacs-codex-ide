@@ -49,9 +49,15 @@
            (codex-ide-session-log-buffer session))
       (let* ((directory (codex-ide-session-directory session))
              (buffer (get-buffer-create
-                      (codex-ide--log-buffer-name
-                       directory
-                       (codex-ide-session-name-suffix session)))))
+                      (if (codex-ide-session-query-only session)
+                          (codex-ide--query-log-buffer-name
+                           directory
+                           (and (integerp (codex-ide-session-name-suffix session))
+                                (> (codex-ide-session-name-suffix session) 0)
+                                (codex-ide-session-name-suffix session)))
+                        (codex-ide--log-buffer-name
+                         directory
+                         (codex-ide-session-name-suffix session))))))
         (codex-ide--initialize-log-buffer buffer directory)
         (setf (codex-ide-session-log-buffer session) buffer)
         buffer)))

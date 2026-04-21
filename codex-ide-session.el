@@ -197,17 +197,38 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
   (codex-ide-log-message session "Initialization complete")
   (codex-ide--update-header-line session))
 
-(defun codex-ide--create-process-session (&optional reuse-buffer reuse-name-suffix)
-  "Create a new app-server-backed session for the current working directory."
+(defun codex-ide--initialize-session-buffer (session buffer working-dir)
+  "Prepare BUFFER as SESSION's transcript buffer for WORKING-DIR."
+  (with-current-buffer buffer
+    (codex-ide-session-mode)
+    (setq-local default-directory working-dir)
+    (setq-local codex-ide--session session)
+    (add-hook 'kill-buffer-hook #'codex-ide--handle-session-buffer-killed nil t)
+    (let ((inhibit-read-only t))
+      (mapc #'delete-overlay
+            (append (car (overlay-lists))
+                    (cdr (overlay-lists))))
+      (erase-buffer)
+      (insert (format "Codex session for %s\n\n"
+                      (abbreviate-file-name working-dir)))
+      (codex-ide-renderer-freeze-region (point-min) (point-max)))))
+
+(cl-defun codex-ide--create-process-session-internal
+    (&key reuse-buffer reuse-name-suffix query-only)
+  "Create a new app-server-backed session for the current working directory.
+When QUERY-ONLY is non-nil, create a headless session used only for
+protocol requests such as thread listing."
   (let ((working-dir (codex-ide--get-working-directory)))
     (let* ((process-environment
             (codex-ide--app-server-process-environment process-environment))
-           (name-suffix (if reuse-buffer
-                            reuse-name-suffix
-                          (codex-ide--next-session-name-suffix working-dir)))
-           (buffer (or reuse-buffer
-                       (get-buffer-create
-                        (codex-ide--session-buffer-name working-dir name-suffix))))
+           (name-suffix (cond
+                         (query-only 0)
+                         (reuse-buffer reuse-name-suffix)
+                         (t (codex-ide--next-session-name-suffix working-dir))))
+           (buffer (unless query-only
+                     (or reuse-buffer
+                         (get-buffer-create
+                          (codex-ide--session-buffer-name working-dir name-suffix)))))
            (process-label
             (if name-suffix
                 (format "%s<%d>"
@@ -219,6 +240,7 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
                      :directory working-dir
                      :name-suffix name-suffix
                      :buffer buffer
+                     :query-only query-only
                      :log-buffer nil
                      :created-at (codex-ide--timestamp-now)
                      :request-counter 0
@@ -253,28 +275,18 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
             (setf (codex-ide-session-stderr-process session) stderr-process)
             (process-put process 'codex-session session)
             (process-put stderr-process 'codex-session session)
-            (with-current-buffer buffer
-              (codex-ide-session-mode)
-              (setq-local default-directory working-dir)
-              (setq-local codex-ide--session session)
-              (add-hook 'kill-buffer-hook #'codex-ide--handle-session-buffer-killed nil t)
-              (let ((inhibit-read-only t))
-                (mapc #'delete-overlay
-                      (append (car (overlay-lists))
-                              (cdr (overlay-lists))))
-                (erase-buffer)
-                (insert (format "Codex session for %s\n\n"
-                                (abbreviate-file-name working-dir)))
-                (codex-ide-renderer-freeze-region (point-min) (point-max))))
+            (when buffer
+              (codex-ide--initialize-session-buffer session buffer working-dir))
             (codex-ide--ensure-log-buffer session)
             (set-process-query-on-exit-flag process nil)
             (set-process-query-on-exit-flag stderr-process nil)
-            (with-current-buffer buffer
-              (codex-ide--set-session session))
+            (codex-ide--set-session session)
             (codex-ide-log-message
              session
-             "Created session buffer %s and log buffer %s"
-             (buffer-name buffer)
+             (if buffer
+                 "Created session buffer %s and log buffer %s"
+               "Created query-only session and log buffer %s")
+             (and buffer (buffer-name buffer))
              (buffer-name (codex-ide-session-log-buffer session)))
             (codex-ide-log-message
              session
@@ -301,13 +313,36 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
                     (codex-ide--app-server-command))
                    "Codex startup failed"))))))))
 
+(defun codex-ide--create-process-session (&optional reuse-buffer reuse-name-suffix)
+  "Create a new app-server-backed session for the current working directory."
+  (codex-ide--create-process-session-internal
+   :reuse-buffer reuse-buffer
+   :reuse-name-suffix reuse-name-suffix))
+
+(defun codex-ide--create-query-session ()
+  "Create a new query-only session for the current working directory."
+  (codex-ide--create-process-session-internal :query-only t))
+
 (cl-defun codex-ide--show-session-buffer (session &key newly-created)
   "Display SESSION's buffer and return SESSION."
+  (unless (buffer-live-p (codex-ide-session-buffer session))
+    (user-error "Session has no transcript buffer"))
   (if newly-created
       (codex-ide--display-new-session-buffer (codex-ide-session-buffer session))
     (codex-ide-display-buffer (codex-ide-session-buffer session)))
   (codex-ide--ensure-input-prompt session)
   session)
+
+(defun codex-ide--query-only-session-for-directory (&optional directory)
+  "Return the live query-only session for DIRECTORY, if any."
+  (let ((directory (codex-ide--normalize-directory
+                    (or directory (codex-ide--get-working-directory)))))
+    (seq-find
+     (lambda (session)
+       (and (codex-ide--live-session-p session)
+            (codex-ide--query-only-session-p session)
+            (equal (codex-ide-session-directory session) directory)))
+     codex-ide--sessions)))
 
 (defun codex-ide--query-session-for-thread-selection (&optional directory)
   "Return a live session suitable for thread selection in DIRECTORY."
@@ -316,9 +351,11 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
                    (equal (codex-ide-session-directory session)
                           (codex-ide--normalize-directory
                            (or directory (codex-ide--get-working-directory))))
-                   (codex-ide--live-session-p session))
+                   (codex-ide--live-session-p session)
+                   (not (codex-ide--query-only-session-p session)))
           session))
-      (codex-ide--last-active-session-for-directory directory)))
+      (codex-ide--last-active-session-for-directory directory)
+      (codex-ide--query-only-session-for-directory directory)))
 
 (defun codex-ide--prepare-session-operations ()
   "Ensure Codex prerequisites needed for session-backed operations."
@@ -336,10 +373,9 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
          (session (codex-ide--query-session-for-thread-selection directory)))
     (unless session
       (let ((default-directory directory))
-        (setq session (codex-ide--create-process-session)))
+        (setq session (codex-ide--create-query-session)))
       (codex-ide-log-message session "Initializing background query session")
       (codex-ide--initialize-session session))
-    (codex-ide--ensure-input-prompt session)
     session))
 
 (defun codex-ide--reusable-idle-session-for-directory (&optional directory)
@@ -349,6 +385,7 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
     (seq-find
      (lambda (session)
        (and (codex-ide--live-session-p session)
+            (not (codex-ide--query-only-session-p session))
             (equal (codex-ide-session-directory session) directory)
             (not (codex-ide-session-thread-id session))
             (string= (codex-ide-session-status session) "idle")))
@@ -454,19 +491,16 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
             (setq query-session (codex-ide--query-session-for-thread-selection working-dir))
             (unless query-session
               (setq query-session (codex-ide--ensure-query-session-for-thread-selection
-                                   working-dir)
-                    created-session query-session)
+                                   working-dir))
               (codex-ide-log-message query-session "Starting session in mode %s" mode))
             (setq thread
                   (pcase mode
                     ('continue
-                     (or (with-current-buffer (codex-ide-session-buffer query-session)
-                           (codex-ide--latest-thread query-session))
+                     (or (codex-ide--latest-thread query-session)
                          (user-error "No Codex threads found for %s"
                                      (abbreviate-file-name working-dir))))
                     ('resume
-                     (with-current-buffer (codex-ide-session-buffer query-session)
-                       (codex-ide--pick-thread query-session omit-thread-id)))))
+                     (codex-ide--pick-thread query-session omit-thread-id))))
             (setq thread-id (alist-get 'id thread))
             (when-let ((existing-session
                         (codex-ide--session-for-thread-id thread-id working-dir)))
@@ -479,11 +513,7 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
                               (codex-ide--create-process-session))
                   created-session session)
             (codex-ide-log-message session "Starting session in mode %s" mode)
-            (unless (eq session query-session)
-              (codex-ide--initialize-session session))
-            (when (and (eq session query-session)
-                       (memq mode '(continue resume)))
-              (codex-ide--reset-session-buffer session))
+            (codex-ide--initialize-session session)
             (pcase mode
               ('new
                (codex-ide--clear-session-model-name session)
