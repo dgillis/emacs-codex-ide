@@ -20,7 +20,8 @@
 (defun codex-ide-test--prompt-prefix-at-line ()
   "Return the visible prompt prefix string at the current line."
   (save-excursion
-    (beginning-of-line)
+    (let ((inhibit-field-text-motion t))
+      (beginning-of-line))
     (buffer-substring-no-properties
      (point)
      (min (+ (point) 2) (line-end-position)))))
@@ -4199,6 +4200,35 @@
             (goto-char (marker-position
                         (codex-ide-session-input-start-marker session)))
             (should (looking-at-p "draft")))))))))
+
+(ert-deftest codex-ide-input-prompt-uses-fields-to-skip-prefix-at-bol ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "first line\nsecond line")
+            (goto-char (marker-position
+                        (codex-ide-session-input-prompt-start-marker session)))
+            (should (eq (get-text-property (point) 'field)
+                        'codex-ide-prompt-prefix))
+            (goto-char (marker-position
+                        (codex-ide-session-input-start-marker session)))
+            (should (eq (get-char-property (point) 'field)
+                        'codex-ide-active-input))
+            (goto-char (point-max))
+            (forward-line -1)
+            (end-of-line)
+            (move-beginning-of-line 1)
+            (should (= (point) (line-beginning-position)))
+            (goto-char (point-max))
+            (forward-line -1)
+            (forward-char 3)
+            (move-beginning-of-line 0)
+            (should (= (point)
+                       (marker-position
+                        (codex-ide-session-input-start-marker session))))
+            (should (looking-at-p "first line"))))))))
 
 (ert-deftest codex-ide-reopen-input-after-submit-error-resets-turn-state ()
   (let ((project-dir (codex-ide-test--make-temp-project)))

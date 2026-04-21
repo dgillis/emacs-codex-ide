@@ -777,12 +777,13 @@ Optionally seed it with INITIAL-TEXT."
              (point))
             (let ((overlay (make-overlay
                             (marker-position
-                             (codex-ide-session-input-prompt-start-marker session))
+                             (codex-ide-session-input-start-marker session))
                             (point-max)
                             buffer
                             t
                             t)))
               (overlay-put overlay 'face 'codex-ide-user-prompt-face)
+              (overlay-put overlay 'field 'codex-ide-active-input)
               (setf (codex-ide-session-input-overlay session) overlay))
             (when moving
               (goto-char (point-max)))
