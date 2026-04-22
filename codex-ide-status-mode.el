@@ -294,37 +294,51 @@ while 1 would fully replace the background with the foreground color."
 
 (defun codex-ide-status-mode--capture-view-state ()
   "Capture the current view state of the status buffer."
-  (let ((section (codex-ide-status-mode--section-containing-point))
+  (let* ((display-window (get-buffer-window (current-buffer) 0))
+         ;; `with-current-buffer' does not make the status buffer's window
+         ;; selected, so preserve the visible cursor location when available.
+         (capture-point (if (window-live-p display-window)
+                            (window-point display-window)
+                          (point)))
+         (section nil)
         (collapsed nil))
     (codex-ide-status-mode--map-sections
      (lambda (candidate)
        (push (cons (codex-ide-status-mode--section-path candidate)
                    (codex-ide-section-hidden candidate))
              collapsed)))
-    `((collapsed . ,collapsed)
-      (point-path . ,(and section
-                          (codex-ide-status-mode--section-path section)))
-      (point-offset . ,(and section
-                            (- (point)
-                               (codex-ide-section-heading-start section))))
-      (point . ,(point)))))
+    (save-excursion
+      (goto-char capture-point)
+      (setq section (codex-ide-status-mode--section-containing-point))
+      `((collapsed . ,collapsed)
+        (point-path . ,(and section
+                            (codex-ide-status-mode--section-path section)))
+        (point-offset . ,(and section
+                              (- capture-point
+                                 (codex-ide-section-heading-start section))))
+        (point . ,capture-point)))))
 
 (defun codex-ide-status-mode--restore-view-state (state)
   "Restore the status buffer view STATE after rerendering."
-  (dolist (entry (alist-get 'collapsed state))
-    (when-let ((section (codex-ide-status-mode--find-section-by-path (car entry))))
-      (if (cdr entry)
-          (codex-ide-section-hide section)
-        (codex-ide-section-show section))))
-  (if-let* ((path (alist-get 'point-path state))
-            (section (codex-ide-status-mode--find-section-by-path path)))
-      (let* ((offset (max 0 (or (alist-get 'point-offset state) 0)))
-             (target (min (+ (codex-ide-section-heading-start section) offset)
-                          (max (codex-ide-section-heading-start section)
-                               (1- (codex-ide-section-end section))))))
-        (goto-char target))
-    (goto-char (min (or (alist-get 'point state) (point-min))
-                    (point-max)))))
+  (let ((target nil))
+    (dolist (entry (alist-get 'collapsed state))
+      (when-let ((section (codex-ide-status-mode--find-section-by-path (car entry))))
+        (if (cdr entry)
+            (codex-ide-section-hide section)
+          (codex-ide-section-show section))))
+    (setq target
+          (if-let* ((path (alist-get 'point-path state))
+                    (section (codex-ide-status-mode--find-section-by-path path)))
+              (let ((offset (max 0 (or (alist-get 'point-offset state) 0))))
+                (min (+ (codex-ide-section-heading-start section) offset)
+                     (max (codex-ide-section-heading-start section)
+                          (1- (codex-ide-section-end section)))))
+            (min (or (alist-get 'point state) (point-min))
+                 (point-max))))
+    (goto-char target)
+    (dolist (window (get-buffer-window-list (current-buffer) nil 0))
+      (when (window-live-p window)
+        (set-window-point window target)))))
 
 (defun codex-ide-status-mode--actionable-section-at-point ()
   "Return the actionable status section at point.
@@ -1161,13 +1175,18 @@ Return nil when there is no agent reply."
          (codex-ide-status-mode--apply-expanded-content-face start (point))))
      t)))
 
-(defun codex-ide-status-mode--render-sections (directory)
-  "Render status sections for DIRECTORY and return the session count."
+(cl-defun codex-ide-status-mode--render-sections (directory &key (is-refresh nil))
+  "Render status sections for DIRECTORY and return the session count.
+
+When IS-REFRESH is non-nil, existing buffer content will be erased/reset."
   (let* ((query-session nil)
          (threads nil)
          (layout nil)
          (index 0))
     (codex-ide--prepare-session-operations)
+    (when is-refresh
+      (erase-buffer)
+      (codex-ide-section-reset))
     (codex-ide-status-mode--refresh-striped-heading-face)
     (setq query-session (codex-ide--ensure-query-session-for-thread-selection directory))
     (setq threads
@@ -1181,15 +1200,14 @@ Return nil when there is no agent reply."
           (codex-ide-status-mode--apply-heading-stripe section))))
     (length threads)))
 
-(defun codex-ide-status-mode--render-buffer (directory)
+(cl-defun codex-ide-status-mode--render-buffer (directory &key (is-refresh nil))
   "Render the status buffer for DIRECTORY."
   (let ((inhibit-read-only t))
-    (erase-buffer)
-    (codex-ide-section-reset)
     (setq-local header-line-format
                 (codex-ide-status-mode--header-line
                  directory
-                 (codex-ide-status-mode--render-sections directory)))
+                 (codex-ide-status-mode--render-sections directory
+                                                         :is-refresh is-refresh)))
     (goto-char (point-min))))
 
 ;;;###autoload
@@ -1199,7 +1217,8 @@ Return nil when there is no agent reply."
   (unless codex-ide-status-mode--directory
     (user-error "No Codex project is associated with this buffer"))
   (let ((state (codex-ide-status-mode--capture-view-state)))
-    (codex-ide-status-mode--render-buffer codex-ide-status-mode--directory)
+    (codex-ide-status-mode--render-buffer codex-ide-status-mode--directory
+                                          :is-refresh t)
     (codex-ide-status-mode--restore-view-state state)))
 
 ;;;###autoload

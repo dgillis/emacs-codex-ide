@@ -104,6 +104,43 @@
     (should line-move-visual)
     (should-not visual-line-mode)))
 
+(ert-deftest codex-ide-status-refresh-preserves-window-point-from-other-current-buffer ()
+  (let ((status-buffer (get-buffer-create " *codex-ide-status-refresh-point*"))
+        (other-buffer (get-buffer-create " *codex-ide-status-refresh-other*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer other-buffer)
+          (let ((status-window (split-window-right)))
+            (set-window-buffer status-window status-buffer)
+            (with-current-buffer status-buffer
+              (let ((inhibit-read-only t))
+                (erase-buffer)
+                (insert "alpha\nbeta\ngamma\n"))
+              (codex-ide-status-mode)
+              (setq-local codex-ide-status-mode--directory default-directory)
+              (goto-char (point-min)))
+            (set-window-point status-window (with-current-buffer status-buffer
+                                             (save-excursion
+                                               (goto-char (point-min))
+                                               (forward-line 2)
+                                               (point))))
+            (cl-letf (((symbol-function 'codex-ide-status-mode--render-buffer)
+                       (lambda (&rest _args)
+                         (let ((inhibit-read-only t))
+                           (goto-char (point-min))
+                           (set-window-point status-window (point-min))))))
+              (with-current-buffer status-buffer
+                (codex-ide-status-mode-refresh)))
+            (should (= (window-point status-window)
+                       (with-current-buffer status-buffer
+                         (save-excursion
+                           (goto-char (point-min))
+                           (forward-line 2)
+                           (point)))))))
+      (kill-buffer status-buffer)
+      (kill-buffer other-buffer))))
+
 (ert-deftest codex-ide-status-striped-heading-background-brightens-dark-themes ()
   (cl-letf (((symbol-function 'face-background)
              (lambda (&rest _args) "#101010"))
@@ -677,6 +714,41 @@
                        (buffer-substring-no-properties
                         (line-beginning-position)
                         (line-end-position)))))))))))
+
+(ert-deftest codex-ide-status-refresh-keeps-existing-render-when-prepare-fails ()
+  (let* ((root-dir (codex-ide-test--make-temp-project))
+         (project-dir (expand-file-name "alpha" root-dir))
+         (threads `(((id . "thread-alpha")
+                     (preview . "Alpha thread")
+                     (createdAt . 10)
+                     (updatedAt . 20)))))
+    (make-directory project-dir t)
+    (codex-ide-test-with-fixture root-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session nil))
+          (let ((default-directory project-dir))
+            (setq session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-alpha"
+                (codex-ide-session-status session) "idle")
+          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
+                     (lambda () nil))
+                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
+                     (lambda (_directory) session))
+                    ((symbol-function 'codex-ide--thread-list-data)
+                     (lambda (&optional _session _omit-thread-id)
+                       threads)))
+            (let ((default-directory project-dir))
+              (codex-ide-status))
+            (with-current-buffer "codex-ide: alpha"
+              (let ((original-body (buffer-string))
+                    (original-header (codex-ide-status-mode-test--header-line-string)))
+                (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
+                           (lambda ()
+                             (user-error "Preparation failed"))))
+                  (should-error (codex-ide-status-mode-refresh) :type 'user-error))
+                (should (equal (buffer-string) original-body))
+                (should (equal (codex-ide-status-mode-test--header-line-string)
+                               original-header))))))))))
 
 (ert-deftest codex-ide-status-ret-visits-thread-section-at-point ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
