@@ -69,6 +69,12 @@ Whether to log every streamed output delta.")
 (defvar codex-ide-resume-summary-turn-limit 100 "\
 How many recent turns to summarize when resuming a stored thread.")
 (custom-autoload 'codex-ide-resume-summary-turn-limit "codex-ide" t)
+(defvar codex-ide-thread-list-default-limit 100 "\
+Default number of stored threads to request when listing threads.
+
+This value is used when protocol callers do not pass an explicit
+thread-list limit.")
+(custom-autoload 'codex-ide-thread-list-default-limit "codex-ide" t)
 (autoload 'codex-ide-toggle-logging-enabled "codex-ide" "\
 Toggle `codex-ide-logging-enabled' interactively." t)
 

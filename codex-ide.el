@@ -184,6 +184,15 @@
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-thread-list-default-limit 100
+  "Default number of stored threads to request when listing threads.
+
+This value is used when protocol callers do not pass an explicit
+thread-list limit."
+  :type 'integer
+  :group 'codex-ide)
+
+;;;###autoload
 (defun codex-ide-toggle-logging-enabled ()
   "Toggle `codex-ide-logging-enabled' interactively."
   (interactive)

@@ -2252,6 +2252,51 @@
                            other-thread))
             (should (equal selected "Other thread"))))))))
 
+(ert-deftest codex-ide-list-threads-uses-configured-default-limit ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (captured-params nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((codex-ide-thread-list-default-limit 100)
+              (session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--request-sync)
+                     (lambda (_session method params)
+                       (setq captured-params params)
+                       (should (equal method "thread/list"))
+                       '((data . [((id . "thread-default"))]))))
+                    ((symbol-function 'codex-ide-session-directory)
+                     (lambda (_session) project-dir)))
+            (should (equal (codex-ide--list-threads session)
+                           '(((id . "thread-default")))))
+            (should (equal captured-params
+                           `((cwd . ,project-dir)
+                             (limit . 100)
+                             (sortKey . "updated_at"))))))))))
+
+(ert-deftest codex-ide-list-threads-accepts-explicit-limit-and-sort-key ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (captured-params nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((codex-ide-thread-list-default-limit 100)
+              (session (codex-ide--create-process-session)))
+          (cl-letf (((symbol-function 'codex-ide--request-sync)
+                     (lambda (_session method params)
+                       (setq captured-params params)
+                       (should (equal method "thread/list"))
+                       '((data . [((id . "thread-custom"))]))))
+                    ((symbol-function 'codex-ide-session-directory)
+                     (lambda (_session) project-dir)))
+            (should (equal (codex-ide--list-threads
+                            session
+                            :limit 25
+                            :sort-key "created_at")
+                           '(((id . "thread-custom")))))
+            (should (equal captured-params
+                           `((cwd . ,project-dir)
+                             (limit . 25)
+                             (sortKey . "created_at"))))))))))
+
 (ert-deftest codex-ide-ensure-query-session-for-thread-selection-creates-and-initializes-session ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (requests nil))

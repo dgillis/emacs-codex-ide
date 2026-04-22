@@ -24,6 +24,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'json)
 (require 'seq)
 (require 'subr-x)
@@ -43,6 +44,7 @@
 (defvar codex-ide-approval-policy)
 (defvar codex-ide-sandbox-mode)
 (defvar codex-ide-personality)
+(defvar codex-ide-thread-list-default-limit)
 
 (defun codex-ide--next-request-id (&optional session)
   "Return the next request id for SESSION."
@@ -297,18 +299,23 @@
      ((member (alist-get 'author item) '("assistant" assistant)) 'assistant)
      (t nil))))
 
-(defun codex-ide--list-threads (&optional session)
-  "List threads for the current working directory using SESSION."
+(cl-defun codex-ide--list-threads (&optional session &key limit sort-key)
+  "List threads for the current working directory using SESSION.
+
+When LIMIT is nil, use `codex-ide-thread-list-default-limit'.  When
+SORT-KEY is nil, sort by `updated_at'."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
   (let* ((working-dir (codex-ide-session-directory session))
+         (limit (or limit codex-ide-thread-list-default-limit))
+         (sort-key (or sort-key "updated_at"))
          (result (codex-ide--request-sync
                   session
                   "thread/list"
                   `((cwd . ,working-dir)
-                    (limit . 50)
-                    (sortKey . "updated_at"))))
+                    (limit . ,limit)
+                    (sortKey . ,sort-key))))
          (data (alist-get 'data result)))
     (append data nil)))
 
