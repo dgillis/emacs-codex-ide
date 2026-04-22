@@ -331,8 +331,10 @@ Move point to the next focal point in a Codex status buffer." t)
 Move point to the previous focal point in a Codex status buffer." t)
 (autoload 'codex-ide-status-mode-refresh "codex-ide-status-mode" "\
 Refresh the current Codex status buffer.
+When MODE is `incremental', preserve unchanged rendered content when possible.
+Any other MODE value keeps the existing full rerender behavior.
 
-(fn &optional IGNORE-AUTO NOCONFIRM)" t)
+(fn &optional IGNORE-AUTO NOCONFIRM MODE)" t)
 (autoload 'codex-ide-status "codex-ide-status-mode" "\
 Show the Codex status buffer for the current project." t)
 (register-definition-prefixes "codex-ide-status-mode" '("codex-ide-status-mode"))

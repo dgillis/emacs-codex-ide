@@ -203,7 +203,7 @@
                     ((symbol-function 'codex-ide-log-message)
                      (lambda (&rest _args) nil))
                     ((symbol-function 'codex-ide-display-buffer)
-                     (lambda (_buffer) (selected-window)))
+                     (lambda (_buffer &optional _action) (selected-window)))
                     ((symbol-function 'message)
                      (lambda (format-string &rest args)
                        (setq message-text (apply #'format format-string args)))))

@@ -263,17 +263,28 @@
   (should (eq (lookup-key codex-ide-session-buffer-list-mode-map (kbd "C-M-j"))
               #'codex-ide-session-list-display-session-at-point-other-window)))
 
-(ert-deftest codex-ide-session-list-display-session-at-point-other-window-binds-pop-up-action ()
-  (let ((captured-action nil))
-    (with-temp-buffer
-      (codex-ide-session-list-mode)
-      (setq-local codex-ide-session-list--visit-function
-                  (lambda (_id)
-                    (setq captured-action codex-ide-display-buffer-pop-up-action)))
-      (cl-letf (((symbol-function 'tabulated-list-get-id)
-                 (lambda () "session-1")))
-        (call-interactively
-         #'codex-ide-session-list-display-session-at-point-other-window)))
+(ert-deftest codex-ide-session-list-display-session-at-point-other-window-forwards-pop-up-action ()
+  (let ((captured-action nil)
+        (session-buffer (generate-new-buffer " *codex-ide-session-list-test*")))
+    (unwind-protect
+        (let ((session (make-codex-ide-session :buffer session-buffer)))
+          (with-temp-buffer
+            (codex-ide-session-list-mode)
+            (setq-local codex-ide-session-list--visit-function
+                        (lambda (_id)
+                          (codex-ide--show-session-buffer session)))
+            (cl-letf (((symbol-function 'tabulated-list-get-id)
+                       (lambda () "session-1"))
+                      ((symbol-function 'codex-ide-display-buffer)
+                       (lambda (_buffer &optional action)
+                         (setq captured-action action)
+                         (selected-window)))
+                      ((symbol-function 'codex-ide--ensure-input-prompt)
+                       (lambda (_session) nil)))
+              (call-interactively
+               #'codex-ide-session-list-display-session-at-point-other-window))))
+      (when (buffer-live-p session-buffer)
+        (kill-buffer session-buffer)))
     (should (equal captured-action
                    '(display-buffer-reuse-window
                      display-buffer-use-some-window

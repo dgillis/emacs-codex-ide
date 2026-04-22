@@ -128,7 +128,7 @@
                        (apply fn args)
                        nil))
                     ((symbol-function 'codex-ide-display-buffer)
-                     (lambda (buffer)
+                     (lambda (buffer &optional _action)
                        (setq displayed-buffer buffer)
                        (selected-window)))
                     ((symbol-function 'message)

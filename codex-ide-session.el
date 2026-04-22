@@ -323,7 +323,8 @@ protocol requests such as thread listing."
     (user-error "Session has no transcript buffer"))
   (if newly-created
       (codex-ide--display-new-session-buffer (codex-ide-session-buffer session))
-    (codex-ide-display-buffer (codex-ide-session-buffer session)))
+    (codex-ide-display-buffer (codex-ide-session-buffer session)
+                              codex-ide-display-buffer-pop-up-action))
   (codex-ide--ensure-input-prompt session)
   session)
 
