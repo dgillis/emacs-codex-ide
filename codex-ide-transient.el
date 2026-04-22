@@ -41,7 +41,6 @@
 (defvar codex-ide-approval-policy)
 (defvar codex-ide-sandbox-mode)
 (defvar codex-ide-personality)
-(defvar codex-ide-focus-on-open)
 (defvar codex-ide-new-session-split)
 (defvar codex-ide-enable-emacs-tool-bridge)
 (defvar codex-ide-want-mcp-bridge)
@@ -189,12 +188,6 @@
   (message "Running submit action set to %s"
            (codex-ide--running-submit-action-label)))
 
-(transient-define-suffix codex-ide--toggle-focus-on-open ()
-  "Toggle `codex-ide-focus-on-open'."
-  (interactive)
-  (setq codex-ide-focus-on-open (not codex-ide-focus-on-open))
-  (message "Focus on open %s" (if codex-ide-focus-on-open "enabled" "disabled")))
-
 (defun codex-ide--new-session-split-label ()
   "Return a short label for `codex-ide-new-session-split'."
   (or (car (rassoc codex-ide-new-session-split
@@ -252,7 +245,6 @@
   (customize-save-variable 'codex-ide-approval-policy codex-ide-approval-policy)
   (customize-save-variable 'codex-ide-sandbox-mode codex-ide-sandbox-mode)
   (customize-save-variable 'codex-ide-personality codex-ide-personality)
-  (customize-save-variable 'codex-ide-focus-on-open codex-ide-focus-on-open)
   (customize-save-variable 'codex-ide-new-session-split
                            codex-ide-new-session-split)
   (customize-save-variable 'codex-ide-want-mcp-bridge
@@ -306,10 +298,6 @@
    ("P" "Set personality" codex-ide--set-personality)
    ("S" "Set sandbox mode" codex-ide--set-sandbox-mode)]
    ["Window"
-    ("f" "Toggle focus on open" codex-ide--toggle-focus-on-open
-     :description (lambda ()
-                     (format "Focus on open (%s)"
-                             (if codex-ide-focus-on-open "ON" "OFF"))))
     ("w" "Set new session split" codex-ide--set-new-session-split
      :description (lambda ()
                      (format "New session split (%s)"

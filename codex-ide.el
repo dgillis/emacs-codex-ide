@@ -109,12 +109,6 @@
   :group 'codex-ide)
 
 ;;;###autoload
-(defcustom codex-ide-focus-on-open t
-  "Whether to focus the Codex window after showing it."
-  :type 'boolean
-  :group 'codex-ide)
-
-;;;###autoload
 (defcustom codex-ide-new-session-split nil
   "Window split direction to use when showing newly created Codex sessions."
   :type '(choice (const :tag "Default display behavior" nil)

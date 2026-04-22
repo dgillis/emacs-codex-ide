@@ -22,6 +22,9 @@
 (ert-deftest codex-ide-config-menu-exposes-new-session-split-suffix ()
   (should (transient-get-suffix 'codex-ide-config-menu "w")))
 
+(ert-deftest codex-ide-config-menu-does-not-expose-focus-on-open-suffix ()
+  (should-error (transient-get-suffix 'codex-ide-config-menu "f")))
+
 (ert-deftest codex-ide-config-menu-exposes-running-submit-action-suffix ()
   (should (transient-get-suffix 'codex-ide-config-menu "u")))
 

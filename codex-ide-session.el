@@ -811,8 +811,6 @@ protocol requests such as thread listing."
          (window (codex-ide-display-buffer
                   (codex-ide-session-buffer session)
                   codex-ide-display-buffer-pop-up-action)))
-    (when window
-      (select-window window))
     (codex-ide--ensure-input-prompt session)
     session))
 

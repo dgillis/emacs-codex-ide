@@ -24,11 +24,13 @@
 (require 'seq)
 (require 'subr-x)
 
-(defvar codex-ide-focus-on-open)
 (defvar codex-ide-new-session-split)
 
 (declare-function codex-ide--remember-buffer-context-before-switch "codex-ide-core"
                   (&optional buffer))
+
+(defconst codex-ide-select-window-on-open nil
+  "Whether `codex-ide-display-buffer' should select the shown window.")
 
 (defconst codex-ide-display-buffer-pop-up-action
   '(display-buffer-reuse-window display-buffer-pop-up-window)
@@ -46,31 +48,31 @@
 When ACTION is non-nil, pass it through as the DISPLAY-BUFFER action."
   (codex-ide--remember-buffer-context-before-switch)
   (let ((window (display-buffer buffer action)))
-    (when (and window codex-ide-focus-on-open)
+    (when (and window codex-ide-select-window-on-open)
       (select-window window))
     window))
 
-(defun codex-ide--split-window-for-new-session (window)
-  "Return a new window split from WINDOW for a newly created session."
-  (pcase codex-ide-new-session-split
-    ('vertical
-     (split-window window nil 'right))
-    ('horizontal
-     (split-window window nil 'below))
-    (_
-     nil)))
+(defun codex-ide--display-buffer-new-session-split (buffer alist)
+  "Display BUFFER in a new split for a newly created session.
+ALIST is ignored and accepted for `display-buffer' compatibility."
+  (let ((window (selected-window)))
+    (when window
+      (set-window-buffer
+       (pcase codex-ide-new-session-split
+         ('vertical
+          (split-window window nil 'right))
+         ('horizontal
+          (split-window window nil 'below))
+         (_
+          nil))
+       buffer))))
 
 (defun codex-ide--display-new-session-buffer (buffer)
   "Display newly created session BUFFER honoring split preferences."
-  (let ((window (or (and codex-ide-new-session-split
-                         (codex-ide--split-window-for-new-session (selected-window)))
-                    (codex-ide-display-buffer buffer
-                                              codex-ide-display-buffer-pop-up-action))))
-    (when window
-      (set-window-buffer window buffer)
-      (when codex-ide-focus-on-open
-        (select-window window)))
-    window))
+  (codex-ide-display-buffer buffer
+                            (if codex-ide-new-session-split
+                                '(codex-ide--display-buffer-new-session-split)
+                              codex-ide-display-buffer-pop-up-action)))
 
 (provide 'codex-ide-window)
 

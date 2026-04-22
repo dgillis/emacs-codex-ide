@@ -36,9 +36,6 @@ Optional baseline prompt injected into the first real prompt of a new thread.")
 (defvar codex-ide-buffer-name-prefix "codex" "\
 Prefix used when creating Codex session buffer names.")
 (custom-autoload 'codex-ide-buffer-name-prefix "codex-ide" t)
-(defvar codex-ide-focus-on-open t "\
-Whether to focus the Codex window after showing it.")
-(custom-autoload 'codex-ide-focus-on-open "codex-ide" t)
 (defvar codex-ide-new-session-split nil "\
 Window split direction to use when showing newly created Codex sessions.")
 (custom-autoload 'codex-ide-new-session-split "codex-ide" t)
