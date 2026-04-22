@@ -51,6 +51,13 @@
     map)
   "Keymap used for markdown file links.")
 
+(define-key codex-ide-renderer-link-keymap
+            (kbd "M-<return>")
+            #'codex-ide-renderer-open-file-link-other-window)
+(define-key codex-ide-renderer-link-keymap
+            (kbd "C-M-j")
+            #'codex-ide-renderer-open-file-link-other-window)
+
 (defcustom codex-ide-renderer-render-markdown-during-streaming t
   "Whether to apply incremental markdown rendering while text streams."
   :type 'boolean
@@ -392,15 +399,24 @@ Return a plist containing `:delete-start', `:boundary', and `:end' markers."
       (list normalized nil nil))
      (t nil))))
 
-(defun codex-ide-renderer-open-file-link (_button)
+(defun codex-ide-renderer-open-file-link (&optional _button)
   "Open the file link described by text properties at point."
   (interactive)
+  (codex-ide-renderer--visit-file-link #'find-file))
+
+(defun codex-ide-renderer-open-file-link-other-window (&optional _button)
+  "Open the file link described by text properties at point in another window."
+  (interactive)
+  (codex-ide-renderer--visit-file-link #'find-file-other-window))
+
+(defun codex-ide-renderer--visit-file-link (open-file-fn)
+  "Open the file link at point using OPEN-FILE-FN."
   (let ((path (get-text-property (point) 'codex-ide-path))
         (line (get-text-property (point) 'codex-ide-line))
         (column (get-text-property (point) 'codex-ide-column)))
     (unless (and path (file-exists-p path))
       (user-error "File does not exist: %s" (or path "unknown")))
-    (find-file path)
+    (funcall open-file-fn path)
     (goto-char (point-min))
     (when line
       (forward-line (1- line)))

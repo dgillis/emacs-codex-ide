@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'ert)
 (require 'subr-x)
 (require 'codex-ide-test-fixtures)
@@ -137,6 +138,74 @@ BODY may refer to the lexical variable `session'."
                     (ensure-list (get-text-property code-pos 'face))))
       (should (memq 'font-lock-keyword-face
                     (ensure-list (get-text-property code-pos 'face)))))))
+
+(ert-deftest codex-ide-renderer-link-keymap-binds-other-window-open-commands ()
+  (should (eq (lookup-key codex-ide-renderer-link-keymap (kbd "M-<return>"))
+              #'codex-ide-renderer-open-file-link-other-window))
+  (should (eq (lookup-key codex-ide-renderer-link-keymap (kbd "C-M-j"))
+              #'codex-ide-renderer-open-file-link-other-window)))
+
+(ert-deftest codex-ide-renderer-open-file-link-other-window-uses-other-window-opener ()
+  (let ((path (make-temp-file "codex-ide-renderer-link-"))
+        (opened-path nil)
+        (target-buffer (generate-new-buffer " *codex-ide-renderer-link-target*")))
+    (unwind-protect
+        (with-temp-buffer
+          (add-text-properties
+           (progn (insert "link") (point-min))
+           (point-max)
+           `(codex-ide-path ,path
+                            codex-ide-line 2
+                            codex-ide-column 3))
+          (goto-char (point-min))
+          (cl-letf (((symbol-function 'find-file-other-window)
+                     (lambda (file)
+                       (setq opened-path file)
+                       (with-current-buffer target-buffer
+                         (erase-buffer)
+                         (insert "alpha\nbeta\ngamma\n"))
+                       (set-buffer target-buffer)
+                       target-buffer)))
+            (codex-ide-renderer-open-file-link-other-window nil)
+            (should (equal opened-path path))
+            (should (eq (current-buffer) target-buffer))
+            (should (= (line-number-at-pos) 2))
+            (should (= (current-column) 2))))
+      (when (buffer-live-p target-buffer)
+        (kill-buffer target-buffer))
+      (ignore-errors
+        (delete-file path)))))
+
+(ert-deftest codex-ide-renderer-open-file-link-other-window-is-callable-interactively ()
+  (let ((path (make-temp-file "codex-ide-renderer-link-"))
+        (opened-path nil)
+        (target-buffer (generate-new-buffer " *codex-ide-renderer-link-target*")))
+    (unwind-protect
+        (with-temp-buffer
+          (add-text-properties
+           (progn (insert "link") (point-min))
+           (point-max)
+           `(codex-ide-path ,path
+                            codex-ide-line 2
+                            codex-ide-column 3))
+          (goto-char (point-min))
+          (cl-letf (((symbol-function 'find-file-other-window)
+                     (lambda (file)
+                       (setq opened-path file)
+                       (with-current-buffer target-buffer
+                         (erase-buffer)
+                         (insert "alpha\nbeta\ngamma\n"))
+                       (set-buffer target-buffer)
+                       target-buffer)))
+            (call-interactively #'codex-ide-renderer-open-file-link-other-window)
+            (should (equal opened-path path))
+            (should (eq (current-buffer) target-buffer))
+            (should (= (line-number-at-pos) 2))
+            (should (= (current-column) 2))))
+      (when (buffer-live-p target-buffer)
+        (kill-buffer target-buffer))
+      (ignore-errors
+        (delete-file path)))))
 
 (ert-deftest codex-ide-renderer-streaming-renders-completed-inline-markdown ()
   (codex-ide-renderer-test-with-agent-message-buffer
