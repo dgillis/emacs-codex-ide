@@ -705,25 +705,44 @@
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
-(ert-deftest codex-ide-session-mode-records-tail-follow-cooldown-after-navigation ()
+(ert-deftest codex-ide-session-mode-suspends-tail-follow-after-navigation ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-tail-follow-nav*")))
+      (unwind-protect
+          (let ((window (selected-window)))
+            (with-current-buffer buffer
+              (erase-buffer)
+              (insert "alpha\nbeta\n")
+              (codex-ide-session-mode))
+            (set-window-buffer window buffer)
+            (with-selected-window window
+              (goto-char (point-max))
+              (setq-local codex-ide-session-mode--last-point (point))
+              (setq-local codex-ide-session-mode--last-window-start (window-start))
+              (forward-line -1)
+              (codex-ide-session-mode--track-tail-follow-navigation))
+            (should (window-parameter window
+                                      'codex-ide-tail-follow-suspended)))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest codex-ide-session-mode-clears-tail-follow-suspension-after-rejoining-tail ()
   (save-window-excursion
     (delete-other-windows)
     (with-temp-buffer
       (insert "alpha\nbeta\n")
       (codex-ide-session-mode)
       (switch-to-buffer (current-buffer))
-      (goto-char (point-min))
-      (setq-local codex-ide-session-mode--last-point (point))
+      (set-window-parameter (selected-window) 'codex-ide-tail-follow-suspended t)
+      (setq-local codex-ide-session-mode--last-point (point-min))
       (setq-local codex-ide-session-mode--last-window-start (window-start))
       (goto-char (point-max))
-      (cl-letf (((symbol-function 'float-time)
-                 (lambda (&optional _time) 10.0)))
-        (codex-ide-session-mode--record-tail-follow-cooldown))
-      (should (= (window-parameter (selected-window)
-                                   'codex-ide-tail-follow-paused-until)
-                 (+ 10.0 codex-ide-transcript-tail-follow-navigation-cooldown))))))
+      (codex-ide-session-mode--track-tail-follow-navigation)
+      (should-not (window-parameter (selected-window)
+                                    'codex-ide-tail-follow-suspended)))))
 
-(ert-deftest codex-ide-transcript-window-follow-respects-navigation-cooldown ()
+(ert-deftest codex-ide-transcript-window-follow-respects-tail-follow-suspension ()
   (save-window-excursion
     (delete-other-windows)
     (with-temp-buffer
@@ -733,17 +752,14 @@
       (recenter -1)
       (let ((window (selected-window))
             (anchor (point-max)))
-        (set-window-parameter window 'codex-ide-tail-follow-paused-until 11.0)
-        (cl-letf (((symbol-function 'float-time)
-                   (lambda (&optional _time) 10.0)))
-          (should-not (codex-ide--transcript-window-follows-anchor-p
-                       window
-                       anchor)))
-        (cl-letf (((symbol-function 'float-time)
-                   (lambda (&optional _time) 12.0)))
-          (should (codex-ide--transcript-window-follows-anchor-p
-                   window
-                   anchor)))))))
+        (set-window-parameter window 'codex-ide-tail-follow-suspended t)
+        (should-not (codex-ide--transcript-window-follows-anchor-p
+                     window
+                     anchor))
+        (set-window-parameter window 'codex-ide-tail-follow-suspended nil)
+        (should (codex-ide--transcript-window-follows-anchor-p
+                 window
+                 anchor))))))
 
 (ert-deftest codex-ide-streaming-append-advances-window-that-was-following-tail ()
   (save-window-excursion
@@ -765,6 +781,65 @@
               (should (>= (window-end window t)
                           (with-current-buffer buffer
                             (point-max))))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest codex-ide-streaming-append-does-not-advance-window-after-navigation-away-from-tail ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-transcript-suspended-tail*")))
+      (unwind-protect
+          (let ((window (selected-window)))
+            (with-current-buffer buffer
+              (erase-buffer)
+              (codex-ide-session-mode)
+              (dotimes (line 80)
+                (insert (format "line %02d\n" line))))
+            (set-window-buffer window buffer)
+            (with-selected-window window
+              (goto-char (point-max))
+              (recenter -1)
+              (setq-local codex-ide-session-mode--last-point (point))
+              (setq-local codex-ide-session-mode--last-window-start (window-start))
+              (goto-char (point-max))
+              (forward-line -2)
+              (codex-ide-session-mode--track-tail-follow-navigation))
+            (let ((window-start-before (window-start window))
+                  (window-point-before (window-point window)))
+              (with-current-buffer buffer
+                (codex-ide--append-to-buffer buffer "delta\n"))
+              (should (= (window-start window) window-start-before))
+              (should (= (window-point window) window-point-before))
+              (should (window-parameter window 'codex-ide-tail-follow-suspended))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest codex-ide-streaming-append-resumes-after-rejoining-tail ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-transcript-rejoin-tail*")))
+      (unwind-protect
+          (let ((window (selected-window)))
+            (with-current-buffer buffer
+              (erase-buffer)
+              (codex-ide-session-mode)
+              (dotimes (line 80)
+                (insert (format "line %02d\n" line))))
+            (set-window-buffer window buffer)
+            (with-selected-window window
+              (goto-char (point-max))
+              (recenter -1)
+              (set-window-parameter window 'codex-ide-tail-follow-suspended t)
+              (setq-local codex-ide-session-mode--last-point (point-min))
+              (setq-local codex-ide-session-mode--last-window-start (window-start))
+              (goto-char (point-max))
+              (codex-ide-session-mode--track-tail-follow-navigation))
+            (should-not (window-parameter window 'codex-ide-tail-follow-suspended))
+            (with-current-buffer buffer
+              (codex-ide--append-to-buffer buffer "delta\n"))
+            (should (>= (window-end window t)
+                        (with-current-buffer buffer
+                          (point-max)))))
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
@@ -2457,7 +2532,7 @@
             (codex-ide--track-active-buffer (current-buffer)))
           (dolist (session (list first second))
             (with-current-buffer (codex-ide-session-buffer session)
-              (should (string-match-p "focus: .*example\\.el:1"
+              (should (string-match-p "example\\.el:1"
                                       (format "%s" header-line-format))))))))))
 
 (ert-deftest codex-ide-compose-turn-input-does-not-duplicate-prompt-context-block ()
@@ -2726,16 +2801,42 @@
           (should (equal (codex-ide--server-model-name session)
                          "gpt-5.4-mini")))))))
 
-(ert-deftest codex-ide-header-line-shows-reasoning-effort ()
-  (let ((project-dir (codex-ide-test--make-temp-project))
-        (codex-ide-reasoning-effort "high"))
+(ert-deftest codex-ide-header-line-uses-updated-compact-format ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (file-path
+          (codex-ide-test--make-project-file
+           project-dir "src/codex-ide-transcript.el" "(message \"hello\")\n")))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
         (let ((session (codex-ide--create-process-session)))
+          (codex-ide--session-metadata-put session :model-name "gpt-5.4")
+          (codex-ide--session-metadata-put
+           session :rate-limits
+           '((primary . ((usedPercent . 15)
+                         (windowDurationMins . 300)))
+             (secondary . ((usedPercent . 3)
+                           (windowDurationMins . 10080)))
+             (planType . "prolite")))
+          (codex-ide--session-metadata-put
+           session :token-usage
+           '((total . ((totalTokens . 305500)))
+             (modelContextWindow . 258400)
+             (last . ((inputTokens . 42800)
+                      (cachedInputTokens . 26100)
+                      (outputTokens . 244)
+                      (reasoningOutputTokens . 68)))))
+          (with-current-buffer (find-file-noselect file-path)
+            (setq-local default-directory (file-name-as-directory project-dir))
+            (goto-char (point-min))
+            (forward-line 0)
+            (forward-char 1)
+            (codex-ide--track-active-buffer (current-buffer)))
           (with-current-buffer (codex-ide-session-buffer session)
             (codex-ide--update-header-line session)
-            (should (string-match-p "effort:high"
-                                    (substring-no-properties header-line-format)))))))))
+            (should
+             (equal
+              (format-mode-line header-line-format)
+              "Focus: codex-ide-transcript.el:1 | Model: gpt-5.4 | Quota: 15%/5h 3%/wk (prolite) | Context: 305.5k/258.4k | Last[in,cache,out,reason]: 42.8k,26.1k,244,68"))))))))
 
 (ert-deftest codex-ide-header-line-shows-model-name ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -2745,8 +2846,20 @@
           (codex-ide--session-metadata-put session :model-name "gpt-5.4")
           (with-current-buffer (codex-ide-session-buffer session)
             (codex-ide--update-header-line session)
-            (should (string-match-p "model:gpt-5\\.4"
+            (should (string-match-p "Model: gpt-5\\.4"
                                     (substring-no-properties header-line-format)))))))))
+
+(ert-deftest codex-ide-header-line-shows-model-reasoning-effort-when-set ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (codex-ide--session-metadata-put session :model-name "gpt-5.4")
+          (codex-ide--session-metadata-put session :reasoning-effort "high")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--update-header-line session)
+            (should (string-match-p "Model: gpt-5\\.4 (high)"
+                                    (format-mode-line header-line-format)))))))))
 
 (ert-deftest codex-ide-header-line-prefers-session-model-over-global-default ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -2758,9 +2871,9 @@
           (codex-ide--session-metadata-put session :model-name "gpt-5.4-mini")
           (with-current-buffer (codex-ide-session-buffer session)
             (codex-ide--update-header-line session)
-            (should (string-match-p "model:gpt-5\\.4-mini"
+            (should (string-match-p "Model: gpt-5\\.4-mini"
                                     (substring-no-properties header-line-format)))
-            (should-not (string-match-p "model:gpt-5\\.4\\([^.-]\\|$\\)"
+            (should-not (string-match-p "Model: gpt-5\\.4\\([^.-]\\|$\\)"
                                         (substring-no-properties header-line-format)))))))))
 
 (ert-deftest codex-ide-header-line-requests-server-model-when-session-model-is-unset ()
@@ -2776,7 +2889,7 @@
             (with-current-buffer (codex-ide-session-buffer session)
               (codex-ide--update-header-line session)
               (should requested)
-              (should-not (string-match-p "model:"
+              (should-not (string-match-p "Model:"
                                           (substring-no-properties header-line-format))))))))))
 
 (ert-deftest codex-ide-header-line-uses-server-model-when-local-model-is-unset ()
@@ -2790,7 +2903,7 @@
                        "gpt-5.4-mini")))
             (with-current-buffer (codex-ide-session-buffer session)
               (codex-ide--update-header-line session)
-              (should (string-match-p "model:gpt-5\\.4-mini"
+              (should (string-match-p "Model: gpt-5\\.4-mini"
                                       (substring-no-properties header-line-format))))))))))
 
 (ert-deftest codex-ide-available-model-names-queries-model-list ()
@@ -2983,6 +3096,47 @@
           (should-not updated)
           (should (equal (codex-ide--server-model-name session) "gpt-5.4"))
           (should-not requests))))))
+
+(ert-deftest codex-ide-web-search-completion-renders-query-details-from-completed-item ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session))
+              (primary-query
+               "site:docs.astral.sh uv index lockfile environment variable index-url lockfile localhost")
+              (secondary-query
+               "site:docs.astral.sh uv lockfile embeds index URL sources index strategy"))
+          (codex-ide--handle-notification
+           session
+           '((method . "turn/started")
+             (params . ((turn . ((id . "turn-1")))))))
+          (codex-ide--handle-notification
+           session
+           '((method . "item/started")
+             (params . ((item . ((type . "webSearch")
+                                 (id . "web-search-1")
+                                 (query . "")
+                                 (action . ((type . "other")))))))))
+          (codex-ide--handle-notification
+           session
+           `((method . "item/completed")
+             (params . ((item . ((type . "webSearch")
+                                 (id . "web-search-1")
+                                 (status . "completed")
+                                 (query . ,primary-query)
+                                 (action . ((type . "search")
+                                            (query . ,primary-query)
+                                            (queries . (,primary-query
+                                                        ,secondary-query))))))))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (let ((text (buffer-string)))
+              (should (string-match-p "\\* Searched the web" text))
+              (should (string-match-p
+                       (regexp-quote (format "  └ %s" primary-query))
+                       text))
+              (should (string-match-p
+                       (regexp-quote (format "  └ %s" secondary-query))
+                       text)))))))))
 
 (ert-deftest codex-ide-turn-started-does-not-refresh-known-session-model ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -3203,6 +3357,77 @@
             (backward-char 1)
             (should-not (button-at (point))))
           (should (= (length (codex-ide-test-process-sent-strings process)) 1)))))))
+
+(ert-deftest codex-ide-command-approval-navigation-within-block-preserves-tail-follow ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((project-dir (codex-ide-test--make-temp-project))
+          (codex-ide-model "gpt-5.4"))
+      (codex-ide-test-with-fixture project-dir
+        (codex-ide-test-with-fake-processes
+          (let* ((session (codex-ide--create-process-session))
+                 (buffer (codex-ide-session-buffer session))
+                 (window (selected-window)))
+            (setf (codex-ide-session-current-turn-id session) "turn-approval-preserve"
+                  (codex-ide-session-status session) "running")
+            (cl-letf (((symbol-function 'run-at-time)
+                       (lambda (_time _repeat function)
+                         (funcall function)))
+                      ((symbol-function 'codex-ide-display-buffer)
+                       (lambda (_buffer) window))
+                      ((symbol-function 'message)
+                       (lambda (&rest _) nil)))
+              (codex-ide--handle-command-approval
+               session
+               42
+               '((command . "git status")
+                 (reason . "inspect worktree"))))
+            (set-window-buffer window buffer)
+            (with-selected-window window
+              (goto-char (point-max))
+              (setq-local codex-ide-session-mode--last-point (point))
+              (setq-local codex-ide-session-mode--last-window-start (window-start))
+              (forward-line -1)
+              (codex-ide-session-mode--track-tail-follow-navigation))
+            (should-not (window-parameter window 'codex-ide-tail-follow-suspended))))))))
+
+(ert-deftest codex-ide-command-approval-navigation-above-block-suspends-tail-follow ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((project-dir (codex-ide-test--make-temp-project))
+          (codex-ide-model "gpt-5.4"))
+      (codex-ide-test-with-fixture project-dir
+        (codex-ide-test-with-fake-processes
+          (let* ((session (codex-ide--create-process-session))
+                 (buffer (codex-ide-session-buffer session))
+                 (window (selected-window))
+                 approval-start)
+            (setf (codex-ide-session-current-turn-id session) "turn-approval-suspend"
+                  (codex-ide-session-status session) "running")
+            (cl-letf (((symbol-function 'run-at-time)
+                       (lambda (_time _repeat function)
+                         (funcall function)))
+                      ((symbol-function 'codex-ide-display-buffer)
+                       (lambda (_buffer) window))
+                      ((symbol-function 'message)
+                       (lambda (&rest _) nil)))
+              (codex-ide--handle-command-approval
+               session
+               42
+               '((command . "git status")
+                 (reason . "inspect worktree"))))
+            (setq approval-start
+                  (marker-position
+                   (plist-get (gethash 42 (codex-ide--pending-approvals session))
+                              :start-marker)))
+            (set-window-buffer window buffer)
+            (with-selected-window window
+              (goto-char (point-max))
+              (setq-local codex-ide-session-mode--last-point (point))
+              (setq-local codex-ide-session-mode--last-window-start (window-start))
+              (goto-char (max (point-min) (1- approval-start)))
+              (codex-ide-session-mode--track-tail-follow-navigation))
+            (should (window-parameter window 'codex-ide-tail-follow-suspended))))))))
 
 (ert-deftest codex-ide-command-approval-strips-shell-wrapper-without-summarizing ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -4667,6 +4892,20 @@
    (equal (codex-ide-renderer-parse-file-link-target "\\/tmp\\/foo.el#L3C2")
           '("/tmp/foo.el" 3 2))))
 
+(ert-deftest codex-ide-parse-file-link-target-ignores-permissive-wrappers ()
+  (should
+   (equal (codex-ide-renderer-parse-file-link-target "</tmp/foo.txt>")
+          '("/tmp/foo.txt" nil nil)))
+  (should
+   (equal (codex-ide-renderer-parse-file-link-target "</tmp/foo.txt:123>")
+          '("/tmp/foo.txt" 123 nil)))
+  (should
+   (equal (codex-ide-renderer-parse-file-link-target "    /tmp/foo.txt   ")
+          '("/tmp/foo.txt" nil nil)))
+  (should
+   (equal (codex-ide-renderer-parse-file-link-target "  </tmp/foo.txt:888  ")
+          '("/tmp/foo.txt" 888 nil))))
+
 (ert-deftest codex-ide-render-markdown-region-renders-file-links-with-escaped-slashes ()
   (with-temp-buffer
     (insert "See [`foo.el`](\\/tmp\\/foo.el#L3C2)\n")
@@ -4681,6 +4920,29 @@
       (should (= (get-text-property pos 'codex-ide-line) 3))
       (should (= (get-text-property pos 'codex-ide-column) 2))
       (should (equal (get-text-property pos 'display) "foo.el")))))
+
+(ert-deftest codex-ide-render-markdown-region-renders-file-links-with-permissive-wrappers ()
+  (with-temp-buffer
+    (insert
+     (mapconcat
+      #'identity
+      '("One [`foo.txt`](</tmp/foo.txt>)"
+        "Two [`foo.txt`](</tmp/foo.txt:123>)"
+        "Three [`foo.txt`](    /tmp/foo.txt   )"
+        "Four [`foo.txt`](  </tmp/foo.txt:888  )")
+      "\n"))
+    (insert "\n")
+    (codex-ide-renderer-render-markdown-region (point-min) (point-max))
+    (goto-char (point-min))
+    (dolist (expected-line '(nil 123 nil 888))
+      (search-forward "foo.txt")
+      (let ((pos (1- (point))))
+        (should (button-at pos))
+        (should (equal (get-text-property pos 'codex-ide-path) "/tmp/foo.txt"))
+        (if expected-line
+            (should (= (get-text-property pos 'codex-ide-line) expected-line))
+          (should-not (get-text-property pos 'codex-ide-line)))
+        (should-not (get-text-property pos 'codex-ide-column))))))
 
 (ert-deftest codex-ide-render-markdown-region-renders-inline-code ()
   (with-temp-buffer

@@ -28,7 +28,6 @@
 (require 'codex-ide-renderer)
 
 (defvar codex-ide-session-enable-visual-line-mode)
-(defvar codex-ide-transcript-tail-follow-navigation-cooldown)
 
 (defvar codex-ide-session-mode-map
   (let ((map (make-sparse-keymap)))
@@ -51,10 +50,10 @@
 (define-key codex-ide-session-prompt-minor-mode-map (kbd "M-n") #'codex-ide-next-prompt-history)
 
 (defvar-local codex-ide-session-mode--last-point nil
-  "Last observed point used for transcript tail-follow cooldown tracking.")
+  "Last observed point used for transcript tail-follow navigation tracking.")
 
 (defvar-local codex-ide-session-mode--last-window-start nil
-  "Last observed `window-start' for transcript tail-follow cooldown tracking.")
+  "Last observed `window-start' for transcript tail-follow navigation tracking.")
 
 (define-minor-mode codex-ide-session-prompt-minor-mode
   "Minor mode enabled only while point is in the active Codex prompt."
@@ -111,22 +110,62 @@
   (when (fboundp 'font-lock-mode)
     (font-lock-mode -1)))
 
-(defun codex-ide-session-mode--record-tail-follow-cooldown ()
-  "Pause transcript tail following briefly after user navigation."
+(defun codex-ide-session-mode--tail-follow-rejoined-p (&optional session)
+  "Return non-nil when point has explicitly rejoined the live transcript tail.
+
+Rejoining means point is at `point-max' or back inside SESSION's active prompt."
+  (setq session (or session (and (boundp 'codex-ide--session) codex-ide--session)))
+  (or (= (point) (point-max))
+      (codex-ide--point-in-active-prompt-p session)))
+
+(defun codex-ide-session-mode--interactive-request-preserve-start (&optional session)
+  "Return the earliest pending interactive-request start position for SESSION.
+
+When non-nil, positions at or after the returned buffer location are treated as
+part of the live interactive request zone and should preserve existing tail
+follow state."
+  (setq session (or session (and (boundp 'codex-ide--session) codex-ide--session)))
+  (let ((approvals (and session
+                        (codex-ide--session-metadata-get session :pending-approvals)))
+        start)
+    (when (hash-table-p approvals)
+      (maphash
+       (lambda (_id approval)
+         (let ((marker (plist-get approval :start-marker)))
+           (when (and (markerp marker)
+                      (eq (marker-buffer marker) (current-buffer)))
+             (setq start (if start
+                             (min start (marker-position marker))
+                           (marker-position marker))))))
+       approvals))
+    start))
+
+(defun codex-ide-session-mode--tail-follow-preserve-p (&optional session pos)
+  "Return non-nil when POS should preserve the current tail-follow state.
+
+This covers inline approval and elicitation regions rendered near the live tail,
+so users can navigate within those controls without opting out of follow mode."
+  (setq pos (or pos (point)))
+  (when-let ((start (codex-ide-session-mode--interactive-request-preserve-start
+                     session)))
+    (>= pos start)))
+
+(defun codex-ide-session-mode--track-tail-follow-navigation ()
+  "Track whether the selected transcript window has opted out of tail following."
   (when-let ((window (and (derived-mode-p 'codex-ide-session-mode)
                           (eq (window-buffer (selected-window)) (current-buffer))
                           (selected-window))))
-    (let ((point-pos (point))
+    (let ((session (and (boundp 'codex-ide--session) codex-ide--session))
+          (point-pos (point))
           (window-start-pos (window-start window)))
       (unless (or (null codex-ide-session-mode--last-point)
                   (null codex-ide-session-mode--last-window-start))
         (when (or (/= point-pos codex-ide-session-mode--last-point)
                   (/= window-start-pos codex-ide-session-mode--last-window-start))
-          (set-window-parameter
-           window
-           'codex-ide-tail-follow-paused-until
-           (+ (float-time)
-              codex-ide-transcript-tail-follow-navigation-cooldown))))
+          (if (codex-ide-session-mode--tail-follow-rejoined-p session)
+              (set-window-parameter window 'codex-ide-tail-follow-suspended nil)
+            (unless (codex-ide-session-mode--tail-follow-preserve-p session point-pos)
+              (set-window-parameter window 'codex-ide-tail-follow-suspended t)))))
       (setq codex-ide-session-mode--last-point point-pos
             codex-ide-session-mode--last-window-start window-start-pos))))
 
@@ -145,7 +184,7 @@
   (setq-local codex-ide-session-mode--last-window-start nil)
   (add-hook 'post-command-hook #'codex-ide--sync-prompt-minor-mode nil t)
   (add-hook 'post-command-hook
-            #'codex-ide-session-mode--record-tail-follow-cooldown
+            #'codex-ide-session-mode--track-tail-follow-navigation
             nil
             t))
 

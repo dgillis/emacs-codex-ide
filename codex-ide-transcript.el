@@ -69,7 +69,6 @@
 (defvar codex-ide-display-buffer-options)
 (defvar codex-ide-log-stream-deltas)
 (defvar codex-ide--sessions)
-(defvar codex-ide-transcript-tail-follow-navigation-cooldown)
 (defvar codex-ide-command-output-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'codex-ide-toggle-command-output-at-point)
@@ -90,11 +89,6 @@ Streaming transcript appends should leave this enabled so windows already
 tracking the live tail keep doing so.  Interactive in-place rewrites, such as
 expanding or folding a command output block, should bind this to nil so the
 clicked window stays where it was.")
-
-(defcustom codex-ide-transcript-tail-follow-navigation-cooldown 0.5
-  "Seconds to pause transcript tail following after user navigation."
-  :type 'number
-  :group 'codex-ide)
 
 (defun codex-ide--update-mode-line (&optional session)
   "Refresh the mode line indicator for SESSION."
@@ -205,13 +199,12 @@ at the bottom of the live session."
         (window-point-pos (window-point window))
         (window-start-pos (window-start window))
         (window-end-pos (window-end window t))
-        (paused-until (window-parameter
-                       window
-                       'codex-ide-tail-follow-paused-until)))
+        (tail-follow-suspended (window-parameter
+                                window
+                                'codex-ide-tail-follow-suspended)))
     (and (window-live-p window)
          (eq (window-buffer window) (current-buffer))
-         (not (and (numberp paused-until)
-                   (< (float-time) paused-until)))
+         (not tail-follow-suspended)
          (or (>= window-point-pos anchor-pos)
              (>= window-end-pos anchor-pos)
              (and (>= window-end-pos buffer-end)
@@ -667,64 +660,90 @@ When DRAFT is nil, preserve the current active prompt text."
    (t
     (number-to-string value))))
 
-(defun codex-ide--format-token-usage-summary (token-usage)
-  "Return a compact header summary for TOKEN-USAGE."
+(defun codex-ide--format-token-usage-context-summary (token-usage)
+  "Return the context portion of the header summary for TOKEN-USAGE."
   (when-let* ((total (alist-get 'total token-usage))
               (window (alist-get 'modelContextWindow token-usage))
               (used (alist-get 'totalTokens total)))
-    (let* ((remaining (max 0 (- window used)))
-           (remaining-percent
-            (if (> window 0)
-                (/ (* 100.0 remaining) window)
-              0.0))
-           (last (or (alist-get 'last token-usage) total))
-           (last-input (alist-get 'inputTokens last))
-           (last-cached (alist-get 'cachedInputTokens last))
-           (last-output (alist-get 'outputTokens last))
-           (last-reasoning (alist-get 'reasoningOutputTokens last)))
-      (string-join
-       (delq nil
-             (list
-              (format "ctx: %s/%s"
-                      (codex-ide--format-compact-number used)
-                      (codex-ide--format-compact-number window))
-              (format "left: %s (%.0f%%%%)"
-                      (codex-ide--format-compact-number remaining)
-                      remaining-percent)
-              (when (numberp last-input)
-                (format "last in:%s" (codex-ide--format-compact-number last-input)))
-              (when (numberp last-cached)
-                (format "cache:%s" (codex-ide--format-compact-number last-cached)))
-              (when (numberp last-output)
-                (format "out:%s" (codex-ide--format-compact-number last-output)))
-              (when (numberp last-reasoning)
-                (format "reason:%s" (codex-ide--format-compact-number last-reasoning)))))
-       "  "))))
+    (format "Context: %s/%s"
+            (codex-ide--format-compact-number used)
+            (codex-ide--format-compact-number window))))
 
-(defun codex-ide--format-reasoning-effort-summary (session)
-  "Return a compact header summary for SESSION's reasoning effort."
-  (when-let ((effort (or (codex-ide--session-metadata-get session :reasoning-effort)
-                         codex-ide-reasoning-effort)))
-    (format "effort:%s" effort)))
+(defun codex-ide--format-token-usage-last-summary (token-usage)
+  "Return the last-usage portion of the header summary for TOKEN-USAGE."
+  (when-let* ((total (alist-get 'total token-usage))
+              (last (or (alist-get 'last token-usage) total)))
+    (let ((last-input (alist-get 'inputTokens last))
+          (last-cached (alist-get 'cachedInputTokens last))
+          (last-output (alist-get 'outputTokens last))
+          (last-reasoning (alist-get 'reasoningOutputTokens last)))
+      (when (or (numberp last-input)
+                (numberp last-cached)
+                (numberp last-output)
+                (numberp last-reasoning))
+        (format "Last[in,cache,out,reason]: %s,%s,%s,%s"
+                (if (numberp last-input)
+                    (codex-ide--format-compact-number last-input)
+                  "-")
+                (if (numberp last-cached)
+                    (codex-ide--format-compact-number last-cached)
+                  "-")
+                (if (numberp last-output)
+                    (codex-ide--format-compact-number last-output)
+                  "-")
+                (if (numberp last-reasoning)
+                    (codex-ide--format-compact-number last-reasoning)
+                  "-"))))))
 
 (defun codex-ide--format-model-summary (&optional session)
   "Return a compact header summary for SESSION's model."
   (let ((model (and session
-                    (codex-ide--server-model-name session))))
+                    (codex-ide--server-model-name session)))
+        (effort (and session
+                     (or (codex-ide--session-metadata-get session :reasoning-effort)
+                         codex-ide-reasoning-effort))))
     (unless model
       (codex-ide--ensure-server-model-name session))
     (when model
-      (format "model:%s" model))))
+      (format "Model: %s%s"
+              model
+              (if effort
+                  (format " (%s)" effort)
+                "")))))
+
+(defun codex-ide--format-rate-limit-window-label (window)
+  "Return a compact label for rate limit WINDOW."
+  (when-let ((minutes (alist-get 'windowDurationMins window)))
+    (cond
+     ((= minutes 10080) "wk")
+     ((and (> minutes 0) (= (mod minutes 1440) 0))
+      (format "%sd" (/ minutes 1440)))
+     ((and (> minutes 0) (= (mod minutes 60) 0))
+      (format "%sh" (/ minutes 60)))
+     (t
+      (format "%sm" minutes)))))
 
 (defun codex-ide--format-rate-limit-summary (rate-limits)
   "Return a compact header summary for RATE-LIMITS."
-  (when-let* ((primary (alist-get 'primary rate-limits))
-              (used-percent (alist-get 'usedPercent primary)))
-    (format "quota: %s%%%% used%s"
-            used-percent
-            (if-let ((plan-type (alist-get 'planType rate-limits)))
-                (format " (%s)" plan-type)
-              ""))))
+  (let* ((primary (alist-get 'primary rate-limits))
+         (secondary (alist-get 'secondary rate-limits))
+         (windows (delq nil
+                        (list (and primary
+                                   (let ((label (codex-ide--format-rate-limit-window-label primary))
+                                         (percent (alist-get 'usedPercent primary)))
+                                     (when (and label percent)
+                                       (format "%%%%%s/%s" percent label))))
+                              (and secondary
+                                   (let ((label (codex-ide--format-rate-limit-window-label secondary))
+                                         (percent (alist-get 'usedPercent secondary)))
+                                     (when (and label percent)
+                                       (format "%%%%%s/%s" percent label))))))))
+    (when windows
+      (format "Quota: %s%s"
+              (string-join windows " ")
+              (if-let ((plan-type (alist-get 'planType rate-limits)))
+                  (format " (%s)" plan-type)
+                "")))))
 
 (defun codex-ide--update-header-line (&optional session)
   "Refresh the header line for SESSION."
@@ -734,31 +753,32 @@ When DRAFT is nil, preserve the current active prompt text."
       (let* ((context (with-current-buffer buffer
                         (codex-ide--get-active-buffer-context)))
              (focus (if context
-                        (format "%s:%s"
+                        (format "Focus: %s:%s"
                                 (alist-get 'display-file context)
                                 (alist-get 'line context))
-                      "none"))
-             (token-summary
-              (codex-ide--format-token-usage-summary
+                      "Focus: none"))
+             (token-context-summary
+              (codex-ide--format-token-usage-context-summary
+               (codex-ide--session-metadata-get session :token-usage)))
+             (token-last-summary
+              (codex-ide--format-token-usage-last-summary
                (codex-ide--session-metadata-get session :token-usage)))
              (rate-limit-summary
               (codex-ide--format-rate-limit-summary
                (codex-ide--session-metadata-get session :rate-limits)))
              (model-summary
-              (codex-ide--format-model-summary session))
-             (effort-summary
-              (codex-ide--format-reasoning-effort-summary session)))
+              (codex-ide--format-model-summary session)))
         (setq header-line-format
               (propertize
                (string-join
                 (delq nil
                       (list
-                       (format "focus: %s" focus)
+                       focus
                        model-summary
-                       effort-summary
-                       token-summary
-                       rate-limit-summary))
-                "  ")
+                       rate-limit-summary
+                       token-context-summary
+                       token-last-summary))
+                " | ")
                'face 'codex-ide-header-line-face)))
       (codex-ide--update-mode-line session))))
 
@@ -1962,6 +1982,63 @@ Return non-nil when a command output block was found."
   "Format TEXT as an indented detail line."
   (format "  └ %s\n" text))
 
+(defun codex-ide--web-search-action-value (key &rest items)
+  "Return the first non-nil web search action KEY found in ITEMS."
+  (seq-some
+   (lambda (item)
+     (when-let ((action (and (listp item) (alist-get 'action item))))
+       (alist-get key action)))
+   items))
+
+(defun codex-ide--web-search-queries (&rest items)
+  "Return a de-duplicated list of non-empty web search queries from ITEMS."
+  (cl-remove-duplicates
+   (delq nil
+         (apply
+          #'append
+          (mapcar
+           (lambda (item)
+             (when (listp item)
+               (let ((action (alist-get 'action item)))
+                 (append (and (stringp (alist-get 'query action))
+                              (not (string-empty-p (alist-get 'query action)))
+                              (list (alist-get 'query action)))
+                         (seq-filter
+                          (lambda (query)
+                            (and (stringp query)
+                                 (not (string-empty-p query))))
+                          (alist-get 'queries action))
+                         (and (stringp (alist-get 'query item))
+                              (not (string-empty-p (alist-get 'query item)))
+                              (list (alist-get 'query item)))))))
+           items)))
+   :test #'equal))
+
+(defun codex-ide--render-web-search-details (session item &optional fallback-item force-query-lines)
+  "Render transcript detail lines for web search ITEM in SESSION.
+FALLBACK-ITEM provides fields missing from ITEM.  When FORCE-QUERY-LINES is
+non-nil, render query detail lines even when only a single query is present."
+  (let* ((buffer (codex-ide-session-buffer session))
+         (action-type (or (codex-ide--web-search-action-value 'type item)
+                          (codex-ide--web-search-action-value 'type fallback-item)))
+         (pattern (or (codex-ide--web-search-action-value 'pattern item)
+                      (codex-ide--web-search-action-value 'pattern fallback-item)))
+         (queries (codex-ide--web-search-queries item fallback-item)))
+    (cond
+     ((and (equal action-type "findInPage") pattern)
+      (codex-ide--append-agent-text
+       buffer
+       (codex-ide--item-detail-line (format "pattern: %s" pattern))
+       'codex-ide-item-detail-face))
+     ((and queries
+           (or force-query-lines
+               (> (length queries) 1)))
+      (dolist (query queries)
+        (codex-ide--append-agent-text
+         buffer
+         (codex-ide--item-detail-line query)
+         'codex-ide-item-detail-face))))))
+
 (defun codex-ide--append-shell-command-detail (buffer command)
   "Append COMMAND as an indented, shell-highlighted detail line to BUFFER."
   (when (and (stringp command)
@@ -2071,12 +2148,7 @@ Return non-nil when a command output block was found."
       ("webSearch"
        (let* ((action (alist-get 'action item))
               (action-type (alist-get 'type action))
-              (queries (delq nil
-                             (append (and (alist-get 'query action)
-                                          (list (alist-get 'query action)))
-                                     (alist-get 'queries action)
-                                     (and (alist-get 'query item)
-                                          (list (alist-get 'query item))))))
+              (queries (codex-ide--web-search-queries item))
               (query-text (string-join queries " | ")))
          (pcase action-type
            ("openPage"
@@ -2128,28 +2200,7 @@ Return non-nil when a command output block was found."
            (format "cwd: %s" (abbreviate-file-name cwd)))
           'codex-ide-item-detail-face)))
       ("webSearch"
-       (let* ((action (alist-get 'action item))
-              (action-type (alist-get 'type action))
-              (queries (delq nil
-                             (append (alist-get 'queries action)
-                                     (and (alist-get 'query action)
-                                          (list (alist-get 'query action)))
-                                     (and (alist-get 'query item)
-                                          (list (alist-get 'query item)))))))
-         (cond
-          ((and (equal action-type "findInPage")
-                (alist-get 'pattern action))
-            (codex-ide--append-agent-text
-             buffer
-             (codex-ide--item-detail-line
-              (format "pattern: %s" (alist-get 'pattern action)))
-             'codex-ide-item-detail-face))
-          ((> (length queries) 1)
-           (dolist (query queries)
-             (codex-ide--append-agent-text
-              buffer
-              (codex-ide--item-detail-line query)
-              'codex-ide-item-detail-face))))))
+       (codex-ide--render-web-search-details session item))
       ("mcpToolCall"
        (when-let ((arguments (alist-get 'arguments item)))
          (codex-ide--append-agent-text
@@ -2361,6 +2412,12 @@ Return non-nil when a command output block was found."
             buffer
             (codex-ide--item-detail-line "tool call failed")
             'error)))
+        ("webSearch"
+         (codex-ide--render-web-search-details
+          session
+          item
+          (plist-get state :item)
+          t))
         ("fileChange"
          (let ((diff-text (codex-ide--file-change-diff-text item))
                (streamed-diff (plist-get state :diff-text))
