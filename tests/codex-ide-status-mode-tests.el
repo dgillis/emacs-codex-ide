@@ -645,7 +645,7 @@
                          ("thread/resume" '((ok . t)))
                          (_ (ert-fail (format "Unexpected method %s" method))))))
                     ((symbol-function 'codex-ide-display-buffer)
-                     (lambda (_buffer)
+                     (lambda (_buffer &optional _action)
                        (selected-window))))
             (let ((default-directory project-dir))
               (codex-ide-status))
