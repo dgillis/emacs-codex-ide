@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'button)
+(require 'cl-lib)
 (require 'color)
 (require 'codex-ide)
 (require 'codex-ide-nav)
@@ -26,6 +27,20 @@
 ;;;###autoload
 (defcustom codex-ide-status-mode-auto-refresh-delay 0.1
   "Idle delay in seconds before status buffers auto-refresh after session events."
+  :type 'number
+  :group 'codex-ide)
+
+;;;###autoload
+(defcustom codex-ide-status-mode-stripe-mix 0.06
+  "How strongly status header striping blends toward the default foreground.
+
+This controls the subtle alternating background used for every other session
+header in `codex-ide-status-mode'.  The stripe color is computed by blending
+the default background toward the default foreground by this fraction.
+
+Smaller values produce a subtler stripe with lower contrast.  Larger values
+produce a more visible stripe.  A value of 0 disables the effect entirely,
+while 1 would fully replace the background with the foreground color."
   :type 'number
   :group 'codex-ide)
 
@@ -61,6 +76,9 @@
 
 (defvar-local codex-ide-status-mode--event-listener nil
   "Function object registered on `codex-ide-session-event-hook' for this buffer.")
+
+(defvar codex-ide-status-mode--theme-refresh-buffers nil
+  "Live buffers currently using `codex-ide-status-mode' theme refresh hooks.")
 
 (defvar codex-ide-status-mode-map
   (let ((map (make-sparse-keymap)))
@@ -119,7 +137,9 @@
               '(codex-ide-status-mode--focal-points))
   (setq-local revert-buffer-function #'codex-ide-status-mode-refresh)
   (codex-ide-status-mode--teardown-auto-refresh)
-  (codex-ide-status-mode--setup-auto-refresh))
+  (codex-ide-status-mode--teardown-theme-refresh)
+  (codex-ide-status-mode--setup-auto-refresh)
+  (codex-ide-status-mode--setup-theme-refresh))
 
 (defconst codex-ide-status-mode--session-events
   '(created destroyed thread-attached status-changed turn-started
@@ -178,7 +198,34 @@
   (when codex-ide-status-mode--event-listener
     (remove-hook 'codex-ide-session-event-hook codex-ide-status-mode--event-listener)
     (setq codex-ide-status-mode--event-listener nil))
-  (remove-hook 'kill-buffer-hook #'codex-ide-status-mode--teardown-auto-refresh t))
+  (remove-hook 'kill-buffer-hook #'codex-ide-status-mode--teardown-auto-refresh t)
+  (remove-hook 'change-major-mode-hook #'codex-ide-status-mode--teardown-auto-refresh t))
+
+(defun codex-ide-status-mode--handle-theme-change (&rest _args)
+  "Refresh stripe face attributes after a theme change."
+  (setq codex-ide-status-mode--theme-refresh-buffers
+        (seq-filter #'buffer-live-p codex-ide-status-mode--theme-refresh-buffers))
+  (when codex-ide-status-mode--theme-refresh-buffers
+    (codex-ide-status-mode--refresh-striped-heading-face)))
+
+(defun codex-ide-status-mode--setup-theme-refresh ()
+  "Subscribe the current status buffer to theme change events."
+  (cl-pushnew (current-buffer) codex-ide-status-mode--theme-refresh-buffers)
+  (add-hook 'enable-theme-functions #'codex-ide-status-mode--handle-theme-change)
+  (add-hook 'disable-theme-functions #'codex-ide-status-mode--handle-theme-change)
+  (add-hook 'kill-buffer-hook #'codex-ide-status-mode--teardown-theme-refresh nil t)
+  (add-hook 'change-major-mode-hook #'codex-ide-status-mode--teardown-theme-refresh nil t))
+
+(defun codex-ide-status-mode--teardown-theme-refresh ()
+  "Remove theme change subscriptions for the current status buffer."
+  (setq codex-ide-status-mode--theme-refresh-buffers
+        (delq (current-buffer)
+              (seq-filter #'buffer-live-p codex-ide-status-mode--theme-refresh-buffers)))
+  (unless codex-ide-status-mode--theme-refresh-buffers
+    (remove-hook 'enable-theme-functions #'codex-ide-status-mode--handle-theme-change)
+    (remove-hook 'disable-theme-functions #'codex-ide-status-mode--handle-theme-change))
+  (remove-hook 'kill-buffer-hook #'codex-ide-status-mode--teardown-theme-refresh t)
+  (remove-hook 'change-major-mode-hook #'codex-ide-status-mode--teardown-theme-refresh t))
 
 (defun codex-ide-status-mode--section-identity (section)
   "Return a stable identity for SECTION across rerenders."
@@ -430,13 +477,27 @@ Only child `buffer' and `thread' sections support visit and delete actions."
 
 (defun codex-ide-status-mode--striped-heading-background ()
   "Return a theme-aware background color for striped headings."
-  (let ((background (face-background 'default nil t)))
+  (let ((background (face-background 'default nil t))
+        (foreground (face-foreground 'default nil t)))
     (when (and (stringp background)
+               (stringp foreground)
                (not (member background '("unspecified" "unspecified-bg")))
-               (color-defined-p background))
-      (if (eq (frame-parameter nil 'background-mode) 'dark)
-          (color-lighten-name background 6)
-        (color-darken-name background 4)))))
+               (not (member foreground '("unspecified" "unspecified-fg")))
+               (color-defined-p background)
+               (color-defined-p foreground))
+      (let ((background-rgb (color-name-to-rgb background))
+            (foreground-rgb (color-name-to-rgb foreground))
+            (mix (max 0.0 (min 1.0 codex-ide-status-mode-stripe-mix))))
+        (when (and background-rgb foreground-rgb)
+          (apply #'color-rgb-to-hex
+                 (append
+                  (cl-mapcar
+                   (lambda (background-channel foreground-channel)
+                     (+ (* background-channel (- 1.0 mix))
+                        (* foreground-channel mix)))
+                   background-rgb
+                   foreground-rgb)
+                  '(2))))))))
 
 (defun codex-ide-status-mode--refresh-striped-heading-face ()
   "Refresh the striped heading face for the current theme."

@@ -34,6 +34,7 @@
 
 (require 'button)
 (require 'cl-lib)
+(require 'color)
 (require 'seq)
 (require 'subr-x)
 
@@ -87,20 +88,12 @@
   :group 'codex-ide)
 
 (defface codex-ide-user-prompt-face
-  '((((class color) (background light))
-     :inherit default
-     :background "#f4f1e8")
-    (((class color) (background dark))
-     :inherit default
-     :background "#2d2a24"))
+  '((t :inherit default))
   "Face used to distinguish submitted and active user prompts."
   :group 'codex-ide)
 
 (defface codex-ide-output-separator-face
-  '((((class color) (background light))
-     :foreground "#c7c1b4")
-    (((class color) (background dark))
-     :foreground "#5a554b"))
+  '((t))
   "Face used for transcript separator rules."
   :group 'codex-ide)
 
@@ -118,17 +111,7 @@
   "Text property used to mark the first character of a user prompt.")
 
 (defface codex-ide-command-output-face
-  '((((class color) (background light))
-     :inherit fixed-pitch
-     :background "#ece8dd"
-     :extend t)
-    (((class color) (background dark))
-     :inherit fixed-pitch
-     :background "#1f2324"
-     :extend t)
-    (t
-     :inherit fixed-pitch
-     :extend t))
+  '((t :inherit fixed-pitch :extend t))
   "Face used for command output blocks."
   :group 'codex-ide)
 
@@ -205,6 +188,102 @@
 (defconst codex-ide-command-output-overlay-property
   codex-ide-item-result-overlay-property
   "Compatibility alias for `codex-ide-item-result-overlay-property'.")
+
+(defconst codex-ide-renderer--user-prompt-background-mix-light 0.07
+  "Foreground mix fraction for prompt backgrounds on light themes.")
+
+(defconst codex-ide-renderer--user-prompt-background-mix-dark 0.17
+  "Foreground mix fraction for prompt backgrounds on dark themes.")
+
+(defconst codex-ide-renderer--output-separator-foreground-mix-light 0.22
+  "Foreground mix fraction for separators on light themes.")
+
+(defconst codex-ide-renderer--output-separator-foreground-mix-dark 0.35
+  "Foreground mix fraction for separators on dark themes.")
+
+(defconst codex-ide-renderer--command-output-background-mix-light 0.09
+  "Foreground mix fraction for command output backgrounds on light themes.")
+
+(defconst codex-ide-renderer--command-output-background-mix-dark 0.12
+  "Foreground mix fraction for command output backgrounds on dark themes.")
+
+(defun codex-ide-renderer--color-defined-p (color)
+  "Return non-nil when COLOR names a usable Emacs color."
+  (and (stringp color)
+       (ignore-errors
+         (color-values color))))
+
+(defun codex-ide-renderer--default-background-color ()
+  "Return the current default background color, or a safe fallback."
+  (let ((background (face-background 'default nil t)))
+    (if (codex-ide-renderer--color-defined-p background)
+        background
+      "#000000")))
+
+(defun codex-ide-renderer--default-foreground-color ()
+  "Return the current default foreground color, or a safe fallback."
+  (let ((foreground (face-foreground 'default nil t)))
+    (if (codex-ide-renderer--color-defined-p foreground)
+        foreground
+      "#ffffff")))
+
+(defun codex-ide-renderer--theme-dark-p ()
+  "Return non-nil when the current default background is dark."
+  (pcase-let ((`(,red ,green ,blue)
+               (color-values (codex-ide-renderer--default-background-color))))
+    (< (/ (+ red green blue) 3.0) (/ 65535.0 2))))
+
+(defun codex-ide-renderer--blend-default-colors (amount)
+  "Blend the default background toward the default foreground by AMOUNT."
+  (let ((background (codex-ide-renderer--default-background-color))
+        (foreground (codex-ide-renderer--default-foreground-color)))
+    (pcase-let ((`(,fg-red ,fg-green ,fg-blue) (color-values foreground))
+                (`(,bg-red ,bg-green ,bg-blue) (color-values background)))
+      (format "#%02x%02x%02x"
+              (round (/ (+ (* amount fg-red) (* (- 1 amount) bg-red)) 257.0))
+              (round (/ (+ (* amount fg-green) (* (- 1 amount) bg-green)) 257.0))
+              (round (/ (+ (* amount fg-blue) (* (- 1 amount) bg-blue)) 257.0))))))
+
+(defun codex-ide-renderer--user-prompt-face-spec ()
+  "Return the current face spec for `codex-ide-user-prompt-face'."
+  `((t :inherit default
+       :background
+       ,(codex-ide-renderer--blend-default-colors
+         (if (codex-ide-renderer--theme-dark-p)
+             codex-ide-renderer--user-prompt-background-mix-dark
+           codex-ide-renderer--user-prompt-background-mix-light)))))
+
+(defun codex-ide-renderer--output-separator-face-spec ()
+  "Return the current face spec for `codex-ide-output-separator-face'."
+  `((t :foreground
+       ,(codex-ide-renderer--blend-default-colors
+         (if (codex-ide-renderer--theme-dark-p)
+             codex-ide-renderer--output-separator-foreground-mix-dark
+           codex-ide-renderer--output-separator-foreground-mix-light)))))
+
+(defun codex-ide-renderer--command-output-face-spec ()
+  "Return the current face spec for `codex-ide-command-output-face'."
+  `((t :inherit fixed-pitch
+       :background
+       ,(codex-ide-renderer--blend-default-colors
+         (if (codex-ide-renderer--theme-dark-p)
+             codex-ide-renderer--command-output-background-mix-dark
+           codex-ide-renderer--command-output-background-mix-light))
+       :extend t)))
+
+(defun codex-ide-renderer-refresh-theme-faces ()
+  "Reapply theme-sensitive renderer face specs.
+
+This clears any stale concrete color attributes that may otherwise survive
+theme switches or file reloads in a live Emacs session."
+  (face-spec-set 'codex-ide-user-prompt-face
+                 (codex-ide-renderer--user-prompt-face-spec))
+  (face-spec-set 'codex-ide-output-separator-face
+                 (codex-ide-renderer--output-separator-face-spec))
+  (face-spec-set 'codex-ide-command-output-face
+                 (codex-ide-renderer--command-output-face-spec)))
+
+(codex-ide-renderer-refresh-theme-faces)
 
 (defun codex-ide-renderer-status-label (status)
   "Return a display label for STATUS."

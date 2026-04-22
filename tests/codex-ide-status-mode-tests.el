@@ -104,6 +104,39 @@
     (should line-move-visual)
     (should-not visual-line-mode)))
 
+(ert-deftest codex-ide-status-striped-heading-background-brightens-dark-themes ()
+  (cl-letf (((symbol-function 'face-background)
+             (lambda (&rest _args) "#101010"))
+            ((symbol-function 'face-foreground)
+             (lambda (&rest _args) "#f0f0f0")))
+    (let ((codex-ide-status-mode-stripe-mix 0.12))
+      (should (equal (codex-ide-status-mode--striped-heading-background)
+                     "#1e1e1e")))))
+
+(ert-deftest codex-ide-status-striped-heading-background-darkens-light-themes ()
+  (cl-letf (((symbol-function 'face-background)
+             (lambda (&rest _args) "#f0f0f0"))
+            ((symbol-function 'face-foreground)
+             (lambda (&rest _args) "#101010")))
+    (let ((codex-ide-status-mode-stripe-mix 0.12))
+      (should (equal (codex-ide-status-mode--striped-heading-background)
+                     "#e0e0e0")))))
+
+(ert-deftest codex-ide-status-striped-heading-background-respects-custom-mix ()
+  (cl-letf (((symbol-function 'face-background)
+             (lambda (&rest _args) "#101010"))
+            ((symbol-function 'face-foreground)
+             (lambda (&rest _args) "#f0f0f0")))
+    (let ((subtle nil)
+          (visible nil))
+      (let ((codex-ide-status-mode-stripe-mix 0.0))
+        (setq subtle (codex-ide-status-mode--striped-heading-background)))
+      (let ((codex-ide-status-mode-stripe-mix 0.12))
+        (setq visible (codex-ide-status-mode--striped-heading-background)))
+      (should (stringp subtle))
+      (should (stringp visible))
+      (should-not (equal subtle visible)))))
+
 (ert-deftest codex-ide-status-renders-project-sections-and-collapsed-entries ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
          (project-dir (expand-file-name "alpha" root-dir))
@@ -1016,6 +1049,47 @@
               (let ((listener codex-ide-status-mode--event-listener))
                 (kill-buffer (current-buffer))
                 (should-not (member listener codex-ide-session-event-hook))))))))))
+
+(ert-deftest codex-ide-status-theme-refresh-subscribes-and-tears-down-hooks ()
+  (let ((refresh-count 0)
+        (codex-ide-status-mode--theme-refresh-buffers nil)
+        (buffer (generate-new-buffer " *codex-ide-status-theme-test*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (cl-letf (((symbol-function 'codex-ide-status-mode--refresh-striped-heading-face)
+                     (lambda ()
+                       (setq refresh-count (1+ refresh-count)))))
+            (codex-ide-status-mode)
+            (should (memq (current-buffer) codex-ide-status-mode--theme-refresh-buffers))
+            (should (memq #'codex-ide-status-mode--handle-theme-change
+                          enable-theme-functions))
+            (should (memq #'codex-ide-status-mode--handle-theme-change
+                          disable-theme-functions))
+            (run-hook-with-args 'enable-theme-functions 'test-theme)
+            (run-hook-with-args 'disable-theme-functions 'test-theme)
+            (should (= refresh-count 2))
+            (fundamental-mode)
+            (should-not (memq (current-buffer) codex-ide-status-mode--theme-refresh-buffers))
+            (should-not (memq #'codex-ide-status-mode--handle-theme-change
+                              enable-theme-functions))
+            (should-not (memq #'codex-ide-status-mode--handle-theme-change
+                              disable-theme-functions))
+            (codex-ide-status-mode)
+            (should (memq (current-buffer) codex-ide-status-mode--theme-refresh-buffers))
+            (should (memq #'codex-ide-status-mode--handle-theme-change
+                          enable-theme-functions))
+            (should (memq #'codex-ide-status-mode--handle-theme-change
+                          disable-theme-functions))
+            (run-hook-with-args 'enable-theme-functions 'test-theme)
+            (should (= refresh-count 3))
+            (kill-buffer buffer)
+            (should-not (memq buffer codex-ide-status-mode--theme-refresh-buffers))
+            (should-not (memq #'codex-ide-status-mode--handle-theme-change
+                              enable-theme-functions))
+            (should-not (memq #'codex-ide-status-mode--handle-theme-change
+                              disable-theme-functions))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 
 (provide 'codex-ide-status-mode-tests)
 

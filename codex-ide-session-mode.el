@@ -23,6 +23,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'codex-ide-core)
 (require 'codex-ide-nav)
 (require 'codex-ide-renderer)
@@ -54,6 +55,9 @@
 
 (defvar-local codex-ide-session-mode--last-window-start nil
   "Last observed `window-start' for transcript tail-follow navigation tracking.")
+
+(defvar codex-ide-session-mode--theme-refresh-buffers nil
+  "Live buffers currently using `codex-ide-session-mode' theme refresh hooks.")
 
 (define-minor-mode codex-ide-session-prompt-minor-mode
   "Minor mode enabled only while point is in the active Codex prompt."
@@ -169,6 +173,34 @@ so users can navigate within those controls without opting out of follow mode."
       (setq codex-ide-session-mode--last-point point-pos
             codex-ide-session-mode--last-window-start window-start-pos))))
 
+(defun codex-ide-session-mode--handle-theme-change (&rest _args)
+  "Refresh session renderer faces after a theme change."
+  (setq codex-ide-session-mode--theme-refresh-buffers
+        (cl-remove-if-not #'buffer-live-p
+                          codex-ide-session-mode--theme-refresh-buffers))
+  (when codex-ide-session-mode--theme-refresh-buffers
+    (codex-ide-renderer-refresh-theme-faces)))
+
+(defun codex-ide-session-mode--setup-theme-refresh ()
+  "Subscribe the current session buffer to theme change events."
+  (cl-pushnew (current-buffer) codex-ide-session-mode--theme-refresh-buffers)
+  (add-hook 'enable-theme-functions #'codex-ide-session-mode--handle-theme-change)
+  (add-hook 'disable-theme-functions #'codex-ide-session-mode--handle-theme-change)
+  (add-hook 'kill-buffer-hook #'codex-ide-session-mode--teardown-theme-refresh nil t)
+  (add-hook 'change-major-mode-hook #'codex-ide-session-mode--teardown-theme-refresh nil t))
+
+(defun codex-ide-session-mode--teardown-theme-refresh ()
+  "Remove theme change subscriptions for the current session buffer."
+  (setq codex-ide-session-mode--theme-refresh-buffers
+        (delq (current-buffer)
+              (cl-remove-if-not #'buffer-live-p
+                                codex-ide-session-mode--theme-refresh-buffers)))
+  (unless codex-ide-session-mode--theme-refresh-buffers
+    (remove-hook 'enable-theme-functions #'codex-ide-session-mode--handle-theme-change)
+    (remove-hook 'disable-theme-functions #'codex-ide-session-mode--handle-theme-change))
+  (remove-hook 'kill-buffer-hook #'codex-ide-session-mode--teardown-theme-refresh t)
+  (remove-hook 'change-major-mode-hook #'codex-ide-session-mode--teardown-theme-refresh t))
+
 ;;;###autoload
 (define-derived-mode codex-ide-session-mode text-mode "Codex-IDE"
   "Major mode for Codex app-server session buffers."
@@ -182,6 +214,8 @@ so users can navigate within those controls without opting out of follow mode."
               '(codex-ide-session-mode--focal-points))
   (setq-local codex-ide-session-mode--last-point (point))
   (setq-local codex-ide-session-mode--last-window-start nil)
+  (codex-ide-session-mode--teardown-theme-refresh)
+  (codex-ide-session-mode--setup-theme-refresh)
   (add-hook 'post-command-hook #'codex-ide--sync-prompt-minor-mode nil t)
   (add-hook 'post-command-hook
             #'codex-ide-session-mode--track-tail-follow-navigation

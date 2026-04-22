@@ -328,6 +328,17 @@ Maximum number of transcript lines shown in expanded buffer sections.")
 (defvar codex-ide-status-mode-auto-refresh-delay 0.1 "\
 Idle delay in seconds before status buffers auto-refresh after session events.")
 (custom-autoload 'codex-ide-status-mode-auto-refresh-delay "codex-ide-status-mode" t)
+(defvar codex-ide-status-mode-stripe-mix 0.06 "\
+How strongly status header striping blends toward the default foreground.
+
+This controls the subtle alternating background used for every other session
+header in `codex-ide-status-mode'.  The stripe color is computed by blending
+the default background toward the default foreground by this fraction.
+
+Smaller values produce a subtler stripe with lower contrast.  Larger values
+produce a more visible stripe.  A value of 0 disables the effect entirely,
+while 1 would fully replace the background with the foreground color.")
+(custom-autoload 'codex-ide-status-mode-stripe-mix "codex-ide-status-mode" t)
 (autoload 'codex-ide-status-mode-nav-forward "codex-ide-status-mode" "\
 Move point to the next focal point in a Codex status buffer." t)
 (autoload 'codex-ide-status-mode-nav-backward "codex-ide-status-mode" "\

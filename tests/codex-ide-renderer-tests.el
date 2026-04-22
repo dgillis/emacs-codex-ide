@@ -145,6 +145,51 @@ BODY may refer to the lexical variable `session'."
   (should (eq (lookup-key codex-ide-renderer-link-keymap (kbd "C-M-j"))
               #'codex-ide-renderer-open-file-link-other-window)))
 
+(ert-deftest codex-ide-renderer-theme-face-specs-follow-default-colors ()
+  (cl-letf (((symbol-function 'face-background)
+             (lambda (face &optional _frame _inherit)
+               (when (eq face 'default)
+                 "#101010")))
+            ((symbol-function 'face-foreground)
+             (lambda (face &optional _frame _inherit)
+               (when (eq face 'default)
+                 "#f0f0f0"))))
+    (should (equal (plist-get (cdr (car (codex-ide-renderer--user-prompt-face-spec)))
+                              :background)
+                   "#2b2b2b"))
+    (should (equal (plist-get (cdr (car (codex-ide-renderer--output-separator-face-spec)))
+                              :foreground)
+                   "#595959"))
+    (should (equal (plist-get (cdr (car (codex-ide-renderer--command-output-face-spec)))
+                              :background)
+                   "#1f1f1f"))))
+
+(ert-deftest codex-ide-renderer-refresh-theme-faces-reapplies-session-face-specs ()
+  (let (seen)
+    (cl-letf (((symbol-function 'face-spec-set)
+               (lambda (face spec &optional _spec-type)
+                 (push (cons face spec) seen)))
+              ((symbol-function 'face-background)
+               (lambda (face &optional _frame _inherit)
+                 (when (eq face 'default)
+                   "#ffffff")))
+              ((symbol-function 'face-foreground)
+               (lambda (face &optional _frame _inherit)
+                 (when (eq face 'default)
+                   "#000000"))))
+      (codex-ide-renderer-refresh-theme-faces))
+    (should (equal seen
+                   (list
+                    (cons 'codex-ide-command-output-face
+                          '((t :inherit fixed-pitch
+                               :background "#e8e8e8"
+                               :extend t)))
+                    (cons 'codex-ide-output-separator-face
+                          '((t :foreground "#c7c7c7")))
+                    (cons 'codex-ide-user-prompt-face
+                          '((t :inherit default
+                               :background "#ededed"))))))))
+
 (ert-deftest codex-ide-renderer-open-file-link-other-window-uses-other-window-opener ()
   (let ((path (make-temp-file "codex-ide-renderer-link-"))
         (opened-path nil)
