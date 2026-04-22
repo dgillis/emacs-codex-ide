@@ -366,10 +366,17 @@ Return a plist containing `:delete-start', `:boundary', and `:end' markers."
      (make-string right ?-)
      "\n")))
 
+(defun codex-ide-renderer--normalize-file-link-target (target)
+  "Return file link TARGET with permissive outer wrappers removed."
+  (string-trim
+   (replace-regexp-in-string "\\\\/" "/" target t t)
+   "[ <]+"
+   "[ >]+"))
+
 (defun codex-ide-renderer-parse-file-link-target (target)
   "Parse markdown file TARGET into (PATH LINE COLUMN), or nil."
   (let ((normalized
-         (replace-regexp-in-string "\\\\/" "/" target t t)))
+         (codex-ide-renderer--normalize-file-link-target target)))
     (cond
      ((string-match "\\`\\(/[^#\n]+\\)#L\\([0-9]+\\)\\(?:C\\([0-9]+\\)\\)?\\'" normalized)
       (list (match-string 1 normalized)
@@ -1107,6 +1114,30 @@ Return a plist containing inserted markers and updated writable ranges."
    "\\|\\(\\*\\([^*\n ]\\(?:[^*\n]*[^*\n ]\\)?\\)\\*\\)"
    "\\|\\(_\\([^_\n ]\\(?:[^_\n]*[^_\n ]\\)?\\)_\\)"))
 
+(defconst codex-ide-renderer--markdown-link-pattern
+  "\\(\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))\\)"
+  "Pattern matching a simple inline markdown link `[label](target)`.")
+
+(defconst codex-ide-renderer--markdown-inline-code-pattern
+  "`\\([^`\n]+\\)`"
+  "Pattern matching inline markdown code spans.")
+
+(defconst codex-ide-renderer--markdown-bold-asterisk-pattern
+  "\\(^\\|[^*]\\)\\(\\*\\*\\([^*\n ]\\(?:[^*\n]*[^*\n ]\\)?\\)\\*\\*\\)"
+  "Pattern matching bold markdown emphasis delimited by `**`.")
+
+(defconst codex-ide-renderer--markdown-bold-underscore-pattern
+  "\\(^\\|[^_]\\)\\(__\\([^_\n ]\\(?:[^\n]*?[^_\n ]\\)?\\)__\\)"
+  "Pattern matching bold markdown emphasis delimited by `__`.")
+
+(defconst codex-ide-renderer--markdown-italic-asterisk-pattern
+  "\\(^\\|[^*]\\)\\(\\*\\([^*\n ]\\(?:[^*\n]*[^*\n ]\\)?\\)\\*\\)"
+  "Pattern matching italic markdown emphasis delimited by `*`.")
+
+(defconst codex-ide-renderer--markdown-italic-underscore-pattern
+  "\\(^\\|[^_]\\)\\(_\\([^_\n ]\\(?:[^_\n]*[^_\n ]\\)?\\)_\\)"
+  "Pattern matching italic markdown emphasis delimited by `_`.")
+
 (defun codex-ide-renderer--markdown-inline-word-char-p (char)
   "Return non-nil when CHAR is a word-like markdown delimiter neighbor."
   (and char
@@ -1439,7 +1470,7 @@ Return a plist containing inserted markers and updated writable ranges."
          allow-trailing-tables)
         (goto-char start)
         (while (re-search-forward
-                "\\(\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))\\)"
+                codex-ide-renderer--markdown-link-pattern
                 (marker-position end-marker)
                 t)
           (unless (or (get-text-property (match-beginning 1) 'codex-ide-markdown)
@@ -1467,7 +1498,7 @@ Return a plist containing inserted markers and updated writable ranges."
                  `(display ,display-label))))))
         (goto-char start)
         (while (re-search-forward
-                "`\\([^`\n]+\\)`"
+                codex-ide-renderer--markdown-inline-code-pattern
                 (marker-position end-marker)
                 t)
           (unless (or (get-text-property (match-beginning 0) 'codex-ide-markdown)
@@ -1489,23 +1520,23 @@ Return a plist containing inserted markers and updated writable ranges."
         (codex-ide-renderer--render-markdown-emphasis
          start
          (marker-position end-marker)
-         "\\(^\\|[^*]\\)\\(\\*\\*\\([^*\n ]\\(?:[^*\n]*[^*\n ]\\)?\\)\\*\\*\\)"
+         codex-ide-renderer--markdown-bold-asterisk-pattern
          'bold)
         (codex-ide-renderer--render-markdown-emphasis
          start
          (marker-position end-marker)
-         "\\(^\\|[^_]\\)\\(__\\([^_\n ]\\(?:[^\n]*?[^_\n ]\\)?\\)__\\)"
+         codex-ide-renderer--markdown-bold-underscore-pattern
          'bold
          t)
         (codex-ide-renderer--render-markdown-emphasis
          start
          (marker-position end-marker)
-         "\\(^\\|[^*]\\)\\(\\*\\([^*\n ]\\(?:[^*\n]*[^*\n ]\\)?\\)\\*\\)"
+         codex-ide-renderer--markdown-italic-asterisk-pattern
          'italic)
         (codex-ide-renderer--render-markdown-emphasis
          start
          (marker-position end-marker)
-         "\\(^\\|[^_]\\)\\(_\\([^_\n ]\\(?:[^_\n]*[^_\n ]\\)?\\)_\\)"
+         codex-ide-renderer--markdown-italic-underscore-pattern
          'italic
          t)
         (set-marker end-marker nil)))))
