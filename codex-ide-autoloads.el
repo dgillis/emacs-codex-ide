@@ -39,9 +39,6 @@ Prefix used when creating Codex session buffer names.")
 (defvar codex-ide-new-session-split nil "\
 Window split direction to use when showing newly created Codex sessions.")
 (custom-autoload 'codex-ide-new-session-split "codex-ide" t)
-(defvar codex-ide-buffer-display-when-approval-required t "\
-Whether to display a Codex buffer when it requires approval.")
-(custom-autoload 'codex-ide-buffer-display-when-approval-required "codex-ide" t)
 (defvar codex-ide-session-enable-visual-line-mode t "\
 Whether Codex session buffers should enable `visual-line-mode' by default.")
 (custom-autoload 'codex-ide-session-enable-visual-line-mode "codex-ide" t)
@@ -77,6 +74,7 @@ thread-list limit.")
 (custom-autoload 'codex-ide-thread-list-default-limit "codex-ide" t)
 (autoload 'codex-ide-toggle-logging-enabled "codex-ide" "\
 Toggle `codex-ide-logging-enabled' interactively." t)
+(register-definition-prefixes "codex-ide" '("codex-ide-buffer-display-when-approval-required"))
 
 
 ;;; Generated autoloads from codex-ide-mcp-bridge.el
@@ -328,7 +326,7 @@ Maximum number of transcript lines shown in expanded buffer sections.")
 (defvar codex-ide-status-mode-auto-refresh-delay 0.1 "\
 Idle delay in seconds before status buffers auto-refresh after session events.")
 (custom-autoload 'codex-ide-status-mode-auto-refresh-delay "codex-ide-status-mode" t)
-(defvar codex-ide-status-mode-stripe-mix 0.06 "\
+(defvar codex-ide-status-mode-stripe-mix 0.12 "\
 How strongly status header striping blends toward the default foreground.
 
 This controls the subtle alternating background used for every other session

@@ -29,7 +29,7 @@
 (declare-function codex-ide--remember-buffer-context-before-switch "codex-ide-core"
                   (&optional buffer))
 
-(defconst codex-ide-select-window-on-open nil
+(defvar codex-ide-select-window-on-open t
   "Whether `codex-ide-display-buffer' should select the shown window.")
 
 (defconst codex-ide-display-buffer-pop-up-action

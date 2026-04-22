@@ -254,8 +254,8 @@
                          session)))
               (should (eq (codex-ide-switch-to-buffer) session))
               (setq shown (window-buffer (selected-window)))
-              (should (eq (selected-window) origin-window))
-              (should (eq shown (window-buffer origin-window)))
+              (should (eq (selected-window) session-window))
+              (should (eq shown (codex-ide-session-buffer session)))
               (should (eq (window-buffer session-window)
                           (codex-ide-session-buffer session))))))))))
 
@@ -279,8 +279,9 @@
                            session)))
                 (should (eq (codex-ide-switch-to-buffer) session))
                 (should (= (length (window-list nil 'no-minibuf)) 2))
-                (should (eq (selected-window) origin-window))
-                (should (eq (window-buffer (next-window origin-window))
+                (should (eq (selected-window)
+                            (get-buffer-window session-buffer 0)))
+                (should (eq (window-buffer (selected-window))
                             session-buffer))))))))))
 
 (ert-deftest codex-ide-display-buffer-calls-display-buffer ()
@@ -306,15 +307,14 @@
             (should (eq captured-buffer target-buffer))
             (should-not captured-action)))))))
 
-(ert-deftest codex-ide-display-buffer-selects-returned-window-when-focused ()
+(ert-deftest codex-ide-display-buffer-selects-returned-window-by-default ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
       (save-window-excursion
         (delete-other-windows)
         (let ((target-buffer (get-buffer-create " *codex-display-focus*")))
           (let ((origin-window (selected-window))
-                (target-window (split-window-right))
-                (codex-ide-select-window-on-open t))
+                (target-window (split-window-right)))
             (set-window-buffer target-window target-buffer)
             (select-window origin-window)
             (cl-letf (((symbol-function 'display-buffer)

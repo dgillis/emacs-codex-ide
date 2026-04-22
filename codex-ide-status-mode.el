@@ -31,7 +31,7 @@
   :group 'codex-ide)
 
 ;;;###autoload
-(defcustom codex-ide-status-mode-stripe-mix 0.06
+(defcustom codex-ide-status-mode-stripe-mix 0.12
   "How strongly status header striping blends toward the default foreground.
 
 This controls the subtle alternating background used for every other session
@@ -88,6 +88,7 @@ while 1 would fully replace the background with the foreground color."
 
 (define-key codex-ide-status-mode-map (kbd "+") #'codex-ide)
 (define-key codex-ide-status-mode-map (kbd "D") #'codex-ide-status-mode-delete-thing-at-point)
+(define-key codex-ide-status-mode-map (kbd "K") #'codex-ide-status-mode-kill-buffer-at-point)
 (define-key codex-ide-status-mode-map (kbd "l") #'codex-ide-status-mode-refresh)
 (define-key codex-ide-status-mode-map
             (kbd "RET")
@@ -445,6 +446,42 @@ Only child `buffer' and `thread' sections support visit and delete actions."
           t))))
     (codex-ide-status-mode-refresh)))
 
+(defun codex-ide-status-mode--section-buffer (section)
+  "Return SECTION's live session buffer, or nil when it has none."
+  (when-let* ((session (pcase (codex-ide-section-type section)
+                         ('buffer
+                          (codex-ide-section-value section))
+                         ('thread
+                          (codex-ide-status-mode--thread-session
+                           (codex-ide-section-value section)
+                           codex-ide-status-mode--directory))))
+              (buffer (and (codex-ide-session-p session)
+                           (codex-ide-session-buffer session))))
+    (and (buffer-live-p buffer) buffer)))
+
+(defun codex-ide-status-mode--confirm-kill-buffers (buffers)
+  "Return non-nil when the user confirms killing BUFFERS."
+  (y-or-n-p
+   (if (= (length buffers) 1)
+       (format "Kill Codex session buffer %s? "
+               (buffer-name (car buffers)))
+     (format "Kill %d Codex session buffers? " (length buffers)))))
+
+(defun codex-ide-status-mode--kill-buffers (buffers)
+  "Kill live session BUFFERS after one confirmation and refresh once."
+  (let ((live-buffers nil))
+    (dolist (buffer buffers)
+      (when (and (buffer-live-p buffer)
+                 (not (memq buffer live-buffers)))
+        (push buffer live-buffers)))
+    (setq live-buffers (nreverse live-buffers))
+    (when (and live-buffers
+               (codex-ide-status-mode--confirm-kill-buffers live-buffers))
+      (dolist (buffer live-buffers)
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer buffer)))
+      (codex-ide-status-mode-refresh))))
+
 (defun codex-ide-status-mode-display-session-at-point ()
   "Display the session for the actionable status entry at point."
   (interactive)
@@ -463,6 +500,16 @@ Only child `buffer' and `thread' sections support visit and delete actions."
   (interactive)
   (codex-ide-status-mode--delete-sections
    (codex-ide-status-mode--selected-actionable-sections)))
+
+(defun codex-ide-status-mode-kill-buffer-at-point ()
+  "Kill the session buffer at point or every live session buffer in the active region."
+  (interactive)
+  (let* ((sections (codex-ide-status-mode--selected-actionable-sections))
+         (buffers (delq nil (mapcar #'codex-ide-status-mode--section-buffer sections))))
+    (when (and (not (use-region-p))
+               (null buffers))
+      (user-error "No buffer for this session."))
+    (codex-ide-status-mode--kill-buffers buffers)))
 
 (defun codex-ide-status-mode--status-face (status)
   "Return the face used for STATUS."

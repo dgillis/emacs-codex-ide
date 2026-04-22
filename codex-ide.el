@@ -116,7 +116,6 @@
                  (const :tag "Horizontal split" horizontal))
   :group 'codex-ide)
 
-;;;###autoload
 (defcustom codex-ide-buffer-display-when-approval-required t
   "Whether to display a Codex buffer when it requires approval."
   :type 'boolean
