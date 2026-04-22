@@ -52,7 +52,7 @@
   (if-let ((session (codex-ide--session-for-thread-id
                      (alist-get 'id thread)
                      directory)))
-      (codex-ide--status-label (codex-ide-session-status session))
+      (codex-ide-renderer-status-label (codex-ide-session-status session))
     "Stored"))
 
 (defun codex-ide-session-thread-list--entries ()

@@ -17,6 +17,13 @@
      (overlay-get overlay 'codex-ide-section-indicator))
    (overlays-at (point))))
 
+(defun codex-ide-section-test--highlight-overlay ()
+  "Return the current section highlight overlay in the buffer."
+  (seq-find
+   (lambda (overlay)
+     (eq (overlay-get overlay 'face) 'codex-ide-section-highlight))
+   (overlays-in (point-min) (point-max))))
+
 (ert-deftest codex-ide-section-toggle-at-point-hides-and-shows-body ()
   (with-temp-buffer
     (special-mode)
@@ -235,6 +242,103 @@
                 'root-b))
     (should-error (codex-ide-section-forward) :type 'user-error)
     (should-error (codex-ide-section-up) :type 'user-error)))
+
+(ert-deftest codex-ide-section-hide-starts-at-body ()
+  (with-temp-buffer
+    (codex-ide-section-mode)
+    (codex-ide-section-reset)
+    (let ((section
+           (codex-ide-section-insert
+            'root-a 'root-a "Root A"
+            (lambda (_section)
+              (insert "root-a body\n"))
+            t)))
+      (let ((overlay (codex-ide-section-overlay section)))
+        (should overlay)
+        (should (= (overlay-start overlay)
+                   (codex-ide-section-body-start section)))
+        (should (overlay-get overlay 'cursor-intangible))
+        (should-not (overlay-get overlay 'after-string))))))
+
+(ert-deftest codex-ide-section-move-end-of-line-stays-on-collapsed-heading ()
+  (with-temp-buffer
+    (codex-ide-section-mode)
+    (codex-ide-section-reset)
+    (let* ((first
+            (codex-ide-section-insert
+             'first 'first "First"
+             (lambda (_section)
+               (insert "first body\n"))
+             t))
+           (second
+            (codex-ide-section-insert
+             'second 'second "Second"
+             (lambda (_section)
+               (insert "second body\n"))
+             t)))
+      (goto-char (codex-ide-section-heading-start first))
+      (move-end-of-line 1)
+      (should (= (point) (1- (codex-ide-section-heading-end first))))
+      (should (< (point) (codex-ide-section-heading-start second))))))
+
+(ert-deftest codex-ide-section-post-command-hook-highlights-current-line ()
+  (with-temp-buffer
+    (codex-ide-section-mode)
+    (codex-ide-section-reset)
+    (let (root child)
+      (setq root
+            (codex-ide-section-insert
+             'root 'root "Root"
+             (lambda (_section)
+               (insert "root body\n")
+               (setq child
+                     (codex-ide-section-insert
+                      'child 'child "Child"
+                      (lambda (_child)
+                        (insert "child body 1\nchild body 2\n")))))))
+      (goto-char (codex-ide-section-body-start child))
+      (codex-ide-section-post-command-hook)
+      (let ((overlay (codex-ide-section-test--highlight-overlay))
+            (expected-start (line-beginning-position))
+            (expected-end (min (point-max) (1+ (line-end-position)))))
+        (should overlay)
+        (should (eq codex-ide-section--highlighted-section child))
+        (should (= (overlay-start overlay) expected-start))
+        (should (= (overlay-end overlay) expected-end)))
+      (forward-line 1)
+      (codex-ide-section-post-command-hook)
+      (let ((overlay (codex-ide-section-test--highlight-overlay))
+            (expected-start (line-beginning-position))
+            (expected-end (min (point-max) (1+ (line-end-position)))))
+        (should overlay)
+        (should (eq codex-ide-section--highlighted-section child))
+        (should (= (overlay-start overlay) expected-start))
+        (should (= (overlay-end overlay) expected-end)))
+      (goto-char (codex-ide-section-heading-start root))
+      (codex-ide-section-post-command-hook)
+      (let ((overlay (codex-ide-section-test--highlight-overlay))
+            (expected-start (line-beginning-position))
+            (expected-end (min (point-max) (1+ (line-end-position)))))
+        (should overlay)
+        (should (eq codex-ide-section--highlighted-section root))
+        (should (= (overlay-start overlay) expected-start))
+        (should (= (overlay-end overlay) expected-end))))))
+
+(ert-deftest codex-ide-section-reset-clears-highlight-state ()
+  (with-temp-buffer
+    (codex-ide-section-mode)
+    (codex-ide-section-reset)
+    (codex-ide-section-insert
+     'root 'root "Root"
+     (lambda (_section)
+       (insert "root body\n")))
+    (goto-char (point-min))
+    (codex-ide-section-post-command-hook)
+    (should (codex-ide-section-test--highlight-overlay))
+    (should codex-ide-section--highlighted-section)
+    (codex-ide-section-reset)
+    (should-not (codex-ide-section-test--highlight-overlay))
+    (should-not codex-ide-section--highlighted-section)))
 
 (provide 'codex-ide-section-tests)
 

@@ -89,11 +89,13 @@
   "Major mode for the Codex project status buffer."
   (setq-local truncate-lines t)
   (setq-local word-wrap nil)
-  (setq-local line-move-visual nil)
+  ;; Keep visual line motion so `next-line' follows the rendered section
+  ;; layout when collapsed bodies hide their heading newline.
+  (setq-local line-move-visual t)
   (when (bound-and-true-p visual-line-mode)
     (visual-line-mode -1))
-  (setq-local hl-line-face 'codex-ide-session-list-current-row-face)
-  (hl-line-mode 1)
+  ;; (setq-local hl-line-face 'codex-ide-session-list-current-row-face)
+  ;; (hl-line-mode 1)
   (setq-local codex-ide-nav-focal-point-functions
               '(codex-ide-status-mode--focal-points))
   (setq-local revert-buffer-function #'codex-ide-status-mode-refresh)

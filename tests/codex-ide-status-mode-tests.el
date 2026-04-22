@@ -95,13 +95,13 @@
                     "------------------------------------------------------------------------\n\n"
                     "gamma 1\ngamma 2")))))
 
-(ert-deftest codex-ide-status-mode-disables-line-wrapping ()
+(ert-deftest codex-ide-status-mode-disables-line-wrapping-and-keeps-visual-line-motion ()
   (with-temp-buffer
     (visual-line-mode 1)
     (codex-ide-status-mode)
     (should truncate-lines)
     (should-not word-wrap)
-    (should-not line-move-visual)
+    (should line-move-visual)
     (should-not visual-line-mode)))
 
 (ert-deftest codex-ide-status-renders-project-sections-and-collapsed-entries ()

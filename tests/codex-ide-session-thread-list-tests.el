@@ -110,6 +110,27 @@
             (should-not (string-match-p "First result" (buffer-string)))
             (should (string-match-p "Updated result" (buffer-string)))))))))
 
+(ert-deftest codex-ide-session-thread-list-thread-status-uses-renderer-label-for-live-sessions ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (thread '((id . "thread-12345678"))))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((live-session (make-codex-ide-session
+                             :directory project-dir
+                             :buffer (get-buffer-create " *codex-thread-live*")
+                             :thread-id "thread-12345678"
+                              :status "running")))
+          (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+                     (lambda () t))
+                    ((symbol-function 'codex-ide--session-for-thread-id)
+                     (lambda (thread-id _directory)
+                       (when (equal thread-id "thread-12345678")
+                         live-session))))
+            (should (equal (codex-ide-session-thread-list--thread-status
+                            thread
+                            project-dir)
+                           "Running"))))))))
+
 (ert-deftest codex-ide-session-thread-list-delete-thread-binds-D-and-refreshes ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (deleted-thread-id nil)

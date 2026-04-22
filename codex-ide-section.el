@@ -30,6 +30,17 @@
 (defvar-local codex-ide-section--section-stack nil
   "Stack of sections being rendered in the current buffer.")
 
+(defvar-local codex-ide-section--highlight-overlay nil
+  "Overlay used to highlight the current line within the active section.")
+
+(defvar-local codex-ide-section--highlighted-section nil
+  "Section containing the current line highlight.")
+
+(defface codex-ide-section-highlight
+  '((t :inherit highlight :extend t))
+  "Face used to highlight the current section heading."
+  :group 'codex-ide)
+
 (define-fringe-bitmap 'codex-ide-section-fringe-bitmap-closed
   [#b01100000
    #b00110000
@@ -82,14 +93,19 @@
   (setq-local buffer-invisibility-spec '(t))
   (setq-local line-move-visual t)
   (make-local-variable 'text-property-default-nonsticky)
-  (push (cons 'keymap t) text-property-default-nonsticky))
+  (push (cons 'keymap t) text-property-default-nonsticky)
+  (add-hook 'post-command-hook #'codex-ide-section-post-command-hook nil t))
 
 (defun codex-ide-section-reset ()
   "Clear section state in the current buffer."
   (remove-overlays (point-min) (point-max) 'codex-ide-section-hidden t)
   (remove-overlays (point-min) (point-max) 'codex-ide-section-indicator t)
+  (when-let ((overlay codex-ide-section--highlight-overlay))
+    (delete-overlay overlay))
   (setq codex-ide-section--root-sections nil
-        codex-ide-section--section-stack nil))
+        codex-ide-section--section-stack nil
+        codex-ide-section--highlight-overlay nil
+        codex-ide-section--highlighted-section nil))
 
 (defun codex-ide-section-at-point (&optional pos)
   "Return the section at POS or point."
@@ -256,6 +272,45 @@
       (delete-overlay overlay)
       (setf (codex-ide-section-indicator-overlay section) nil))))
 
+(defun codex-ide-section--delete-highlight-overlay ()
+  "Delete the current section highlight overlay."
+  (when-let ((overlay codex-ide-section--highlight-overlay))
+    (delete-overlay overlay))
+  (setq codex-ide-section--highlight-overlay nil))
+
+(defun codex-ide-section--current-line-bounds ()
+  "Return `(START . END)' covering the current line."
+  (cons (line-beginning-position)
+        (min (point-max) (1+ (line-end-position)))))
+
+(defun codex-ide-section-update-highlight (&optional force)
+  "Update the highlighted line in the current buffer.
+When FORCE is non-nil, repaint even if the highlighted section and line did not change."
+  (let* ((section (or (codex-ide-section-heading-at-point)
+                      (codex-ide-section-containing-point)))
+         (line-bounds (and section (codex-ide-section--current-line-bounds)))
+         (line-start (car-safe line-bounds))
+         (line-end (cdr-safe line-bounds))
+         (overlay codex-ide-section--highlight-overlay))
+    (when (or force
+              (not (eq section codex-ide-section--highlighted-section))
+              (and section
+                   (or (not overlay)
+                       (/= (overlay-start overlay) line-start)
+                       (/= (overlay-end overlay) line-end))))
+      (codex-ide-section--delete-highlight-overlay)
+      (setq codex-ide-section--highlighted-section section)
+      (when section
+        (setq overlay (make-overlay line-start line-end nil t t))
+        (overlay-put overlay 'evaporate t)
+        (overlay-put overlay 'priority '(nil . 1))
+        (overlay-put overlay 'face 'codex-ide-section-highlight)
+        (setq codex-ide-section--highlight-overlay overlay)))))
+
+(defun codex-ide-section-post-command-hook ()
+  "Track point movement and highlight the current line."
+  (codex-ide-section-update-highlight))
+
 (defun codex-ide-section-show (section)
   "Show SECTION body."
   (when-let ((overlay (codex-ide-section-overlay section)))
@@ -268,10 +323,12 @@
 (defun codex-ide-section-hide (section)
   "Hide SECTION body."
   (unless (codex-ide-section-overlay section)
-    (let ((overlay (make-overlay (codex-ide-section-body-start section)
+    (let* ((body-start (codex-ide-section-body-start section))
+           (overlay (make-overlay body-start
                                  (codex-ide-section-end section)
                                  nil nil nil)))
       (overlay-put overlay 'invisible t)
+      (overlay-put overlay 'cursor-intangible t)
       (overlay-put overlay 'isearch-open-invisible #'delete-overlay)
       (overlay-put overlay 'codex-ide-section-hidden t)
       (setf (codex-ide-section-overlay section) overlay)))
@@ -351,7 +408,6 @@ PROPERTIES is a plist of section options.  Supported keys:
       (setf (codex-ide-section-heading-start section) heading-start
             (codex-ide-section-heading-end section) heading-end
             (codex-ide-section-body-start section) (point))
-      (codex-ide-section--set-heading-properties section heading-start heading-end)
       (codex-ide-section--update-indicator section)
       (let ((codex-ide-section--section-stack
              (cons section codex-ide-section--section-stack)))
