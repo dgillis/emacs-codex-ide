@@ -95,40 +95,74 @@
 (defmacro codex-ide-test-with-fake-processes (&rest body)
   "Run BODY with process primitives redirected to fake process objects."
   (declare (indent 0) (debug t))
-  `(cl-letf (((symbol-function 'make-process)
-              (lambda (&rest plist)
-                (codex-ide-test-process-create
-                 :live t
-                 :plist (list :make-process-spec plist)
-                 :sent-strings nil)))
-             ((symbol-function 'make-pipe-process)
-              (lambda (&rest plist)
-                (codex-ide-test-process-create
-                 :live t
-                 :plist (list :make-pipe-process-spec plist)
-                 :sent-strings nil)))
-             ((symbol-function 'process-live-p)
-              (lambda (process)
-                (and (codex-ide-test-process-p process)
-                     (codex-ide-test-process-live process))))
-             ((symbol-function 'delete-process)
-              (lambda (process)
-                (setf (codex-ide-test-process-live process) nil)
-                nil))
-             ((symbol-function 'process-put)
-              #'codex-ide-test--process-put)
-             ((symbol-function 'process-get)
-              #'codex-ide-test--process-get)
-             ((symbol-function 'process-send-string)
-              (lambda (process string)
-                (setf (codex-ide-test-process-sent-strings process)
-                      (append (codex-ide-test-process-sent-strings process)
-                              (list string)))))
-             ((symbol-function 'set-process-query-on-exit-flag)
-              (lambda (&rest _) nil))
-             ((symbol-function 'accept-process-output)
-              (lambda (&rest _) nil)))
-     ,@body))
+  `(let ((old-make-process (symbol-function 'make-process))
+         (old-make-pipe-process (symbol-function 'make-pipe-process))
+         (old-process-live-p (symbol-function 'process-live-p))
+         (old-delete-process (symbol-function 'delete-process))
+         (old-process-put (symbol-function 'process-put))
+         (old-process-get (symbol-function 'process-get))
+         (old-process-send-string (symbol-function 'process-send-string))
+         (old-set-process-query-on-exit-flag
+          (symbol-function 'set-process-query-on-exit-flag))
+         (old-accept-process-output (symbol-function 'accept-process-output)))
+     (unwind-protect
+         (progn
+           (fset 'make-process
+                 (lambda (&rest plist)
+                   (codex-ide-test-process-create
+                    :live t
+                    :plist (list :make-process-spec plist)
+                    :sent-strings nil)))
+           (fset 'make-pipe-process
+                 (lambda (&rest plist)
+                   (codex-ide-test-process-create
+                    :live t
+                    :plist (list :make-pipe-process-spec plist)
+                    :sent-strings nil)))
+           (fset 'process-live-p
+                 (lambda (process)
+                   (and (codex-ide-test-process-p process)
+                        (codex-ide-test-process-live process))))
+           (fset 'delete-process
+                 (lambda (process)
+                   (setf (codex-ide-test-process-live process) nil)
+                   nil))
+           (fset 'process-put #'codex-ide-test--process-put)
+           (fset 'process-get #'codex-ide-test--process-get)
+           (fset 'process-send-string
+                 (lambda (process string)
+                   (setf (codex-ide-test-process-sent-strings process)
+                         (append (codex-ide-test-process-sent-strings process)
+                                 (list string)))))
+           (fset 'set-process-query-on-exit-flag
+                 (lambda (&rest _) nil))
+           (fset 'accept-process-output
+                 (lambda (&rest _) nil))
+           ,@body)
+       (fset 'make-process old-make-process)
+       (fset 'make-pipe-process old-make-pipe-process)
+       (fset 'process-live-p old-process-live-p)
+       (fset 'delete-process old-delete-process)
+       (fset 'process-put old-process-put)
+       (fset 'process-get old-process-get)
+       (fset 'process-send-string old-process-send-string)
+       (fset 'set-process-query-on-exit-flag
+             old-set-process-query-on-exit-flag)
+       (fset 'accept-process-output old-accept-process-output))))
+
+(defvar codex-ide-test--fake-process-primitives-prewarmed nil
+  "Whether fake process primitive rebinding has been prewarmed.")
+
+(defun codex-ide-test--prewarm-fake-process-primitives ()
+  "Eagerly pay Emacs's first-time process primitive rebinding cost.
+
+This avoids attributing one-time subr rebinding overhead to the first test that
+uses `codex-ide-test-with-fake-processes'."
+  (unless codex-ide-test--fake-process-primitives-prewarmed
+    (setq codex-ide-test--fake-process-primitives-prewarmed t)
+    (codex-ide-test-with-fake-processes nil)))
+
+(codex-ide-test--prewarm-fake-process-primitives)
 
 (defun codex-ide-test--make-temp-project ()
   "Create and return a temporary project directory."

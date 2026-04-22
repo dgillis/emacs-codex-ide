@@ -6,11 +6,9 @@
 
 ;;; Code:
 
+(require 'seq)
 (require 'codex-ide)
 (require 'codex-ide-session-list)
-
-(defvar-local codex-ide-session-buffer-list--sessions nil
-  "Sessions shown in the current Codex session buffer list.")
 
 (defvar codex-ide-session-buffer-list-mode-map
   (make-sparse-keymap)
@@ -63,46 +61,72 @@
                   (setq pos start))))
             candidate))))))
 
-(defun codex-ide-session-buffer-list--last-prompt (session)
-  "Return a single-line preview of SESSION's last non-empty prompt line."
-  (if-let ((prompt (codex-ide-session-buffer-list--last-prompt-text session)))
-      (let ((preview (replace-regexp-in-string
-                      "[\n\r]+"
-                      "↵"
-                      (codex-ide--thread-choice-preview prompt))))
-        (if (string-empty-p preview) "Untitled" preview))
-    ""))
+(defun codex-ide-session-buffer-list--preview (session)
+  "Return the display preview for SESSION."
+  (let ((preview (or (codex-ide-session-buffer-list--last-prompt-text session)
+                     "")))
+    (setq preview
+          (replace-regexp-in-string
+           "[\n\r]+"
+           "↵"
+           (codex-ide--thread-choice-preview preview)))
+    (if (string-empty-p preview) "Untitled" preview)))
+
+(defun codex-ide-session-buffer-list--thread-metadata (sessions)
+  "Return a hash table of thread metadata for SESSIONS.
+
+Keys are cons cells of the form `(DIRECTORY . THREAD-ID)'."
+  (let ((metadata (make-hash-table :test #'equal))
+        (loaded-directories (make-hash-table :test #'equal)))
+    (dolist (session sessions)
+      (let ((directory (codex-ide-session-directory session)))
+        (unless (gethash directory loaded-directories)
+          (puthash directory t loaded-directories)
+          (condition-case nil
+              (dolist (thread (codex-ide--thread-list-data session))
+                (puthash (cons directory (alist-get 'id thread))
+                         thread
+                         metadata))
+            (error nil)))))
+    metadata))
 
 (defun codex-ide-session-buffer-list--entries ()
   "Return tabulated entries for live Codex session buffers."
-  (setq codex-ide-session-buffer-list--sessions
-        (sort (copy-sequence (codex-ide--session-buffer-sessions))
-              (lambda (left right)
-                (string-lessp (buffer-name (codex-ide-session-buffer left))
-                              (buffer-name (codex-ide-session-buffer right))))))
-  (mapcar
-   (lambda (session)
-       (let* ((buffer (codex-ide-session-buffer session))
-            (directory (abbreviate-file-name (codex-ide-session-directory session)))
-            (thread-id (or (codex-ide-session-thread-id session) ""))
-            (status (codex-ide-renderer-status-label (codex-ide-session-status session))))
-       (list session
-             (vector (codex-ide-session-list-cell
-                      (buffer-name buffer)
-                      'codex-ide-session-list-primary-face)
-                     (codex-ide-session-list-cell
-                      directory
-                      'codex-ide-session-list-secondary-face)
-                     (codex-ide-session-list-cell
-                      (codex-ide-session-buffer-list--last-prompt session)
-                      'codex-ide-session-list-primary-face)
-                     (codex-ide-session-list-cell
-                      status
-                      'codex-ide-session-list-status-face)
-                     (codex-ide-session-list-cell
-                      thread-id
-                      'codex-ide-session-list-id-face)))))
-   codex-ide-session-buffer-list--sessions))
+  (let ((sessions
+         (sort (copy-sequence (codex-ide--session-buffer-sessions))
+               (lambda (left right)
+                 (string-lessp (buffer-name (codex-ide-session-buffer left))
+                               (buffer-name (codex-ide-session-buffer right)))))))
+    (let ((thread-metadata
+           (codex-ide-session-buffer-list--thread-metadata
+            sessions)))
+      (mapcar
+       (lambda (session)
+         (let* ((buffer (codex-ide-session-buffer session))
+                (directory (codex-ide-session-directory session))
+                (thread-id (codex-ide-session-thread-id session))
+                (thread (and thread-id
+                             (gethash (cons directory thread-id) thread-metadata)))
+                (updated (if thread
+                             (codex-ide--format-thread-updated-at
+                              (alist-get 'updatedAt thread))
+                           ""))
+                (status (codex-ide-renderer-status-label
+                         (codex-ide-session-status session))))
+           (list session
+                 (vector (codex-ide-session-list-cell
+                          (buffer-name buffer)
+                          'codex-ide-session-list-primary-face)
+                         (codex-ide-session-list-cell
+                          status
+                          'codex-ide-session-list-status-face)
+                         (codex-ide-session-list-cell
+                          updated
+                          'codex-ide-session-list-time-face)
+                         (codex-ide-session-list-cell
+                          (codex-ide-session-buffer-list--preview session)
+                          'codex-ide-session-list-primary-face)))))
+       sessions))))
 
 (defun codex-ide-session-buffer-list--visit (session)
   "Visit SESSION's buffer."
@@ -144,10 +168,9 @@
          "*Codex Session Buffers*"
           #'codex-ide-session-buffer-list-mode
           [("Buffer" 28 t)
-           ("Workspace" 40 t)
-           ("Last Prompt" 48 t)
            ("Status" 14 t)
-           ("Thread" 24 t)]
+           ("Updated" 16 t)
+           ("Preview" 48 t)]
           #'codex-ide-session-buffer-list--entries
           #'codex-ide-session-buffer-list--visit
           '("Buffer" . nil))))

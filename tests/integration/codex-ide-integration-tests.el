@@ -108,7 +108,10 @@
         (should (derived-mode-p 'codex-ide-session-buffer-list-mode))
         (should (string-match-p (regexp-quote session-buffer-name)
                                 (buffer-string)))
-        (should (memq session codex-ide-session-buffer-list--sessions))
+        (should (seq-some
+                 (lambda (entry)
+                   (eq (car entry) session))
+                 (funcall tabulated-list-entries)))
         (should (string-match-p "Reply with the exact token"
                                 (buffer-string)))
         (should (string-match-p "Idle" (buffer-string))))))

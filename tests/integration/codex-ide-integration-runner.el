@@ -331,8 +331,11 @@ call it after the turn returns to idle and before NEXT-STEP."
        session-buffer-name)
       (codex-ide-integration-run--assert
        state
-       (memq session codex-ide-session-buffer-list--sessions)
-       "session buffer list backing data did not include session for %s"
+       (seq-some
+        (lambda (entry)
+          (eq (car entry) session))
+        (funcall tabulated-list-entries))
+       "session buffer list entries did not include session for %s"
        session-buffer-name)
       (codex-ide-integration-run--assert
        state

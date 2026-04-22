@@ -25,6 +25,14 @@
         (insert "> " (or active-prompt ""))
         (codex-ide--style-user-prompt-region start (point))))))
 
+(defmacro codex-ide-test-with-empty-thread-list (&rest body)
+  "Run BODY with thread metadata lookups stubbed to return no threads."
+  (declare (indent 0) (debug t))
+  `(cl-letf (((symbol-function 'codex-ide--thread-list-data)
+              (lambda (&optional _session _omit-thread-id)
+                nil)))
+     ,@body))
+
 (ert-deftest codex-ide-session-buffer-list-renders-live-sessions-across-workspaces ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
          (project-a (expand-file-name "alpha" root-dir))
@@ -50,33 +58,46 @@
                 (codex-ide-session-thread-id session-b) "thread-beta"
                 (codex-ide-session-status session-a) "idle"
                 (codex-ide-session-status session-b) "running")
-          (codex-ide-session-buffer-list)
+          (cl-letf (((symbol-function 'codex-ide--thread-list-data)
+                     (lambda (session &optional _omit-thread-id)
+                       (cond
+                        ((equal (codex-ide-session-directory session) project-a)
+                         '(((id . "thread-alpha")
+                            (updatedAt . "stamp-alpha"))))
+                        ((equal (codex-ide-session-directory session) project-b)
+                         '(((id . "thread-beta")
+                            (updatedAt . "stamp-beta"))))
+                        (t nil))))
+                    ((symbol-function 'codex-ide--format-thread-updated-at)
+                     (lambda (timestamp)
+                       (pcase timestamp
+                         ("stamp-alpha" "2 minutes ago")
+                         ("stamp-beta" "1 hour ago")
+                         (_ "")))))
+            (codex-ide-session-buffer-list))
           (with-current-buffer "*Codex Session Buffers*"
             (should (derived-mode-p 'codex-ide-session-buffer-list-mode))
             (should hl-line-mode)
             (should (eq hl-line-face 'codex-ide-session-list-current-row-face))
-            (let* ((entries (funcall tabulated-list-entries))
+            (should (equal (mapcar #'car (append tabulated-list-format nil))
+                           '("Buffer" "Status" "Updated" "Preview")))
+            (let* ((entries (codex-ide-test-with-empty-thread-list
+                              (funcall tabulated-list-entries)))
                    (first-row (cadr (car entries))))
               (should (eq (get-text-property 0 'face (aref first-row 0))
                           'codex-ide-session-list-primary-face))
               (should (eq (get-text-property 0 'face (aref first-row 1))
-                          'codex-ide-session-list-secondary-face))
-              (should (eq (get-text-property 0 'face (aref first-row 2))
-                          'codex-ide-session-list-primary-face))
-              (should (eq (get-text-property 0 'face (aref first-row 3))
                           'codex-ide-session-list-status-face))
-              (should (eq (get-text-property 0 'face (aref first-row 4))
-                          'codex-ide-session-list-id-face)))
+              (should (eq (get-text-property 0 'face (aref first-row 3))
+                          'codex-ide-session-list-primary-face)))
             (should (string-match-p (regexp-quote (buffer-name (codex-ide-session-buffer session-a)))
-                                    (buffer-string)))
-            (should (string-match-p (regexp-quote (abbreviate-file-name project-a))
                                     (buffer-string)))
             (should (string-match-p "Investigate↵failure" (buffer-string)))
             (should (string-match-p (regexp-quote (buffer-name (codex-ide-session-buffer session-b)))
                                     (buffer-string)))
-            (should (string-match-p (regexp-quote (abbreviate-file-name project-b))
-                                    (buffer-string)))
-            (should (string-match-p "Summarize session state" (buffer-string)))))))))
+            (should (string-match-p "Summarize session state" (buffer-string)))
+            (should (string-match-p "Idle" (buffer-string)))
+            (should (string-match-p "Running" (buffer-string)))))))))
 
 (ert-deftest codex-ide-session-buffer-list-delete-buffer-kills-session-at-point ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
@@ -95,7 +116,8 @@
             (setq session-a (codex-ide--create-process-session)))
           (let ((default-directory project-b))
             (setq session-b (codex-ide--create-process-session)))
-          (codex-ide-session-buffer-list)
+          (codex-ide-test-with-empty-thread-list
+            (codex-ide-session-buffer-list))
           (with-current-buffer "*Codex Session Buffers*"
             (goto-char (point-min))
             (forward-line 1)
@@ -108,7 +130,8 @@
                                   (regexp-quote deleted-buffer-name)
                                   prompt))
                          t)))
-              (codex-ide-session-buffer-list-delete-buffer))
+              (codex-ide-test-with-empty-thread-list
+                (codex-ide-session-buffer-list-delete-buffer)))
             (should-not (buffer-live-p deleted-buffer))
             (should (= (length codex-ide--sessions) 1))
             (should-not (memq deleted-session codex-ide--sessions))
@@ -128,14 +151,16 @@
           (let ((default-directory project-dir))
             (setq session (codex-ide--create-process-session)))
           (setq buffer (codex-ide-session-buffer session))
-          (codex-ide-session-buffer-list)
+          (codex-ide-test-with-empty-thread-list
+            (codex-ide-session-buffer-list))
           (with-current-buffer "*Codex Session Buffers*"
             (goto-char (point-min))
             (search-forward (buffer-name buffer))
             (beginning-of-line)
             (cl-letf (((symbol-function 'y-or-n-p)
                        (lambda (_prompt) nil)))
-              (codex-ide-session-buffer-list-delete-buffer))
+              (codex-ide-test-with-empty-thread-list
+                (codex-ide-session-buffer-list-delete-buffer)))
             (should (buffer-live-p buffer))
             (should (memq session codex-ide--sessions))
             (should (string-match-p (regexp-quote (buffer-name buffer))
@@ -169,7 +194,8 @@
           (setq buffer-a-name (buffer-name (codex-ide-session-buffer session-a))
                 buffer-b-name (buffer-name (codex-ide-session-buffer session-b))
                 buffer-c-name (buffer-name (codex-ide-session-buffer session-c)))
-          (codex-ide-session-buffer-list)
+          (codex-ide-test-with-empty-thread-list
+            (codex-ide-session-buffer-list))
           (with-current-buffer "*Codex Session Buffers*"
             (goto-char (point-min))
             (forward-line 1)
@@ -186,7 +212,8 @@
                          (setq confirmation-count (1+ confirmation-count))
                          (should (equal prompt "Kill 2 Codex session buffers? "))
                          t)))
-              (codex-ide-session-buffer-list-delete-buffer))
+              (codex-ide-test-with-empty-thread-list
+                (codex-ide-session-buffer-list-delete-buffer)))
             (should (= confirmation-count 1))
             (dolist (session selected-sessions)
               (should-not (buffer-live-p (codex-ide-session-buffer session)))
@@ -217,7 +244,8 @@
             (setq session-a (codex-ide--create-process-session)))
           (setq buffer-a-name (buffer-name (codex-ide-session-buffer session-a)))
           (codex-ide-test--set-session-buffer-prompts session-a '("First prompt"))
-          (codex-ide-session-buffer-list)
+          (codex-ide-test-with-empty-thread-list
+            (codex-ide-session-buffer-list))
           (let ((default-directory project-b))
             (setq session-b (codex-ide--create-process-session)))
           (setq buffer-b-name (buffer-name (codex-ide-session-buffer session-b)))
@@ -228,7 +256,8 @@
             (should-not (string-match-p (regexp-quote buffer-b-name)
                                         (buffer-string)))
             (should-not (string-match-p "Second prompt" (buffer-string)))
-            (call-interactively #'codex-ide-session-buffer-list-redisplay)
+            (codex-ide-test-with-empty-thread-list
+              (call-interactively #'codex-ide-session-buffer-list-redisplay))
             (should (string-match-p (regexp-quote buffer-a-name)
                                     (buffer-string)))
             (should (string-match-p (regexp-quote buffer-b-name)
@@ -252,8 +281,25 @@
            "")
           (should (equal (codex-ide-session-buffer-list--last-prompt-text session)
                          "Multiline\nprompt body"))
-          (should (equal (codex-ide-session-buffer-list--last-prompt session)
+          (should (equal (codex-ide-session-buffer-list--preview session)
                          "Multiline↵prompt body")))))))
+
+(ert-deftest codex-ide-session-buffer-list-preview-uses-last-submitted-prompt ()
+  (let* ((root-dir (codex-ide-test--make-temp-project))
+         (project-dir (expand-file-name "alpha" root-dir)))
+    (make-directory project-dir t)
+    (codex-ide-test-with-fixture root-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session nil))
+          (let ((default-directory project-dir))
+            (setq session (codex-ide--create-process-session)))
+          (codex-ide-test--set-session-buffer-prompts
+           session
+           '("First prompt"
+             "Later\nprompt body")
+           "")
+          (should (equal (codex-ide-session-buffer-list--preview session)
+                         "Later↵prompt body")))))))
 
 (ert-deftest codex-ide-session-buffer-list-inherits-session-display-bindings ()
   (should (eq (lookup-key codex-ide-session-buffer-list-mode-map (kbd "RET"))
