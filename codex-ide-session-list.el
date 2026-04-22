@@ -10,6 +10,9 @@
 (require 'hl-line)
 (require 'tabulated-list)
 
+(defvar codex-ide-display-buffer-pop-up-action)
+(defvar codex-ide--display-buffer-other-window-pop-up-action)
+
 (defface codex-ide-session-list-primary-face
   '((t :inherit default :weight semibold))
   "Face used for the primary column in Codex list views."
@@ -54,7 +57,15 @@
   "Keymap for `codex-ide-session-list-mode'.")
 
 (set-keymap-parent codex-ide-session-list-mode-map tabulated-list-mode-map)
-(define-key codex-ide-session-list-mode-map (kbd "RET") #'codex-ide-session-list-visit)
+(define-key codex-ide-session-list-mode-map
+            (kbd "RET")
+            #'codex-ide-session-list-display-session-at-point)
+(define-key codex-ide-session-list-mode-map
+            (kbd "M-<return>")
+            #'codex-ide-session-list-display-session-at-point-other-window)
+(define-key codex-ide-session-list-mode-map
+            (kbd "C-M-j")
+            #'codex-ide-session-list-display-session-at-point-other-window)
 
 (define-derived-mode codex-ide-session-list-mode tabulated-list-mode "Codex-Session-List"
   "Parent mode for Codex session list buffers.")
@@ -69,8 +80,8 @@
     (error "No Codex session list entries function configured"))
   (funcall codex-ide-session-list--entries-function))
 
-(defun codex-ide-session-list-visit ()
-  "Visit the row at point."
+(defun codex-ide-session-list-display-session-at-point ()
+  "Display the session for the row at point."
   (interactive)
   (unless (functionp codex-ide-session-list--visit-function)
     (user-error "Nothing to visit in this list"))
@@ -78,6 +89,13 @@
     (unless id
       (user-error "No list entry at point"))
     (funcall codex-ide-session-list--visit-function id)))
+
+(defun codex-ide-session-list-display-session-at-point-other-window ()
+  "Display the session for the row at point in another window."
+  (interactive)
+  (let ((codex-ide-display-buffer-pop-up-action
+         codex-ide--display-buffer-other-window-pop-up-action))
+    (codex-ide-session-list-display-session-at-point)))
 
 (defun codex-ide-session-list-selected-ids ()
   "Return ids from the current row or every row touched by the active region."
@@ -104,7 +122,7 @@
   "Create and return a session list buffer.
 BUFFER-NAME names the buffer.  MODE is the major mode function to call.
 FORMAT is assigned to `tabulated-list-format'.  ENTRIES-FUNCTION computes
-the rows, and VISIT-FUNCTION handles `RET'.  SORT-KEY initializes
+the rows, and VISIT-FUNCTION handles session display commands.  SORT-KEY initializes
 `tabulated-list-sort-key' when non-nil.  SETUP-FUNCTION is called in the
 buffer before the first render when non-nil."
   (let ((buffer (get-buffer-create buffer-name)))

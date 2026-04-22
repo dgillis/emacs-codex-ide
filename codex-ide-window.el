@@ -34,6 +34,13 @@
   '(display-buffer-reuse-window display-buffer-pop-up-window)
   "Display action used when Codex should surface a buffer if needed.")
 
+(defconst codex-ide--display-buffer-other-window-pop-up-action
+  '(display-buffer-reuse-window
+    display-buffer-use-some-window
+    display-buffer-pop-up-window
+    (inhibit-same-window . t))
+  "Display action used when Codex should surface a buffer in another window.")
+
 (defun codex-ide-display-buffer (buffer &optional action)
   "Display BUFFER via `display-buffer' and return the selected window.
 When ACTION is non-nil, pass it through as the DISPLAY-BUFFER action."

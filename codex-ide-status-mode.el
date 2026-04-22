@@ -13,6 +13,9 @@
 (require 'codex-ide-section)
 (require 'codex-ide-session-list)
 
+(defvar codex-ide-display-buffer-pop-up-action)
+(defvar codex-ide--display-buffer-other-window-pop-up-action)
+
 ;;;###autoload
 (defcustom codex-ide-status-mode-transcript-preview-max-lines 40
   "Maximum number of transcript lines shown in expanded buffer sections."
@@ -60,7 +63,15 @@
 (define-key codex-ide-status-mode-map (kbd "+") #'codex-ide)
 (define-key codex-ide-status-mode-map (kbd "D") #'codex-ide-status-mode-delete-thing-at-point)
 (define-key codex-ide-status-mode-map (kbd "l") #'codex-ide-status-mode-refresh)
-(define-key codex-ide-status-mode-map (kbd "RET") #'codex-ide-status-mode-visit-thing-at-point)
+(define-key codex-ide-status-mode-map
+            (kbd "RET")
+            #'codex-ide-status-mode-display-session-at-point)
+(define-key codex-ide-status-mode-map
+            (kbd "M-<return>")
+            #'codex-ide-status-mode-display-session-at-point-other-window)
+(define-key codex-ide-status-mode-map
+            (kbd "C-M-j")
+            #'codex-ide-status-mode-display-session-at-point-other-window)
 ;; (define-key codex-ide-status-mode-map (kbd "TAB") #'codex-ide-status-mode-nav-forward)
 ;; (define-key codex-ide-status-mode-map (kbd "<backtab>") #'codex-ide-status-mode-nav-backward)
 
@@ -379,11 +390,18 @@ Only child `buffer' and `thread' sections support visit and delete actions."
           t))))
     (codex-ide-status-mode-refresh)))
 
-(defun codex-ide-status-mode-visit-thing-at-point ()
-  "Visit the actionable status entry at point."
+(defun codex-ide-status-mode-display-session-at-point ()
+  "Display the session for the actionable status entry at point."
   (interactive)
   (codex-ide-status-mode--visit-section
    (codex-ide-status-mode--actionable-section-at-point)))
+
+(defun codex-ide-status-mode-display-session-at-point-other-window ()
+  "Display the session for the actionable status entry at point in another window."
+  (interactive)
+  (let ((codex-ide-display-buffer-pop-up-action
+         codex-ide--display-buffer-other-window-pop-up-action))
+    (codex-ide-status-mode-display-session-at-point)))
 
 (defun codex-ide-status-mode-delete-thing-at-point ()
   "Delete the actionable status entry at point or every entry in the active region."

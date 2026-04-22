@@ -653,7 +653,7 @@
               (goto-char (point-min))
               (search-forward "thread-a")
               (beginning-of-line)
-              (call-interactively #'codex-ide-status-mode-visit-thing-at-point)
+              (call-interactively #'codex-ide-status-mode-display-session-at-point)
               (should (= prepare-count 2))
               (should (equal (seq-remove (lambda (method)
                                            (equal method "initialize"))
@@ -818,11 +818,37 @@
               (should (equal (codex-ide-status-mode-test--header-line-string)
                              "Project: alpha | 0 sessions"))
               (should-error
-               (call-interactively #'codex-ide-status-mode-visit-thing-at-point)
+               (call-interactively #'codex-ide-status-mode-display-session-at-point)
                :type 'user-error)
               (should-error
                (call-interactively #'codex-ide-status-mode-delete-thing-at-point)
                :type 'user-error))))))))
+
+(ert-deftest codex-ide-status-mode-binds-session-display-commands ()
+  (should (eq (lookup-key codex-ide-status-mode-map (kbd "RET"))
+              #'codex-ide-status-mode-display-session-at-point))
+  (should (eq (lookup-key codex-ide-status-mode-map (kbd "M-<return>"))
+              #'codex-ide-status-mode-display-session-at-point-other-window))
+  (should (eq (lookup-key codex-ide-status-mode-map (kbd "C-M-j"))
+              #'codex-ide-status-mode-display-session-at-point-other-window)))
+
+(ert-deftest codex-ide-status-display-session-at-point-other-window-binds-pop-up-action ()
+  (let ((captured-action nil)
+        (section 'buffer-section))
+    (with-temp-buffer
+      (codex-ide-status-mode)
+      (cl-letf (((symbol-function 'codex-ide-status-mode--actionable-section-at-point)
+                 (lambda () section))
+                ((symbol-function 'codex-ide-status-mode--visit-section)
+                 (lambda (_section)
+                   (setq captured-action codex-ide-display-buffer-pop-up-action))))
+        (call-interactively
+         #'codex-ide-status-mode-display-session-at-point-other-window)))
+    (should (equal captured-action
+                   '(display-buffer-reuse-window
+                     display-buffer-use-some-window
+                     display-buffer-pop-up-window
+                     (inhibit-same-window . t))))))
 
 (ert-deftest codex-ide-status-thread-section-hides-context-preview-and-shows-compact-metadata ()
   (let* ((root-dir (codex-ide-test--make-temp-project))

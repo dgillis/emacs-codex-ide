@@ -255,6 +255,31 @@
           (should (equal (codex-ide-session-buffer-list--last-prompt session)
                          "Multiline↵prompt body")))))))
 
+(ert-deftest codex-ide-session-buffer-list-inherits-session-display-bindings ()
+  (should (eq (lookup-key codex-ide-session-buffer-list-mode-map (kbd "RET"))
+              #'codex-ide-session-list-display-session-at-point))
+  (should (eq (lookup-key codex-ide-session-buffer-list-mode-map (kbd "M-<return>"))
+              #'codex-ide-session-list-display-session-at-point-other-window))
+  (should (eq (lookup-key codex-ide-session-buffer-list-mode-map (kbd "C-M-j"))
+              #'codex-ide-session-list-display-session-at-point-other-window)))
+
+(ert-deftest codex-ide-session-list-display-session-at-point-other-window-binds-pop-up-action ()
+  (let ((captured-action nil))
+    (with-temp-buffer
+      (codex-ide-session-list-mode)
+      (setq-local codex-ide-session-list--visit-function
+                  (lambda (_id)
+                    (setq captured-action codex-ide-display-buffer-pop-up-action)))
+      (cl-letf (((symbol-function 'tabulated-list-get-id)
+                 (lambda () "session-1")))
+        (call-interactively
+         #'codex-ide-session-list-display-session-at-point-other-window)))
+    (should (equal captured-action
+                   '(display-buffer-reuse-window
+                     display-buffer-use-some-window
+                     display-buffer-pop-up-window
+                     (inhibit-same-window . t))))))
+
 (provide 'codex-ide-session-buffer-list-tests)
 
 ;;; codex-ide-session-buffer-list-tests.el ends here
