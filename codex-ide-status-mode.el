@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'button)
+(require 'color)
 (require 'codex-ide)
 (require 'codex-ide-nav)
 (require 'codex-ide-renderer)
@@ -38,12 +39,19 @@
   "Face used for `* Label:' metadata prefixes in status buffers."
   :group 'codex-ide)
 
+(defface codex-ide-status-striped-heading-face
+  '((t :inherit default :background unspecified :extend t))
+  "Face used for striped status section headings."
+  :group 'codex-ide)
+
 ;; `defface' alone can leave an already-defined face carrying old attributes in a
 ;; live Emacs session, so explicitly clear the background on reload as well.
 (face-spec-set 'codex-ide-status-expanded-content-face
                '((t :inherit default :background unspecified :extend t)))
 (face-spec-set 'codex-ide-status-metadata-label-face
                '((t :inherit default :height 0.9 :weight light)))
+(face-spec-set 'codex-ide-status-striped-heading-face
+               '((t :inherit default :background unspecified :extend t)))
 
 (defvar-local codex-ide-status-mode--directory nil
   "Project directory displayed by the current status buffer.")
@@ -419,6 +427,34 @@ Only child `buffer' and `thread' sections support visit and delete actions."
           (codex-ide--project-name directory)
           count
           (if (= count 1) "session" "sessions")))
+
+(defun codex-ide-status-mode--striped-heading-background ()
+  "Return a theme-aware background color for striped headings."
+  (let ((background (face-background 'default nil t)))
+    (when (and (stringp background)
+               (not (member background '("unspecified" "unspecified-bg")))
+               (color-defined-p background))
+      (if (eq (frame-parameter nil 'background-mode) 'dark)
+          (color-lighten-name background 6)
+        (color-darken-name background 4)))))
+
+(defun codex-ide-status-mode--refresh-striped-heading-face ()
+  "Refresh the striped heading face for the current theme."
+  (let ((background (codex-ide-status-mode--striped-heading-background)))
+    (set-face-attribute
+     'codex-ide-status-striped-heading-face
+     nil
+     :inherit 'default
+     :background (or background 'unspecified)
+     :extend t)))
+
+(defun codex-ide-status-mode--apply-heading-stripe (section)
+  "Apply stripe styling to SECTION's heading."
+  (add-face-text-property
+   (codex-ide-section-heading-start section)
+   (codex-ide-section-heading-end section)
+   'codex-ide-status-striped-heading-face
+   'append))
 
 (defun codex-ide-status-mode--user-prompt-face-p (face)
   "Return non-nil when FACE includes `codex-ide-user-prompt-face'."
@@ -1021,15 +1057,20 @@ Return nil when there is no agent reply."
   "Render status sections for DIRECTORY and return the session count."
   (let* ((query-session nil)
          (threads nil)
-         (layout nil))
+         (layout nil)
+         (index 0))
     (codex-ide--prepare-session-operations)
+    (codex-ide-status-mode--refresh-striped-heading-face)
     (setq query-session (codex-ide--ensure-query-session-for-thread-selection directory))
     (setq threads
           (codex-ide-status-mode--sort-threads-by-updated
            (codex-ide--thread-list-data query-session)))
     (setq layout (codex-ide-status-mode--heading-layout threads directory))
     (dolist (thread threads)
-      (codex-ide-status-mode--insert-thread-section thread directory layout))
+      (setq index (1+ index))
+      (let ((section (codex-ide-status-mode--insert-thread-section thread directory layout)))
+        (when (zerop (% index 2))
+          (codex-ide-status-mode--apply-heading-stripe section))))
     (length threads)))
 
 (defun codex-ide-status-mode--render-buffer (directory)
