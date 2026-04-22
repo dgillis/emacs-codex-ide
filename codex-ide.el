@@ -129,10 +129,6 @@
   :group 'codex-ide)
 
 ;;;###autoload
-(defconst codex-ide-display-buffer-options nil
-  "Ordered display policy keys for `codex-ide-display-buffer'.")
-
-;;;###autoload
 (defcustom codex-ide-session-enable-visual-line-mode t
   "Whether Codex session buffers should enable `visual-line-mode' by default."
   :type 'boolean

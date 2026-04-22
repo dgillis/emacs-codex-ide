@@ -77,9 +77,7 @@
   (let ((id (tabulated-list-get-id)))
     (unless id
       (user-error "No list entry at point"))
-    (let ((codex-ide-display-buffer-options '(:reuse-buffer-window
-                                              :reuse-mode-window)))
-      (funcall codex-ide-session-list--visit-function id))))
+    (funcall codex-ide-session-list--visit-function id)))
 
 (defun codex-ide-session-list-selected-ids ()
   "Return ids from the current row or every row touched by the active region."

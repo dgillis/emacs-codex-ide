@@ -295,15 +295,11 @@ Only child `buffer' and `thread' sections support visit and delete actions."
        (unless (and (codex-ide-session-p session)
                     (buffer-live-p (codex-ide-session-buffer session)))
          (user-error "Session buffer is no longer live"))
-       (let ((codex-ide-display-buffer-options '(:reuse-buffer-window
-                                                 :reuse-mode-window)))
-         (codex-ide--show-session-buffer session))))
+       (codex-ide--show-session-buffer session)))
     ('thread
      (codex-ide--prepare-session-operations)
-     (let ((codex-ide-display-buffer-options '(:reuse-buffer-window
-                                               :reuse-mode-window)))
-       (codex-ide--show-or-resume-thread (alist-get 'id (codex-ide-section-value section))
-                                         codex-ide-status-mode--directory)))))
+     (codex-ide--show-or-resume-thread (alist-get 'id (codex-ide-section-value section))
+                                       codex-ide-status-mode--directory))))
 
 (defun codex-ide-status-mode--delete-buffer-session (session)
   "Delete SESSION's live buffer with list-mode-consistent confirmation."
@@ -898,9 +894,7 @@ Return nil when there is no agent reply."
      'keymap (codex-ide-nav-button-keymap)
      'action (lambda (_button)
                (when (buffer-live-p buffer)
-                 (let ((codex-ide-display-buffer-options '(:reuse-buffer-window
-                                                           :reuse-mode-window)))
-                   (codex-ide--show-session-buffer session)))))
+                 (codex-ide--show-session-buffer session))))
     (insert "\n")
     (codex-ide-status-mode--apply-expanded-content-face start (point))))
 

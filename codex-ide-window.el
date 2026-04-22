@@ -26,49 +26,22 @@
 
 (defvar codex-ide-focus-on-open)
 (defvar codex-ide-new-session-split)
-(defvar codex-ide-display-buffer-options)
 
 (declare-function codex-ide--remember-buffer-context-before-switch "codex-ide-core"
                   (&optional buffer))
 
-(defun codex-ide--display-buffer-in-window (buffer window)
-  "Display BUFFER in WINDOW, preserving dedication when possible."
-  (when window
-    (let ((was-dedicated (window-dedicated-p window)))
-      (set-window-buffer window buffer)
-      (set-window-dedicated-p window was-dedicated)
-      (when codex-ide-focus-on-open
-        (select-window window))
-      window)))
+(defconst codex-ide-display-buffer-pop-up-action
+  '(display-buffer-reuse-window display-buffer-pop-up-window)
+  "Display action used when Codex should surface a buffer if needed.")
 
-(defun codex-ide-display-buffer (buffer)
-  "Display BUFFER according to `codex-ide-display-buffer-options'."
+(defun codex-ide-display-buffer (buffer &optional action)
+  "Display BUFFER via `display-buffer' and return the selected window.
+When ACTION is non-nil, pass it through as the DISPLAY-BUFFER action."
   (codex-ide--remember-buffer-context-before-switch)
-  (let* ((options (or codex-ide-display-buffer-options
-                      '(:reuse-buffer-window :reuse-mode-window :other-window)))
-         (window
-          (seq-some
-           (lambda (option)
-             (pcase option
-               (:reuse-buffer-window
-                (get-buffer-window buffer 0))
-               (:reuse-mode-window
-                (seq-find
-                 (lambda (candidate)
-                   (with-current-buffer (window-buffer candidate)
-                     (derived-mode-p 'codex-ide-session-mode)))
-                 (window-list)))
-               (:other-window
-                (when (not (one-window-p t))
-                  (when-let ((candidate (ignore-errors (other-window-for-scrolling))))
-                    (unless (window-minibuffer-p candidate)
-                      candidate))))
-               (:new-window
-                (split-window-sensibly))
-               (_ nil)))
-           options)))
-    (setq window (or window (selected-window)))
-    (codex-ide--display-buffer-in-window buffer window)))
+  (let ((window (display-buffer buffer action)))
+    (when (and window codex-ide-focus-on-open)
+      (select-window window))
+    window))
 
 (defun codex-ide--split-window-for-new-session (window)
   "Return a new window split from WINDOW for a newly created session."
@@ -84,8 +57,13 @@
   "Display newly created session BUFFER honoring split preferences."
   (let ((window (or (and codex-ide-new-session-split
                          (codex-ide--split-window-for-new-session (selected-window)))
-                    (codex-ide-display-buffer buffer))))
-    (codex-ide--display-buffer-in-window buffer window)))
+                    (codex-ide-display-buffer buffer
+                                              codex-ide-display-buffer-pop-up-action))))
+    (when window
+      (set-window-buffer window buffer)
+      (when codex-ide-focus-on-open
+        (select-window window)))
+    window))
 
 (provide 'codex-ide-window)
 

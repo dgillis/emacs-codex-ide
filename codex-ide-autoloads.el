@@ -45,8 +45,6 @@ Window split direction to use when showing newly created Codex sessions.")
 (defvar codex-ide-buffer-display-when-approval-required t "\
 Whether to display a Codex buffer when it requires approval.")
 (custom-autoload 'codex-ide-buffer-display-when-approval-required "codex-ide" t)
-(defconst codex-ide-display-buffer-options nil "\
-Ordered display policy keys for `codex-ide-display-buffer'.")
 (defvar codex-ide-session-enable-visual-line-mode t "\
 Whether Codex session buffers should enable `visual-line-mode' by default.")
 (custom-autoload 'codex-ide-session-enable-visual-line-mode "codex-ide" t)
@@ -440,6 +438,7 @@ Major mode for Codex app-server session buffers.
 ;;; Generated autoloads from codex-ide-window.el
 
 (register-definition-prefixes "codex-ide-window" '("codex-ide-"))
+
 
 ;;; End of scraped data
 

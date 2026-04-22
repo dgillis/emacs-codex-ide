@@ -48,7 +48,7 @@
 (defvar codex-ide-cli-path)
 (defvar codex-ide-cli-extra-flags)
 (defvar codex-ide-new-session-split)
-(defvar codex-ide-display-buffer-options)
+(defvar codex-ide-display-buffer-pop-up-action)
 (defvar codex-ide--cli-available nil
   "Whether the Codex CLI has been detected successfully.")
 (defvar codex-ide--current-transcript-log-marker)
@@ -807,10 +807,9 @@ protocol requests such as thread listing."
   "Show the Codex buffer for the current project."
   (interactive)
   (let* ((session (codex-ide--ensure-session-for-current-project))
-         (window (let ((codex-ide-display-buffer-options
-                        '(:reuse-buffer-window :reuse-mode-window :new-window)))
-                   (codex-ide-display-buffer
-                    (codex-ide-session-buffer session)))))
+         (window (codex-ide-display-buffer
+                  (codex-ide-session-buffer session)
+                  codex-ide-display-buffer-pop-up-action)))
     (when window
       (select-window window))
     (codex-ide--ensure-input-prompt session)
