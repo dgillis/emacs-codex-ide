@@ -1123,9 +1123,9 @@
         (call-interactively
          #'codex-ide-status-mode-display-session-at-point-other-window)))
     (should (equal captured-action
-                   '(display-buffer-reuse-window
-                     display-buffer-use-some-window
-                     display-buffer-pop-up-window
+                   '((display-buffer-reuse-window
+                      display-buffer-use-some-window
+                      display-buffer-pop-up-window)
                      (inhibit-same-window . t))))))
 
 (ert-deftest codex-ide-status-thread-section-hides-context-preview-and-shows-compact-metadata ()

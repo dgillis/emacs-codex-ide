@@ -259,28 +259,23 @@
               (should (eq (window-buffer session-window)
                           (codex-ide-session-buffer session))))))))))
 
-(ert-deftest codex-ide-switch-to-buffer-respects-display-buffer-alist ()
+(ert-deftest codex-ide-switch-to-buffer-shows-session-in-selected-window-by-default ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
       (save-window-excursion
         (delete-other-windows)
-        (let ((origin-window (selected-window)))
+        (let ((origin-window (selected-window))
+              (origin-buffer (current-buffer)))
           (codex-ide-test-with-fake-processes
             (let* ((session (codex-ide--create-process-session))
-                   (session-buffer (codex-ide-session-buffer session))
-                   (display-buffer-alist
-                    (list
-                     (list
-                      (lambda (buffer _action)
-                        (eq buffer session-buffer))
-                      '(display-buffer-pop-up-window)))))
+                   (session-buffer (codex-ide-session-buffer session)))
+              (set-window-buffer origin-window origin-buffer)
               (cl-letf (((symbol-function 'codex-ide--ensure-session-for-current-project)
                          (lambda ()
                            session)))
                 (should (eq (codex-ide-switch-to-buffer) session))
-                (should (= (length (window-list nil 'no-minibuf)) 2))
-                (should (eq (selected-window)
-                            (get-buffer-window session-buffer 0)))
+                (should (= (length (window-list nil 'no-minibuf)) 1))
+                (should (eq (selected-window) origin-window))
                 (should (eq (window-buffer (selected-window))
                             session-buffer))))))))))
 
@@ -341,6 +336,11 @@
             (should-not (eq window origin-window))
             (should (eq (window-buffer window) target-buffer))
             (should (= (length (window-list nil 'no-minibuf)) 2))))))))
+
+(ert-deftest codex-ide-display-buffer-pop-up-action-uses-action-function-list ()
+  (should (equal codex-ide-display-buffer-pop-up-action
+                 '((display-buffer-reuse-window
+                    display-buffer-same-window)))))
 
 (ert-deftest codex-ide-display-new-session-buffer-uses-vertical-split ()
   (let ((project-dir (codex-ide-test--make-temp-project)))

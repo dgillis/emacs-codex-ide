@@ -286,9 +286,9 @@
       (when (buffer-live-p session-buffer)
         (kill-buffer session-buffer)))
     (should (equal captured-action
-                   '(display-buffer-reuse-window
-                     display-buffer-use-some-window
-                     display-buffer-pop-up-window
+                   '((display-buffer-reuse-window
+                      display-buffer-use-some-window
+                      display-buffer-pop-up-window)
                      (inhibit-same-window . t))))))
 
 (provide 'codex-ide-session-buffer-list-tests)
