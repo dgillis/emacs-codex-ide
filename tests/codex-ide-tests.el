@@ -2654,6 +2654,30 @@
                                     text))
             (should (string-match-p "Explain this" text))))))))
 
+(ert-deftest codex-ide-prompt-displays-session-buffer-in-other-window ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (captured-action nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-test-window-action")
+          (cl-letf (((symbol-function 'read-from-minibuffer)
+                     (lambda (&rest _args) "Explain this"))
+                    ((symbol-function 'codex-ide--ensure-session-for-current-project)
+                     (lambda () session))
+                    ((symbol-function 'codex-ide-display-buffer)
+                     (lambda (_buffer &optional action)
+                       (setq captured-action action)
+                       (selected-window)))
+                    ((symbol-function 'codex-ide--request-sync)
+                     (lambda (&rest _args) nil)))
+            (codex-ide-prompt)))))
+    (should (equal captured-action
+                   '((display-buffer-reuse-window
+                      display-buffer-use-some-window
+                      display-buffer-pop-up-window)
+                     (inhibit-same-window . t))))))
+
 (ert-deftest codex-ide-submit-renders-sent-context-below-prompt ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-path (codex-ide-test--make-project-file

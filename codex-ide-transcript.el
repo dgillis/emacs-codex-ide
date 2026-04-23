@@ -67,6 +67,7 @@
 (defvar codex-ide-model)
 (defvar codex-ide-buffer-display-when-approval-required)
 (defvar codex-ide-display-buffer-pop-up-action)
+(defvar codex-ide--display-buffer-other-window-pop-up-action)
 (defvar codex-ide-log-stream-deltas)
 (defvar codex-ide--sessions)
 (defvar codex-ide-command-output-map
@@ -3704,7 +3705,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
       (unless (string-empty-p prompt)
         (let ((window (codex-ide-display-buffer
                        buffer
-                       codex-ide-display-buffer-pop-up-action)))
+                       codex-ide--display-buffer-other-window-pop-up-action)))
           (with-selected-window window
             (with-current-buffer buffer
               (if (codex-ide-session-input-overlay session)
