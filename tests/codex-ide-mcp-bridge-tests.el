@@ -146,7 +146,7 @@
         (should
          (codex-ide-mcp-bridge-request-exempt-from-approval-p
           '((serverName . "editor")
-            (message . "Allow the editor MCP server to run tool \"get_diagnostics\"?"))))
+            (message . "Allow the editor MCP server to run tool \"emacs_get_buffer_diagnostics\"?"))))
         (should-not
          (codex-ide-mcp-bridge-request-exempt-from-approval-p
           '((serverName . "another-server")
@@ -160,7 +160,7 @@
         (should-not
          (codex-ide-mcp-bridge-request-exempt-from-approval-p
           '((serverName . "editor")
-            (message . "Allow the editor MCP server to run tool \"get_diagnostics\"?"))))))))
+            (message . "Allow the editor MCP server to run tool \"emacs_get_buffer_diagnostics\"?"))))))))
 
 (ert-deftest codex-ide-mcp-bridge-request-exempt-from-approval-ignores-shell-requests-from-emacs-paths ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -211,8 +211,8 @@
              session
              17
              '((serverName . "editor")
-               (reason . "Allow MCP server editor to run get_diagnostics")
-               (permissions . (((tool . "get_diagnostics"))
+               (reason . "Allow MCP server editor to run emacs_get_buffer_diagnostics")
+               (permissions . (((tool . "emacs_get_buffer_diagnostics"))
                                ((server . "editor")))))))
           (should (string= (codex-ide-session-status session) "approval"))
           (should (= (hash-table-count (codex-ide--pending-approvals session)) 1))
@@ -222,9 +222,9 @@
           (with-current-buffer (codex-ide-session-buffer session)
             (let ((text (buffer-string)))
               (should (string-match-p "\\[Approval required\\]" text))
-              (should (string-match-p "Reason: Allow MCP server editor to run get_diagnostics"
+              (should (string-match-p "Reason: Allow MCP server editor to run emacs_get_buffer_diagnostics"
                                       text))
-              (should (string-match-p "Permissions: (((tool \\. \"get_diagnostics\")) ((server \\. \"editor\")))"
+              (should (string-match-p "Permissions: (((tool \\. \"emacs_get_buffer_diagnostics\")) ((server \\. \"editor\")))"
                                       text)))))))))
 
 (ert-deftest codex-ide-mcp-bridge-elicitation-auto-accepts-bridge-approval-prompts ()
@@ -250,12 +250,12 @@
            nil
            18
            '((serverName . "editor")
-             (message . "Allow the editor MCP server to run tool \"get_diagnostics\"?")
+             (message . "Allow the editor MCP server to run tool \"emacs_get_buffer_diagnostics\"?")
              (mode . "form")))
           (should-not handler-called)
           (should (equal response '(18 ((action . "accept"))))))))))
 
-(ert-deftest codex-ide-mcp-bridge-get-all-open-file-buffers-lists-file-backed-buffers ()
+(ert-deftest codex-ide-mcp-bridge-get-all-buffers-lists-file-backed-buffers ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-a (codex-ide-test--make-project-file project-dir "a.el" "(message \"a\")\n"))
          (file-b (codex-ide-test--make-project-file project-dir "b.el" "(message \"b\")\n")))
@@ -266,7 +266,7 @@
           (set-buffer-modified-p t))
         (with-temp-buffer
           (let ((files (alist-get 'files
-                                  (codex-ide-mcp-bridge--tool-call--get_all_open_file_buffers nil))))
+                                  (codex-ide-mcp-bridge--tool-call--get_all_buffers nil))))
             (should (equal (alist-get 'major-mode
                                       (seq-find (lambda (item)
                                                   (equal (alist-get 'file item) file-a))
@@ -295,7 +295,7 @@
             (should (find-buffer-visiting file-path))
             (should (eq (window-buffer (selected-window)) starting-buffer))))))))
 
-(ert-deftest codex-ide-mcp-bridge-view-file-buffer-uses-non-selected-window ()
+(ert-deftest codex-ide-mcp-bridge-show-file-buffer-uses-non-selected-window ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-a (codex-ide-test--make-project-file project-dir "one.el" "(message \"one\")\n"))
          (file-b (codex-ide-test--make-project-file project-dir "two.el" "(message \"two\")\n")))
@@ -306,7 +306,7 @@
         (let* ((origin (selected-window))
                (split-width-threshold 0)
                (split-height-threshold 0)
-               (result (codex-ide-mcp-bridge--tool-call--view_file_buffer
+               (result (codex-ide-mcp-bridge--tool-call--show_file_buffer
                         `((path . ,file-b)
                           (line . 1)
                           (column . 2))))
@@ -387,19 +387,19 @@
           (should (= (alist-get 'column result) 1))
           (should (= (alist-get 'point result) 1)))))))
 
-(ert-deftest codex-ide-mcp-bridge-get-diagnostics-returns-empty-when-disabled ()
+(ert-deftest codex-ide-mcp-bridge-get-buffer-diagnostics-returns-empty-when-disabled ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (buffer (get-buffer-create " *codex-ide-diagnostics-none*")))
     (codex-ide-test-with-fixture project-dir
       (with-current-buffer buffer
         (setq-local flymake-mode nil)
         (setq-local flycheck-mode nil)
-        (let ((result (codex-ide-mcp-bridge--tool-call--get_diagnostics
+        (let ((result (codex-ide-mcp-bridge--tool-call--get_buffer_diagnostics
                        `((buffer . ,(buffer-name buffer))))))
           (should (equal (alist-get 'buffer result) (buffer-name buffer)))
           (should (equal (alist-get 'diagnostics result) '())))))))
 
-(ert-deftest codex-ide-mcp-bridge-get-diagnostics-prefers-flymake ()
+(ert-deftest codex-ide-mcp-bridge-get-buffer-diagnostics-prefers-flymake ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (buffer (get-buffer-create " *codex-ide-diagnostics-flymake*")))
     (codex-ide-test-with-fixture project-dir
@@ -418,7 +418,7 @@
                      (lambda (_diag) 1))
                     ((symbol-function 'flymake-diagnostic-end)
                      (lambda (_diag) 6)))
-            (let* ((result (codex-ide-mcp-bridge--tool-call--get_diagnostics
+            (let* ((result (codex-ide-mcp-bridge--tool-call--get_buffer_diagnostics
                             `((buffer . ,(buffer-name buffer)))))
                    (diagnostics (alist-get 'diagnostics result))
                    (diag (car diagnostics)))
@@ -429,7 +429,7 @@
               (should (= (alist-get 'line diag) 1))
               (should (= (alist-get 'column diag) 1)))))))))
 
-(ert-deftest codex-ide-mcp-bridge-get-window-list-describes-visible-windows ()
+(ert-deftest codex-ide-mcp-bridge-get-all-windows-describes-visible-windows ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-a (codex-ide-test--make-project-file project-dir "one.el" "(message \"one\")\n"))
          (file-b (codex-ide-test--make-project-file project-dir "two.el" "(message \"two\")\n")))
@@ -441,7 +441,7 @@
         (let ((other-window (split-window-right)))
           (set-window-buffer other-window buffer-b)
           (let ((windows (alist-get 'windows
-                                    (codex-ide-mcp-bridge--tool-call--get_window_list nil))))
+                                    (codex-ide-mcp-bridge--tool-call--get_all_windows nil))))
             (should (= (length windows) 2))
             (should (equal (alist-get 'buffer
                                       (alist-get 'buffer-info (car windows)))

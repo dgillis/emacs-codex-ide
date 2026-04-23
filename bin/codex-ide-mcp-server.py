@@ -27,8 +27,8 @@ class EmacsBridgeCommand:
 
 COMMANDS = [
     EmacsBridgeCommand(
-        name="get_all_open_file_buffers",
-        description="List all currently open file-backed buffers in Emacs.",
+        name="emacs_get_all_buffers",
+        description="Retrieve information all on buffers within the running Emacs instance.",
         inputSchema={
             "type": "object",
             "properties": {},
@@ -36,8 +36,8 @@ COMMANDS = [
         },
     ),
     EmacsBridgeCommand(
-        name="get_buffer_info",
-        description="Return metadata for a named Emacs buffer.",
+        name="emacs_get_buffer_info",
+        description="Retrieve metadata -- major-mode, filename, read-only, etc -- about an open Emacs buffer is needed.",
         inputSchema={
             "type": "object",
             "properties": {"buffer": {"type": "string"}},
@@ -46,8 +46,11 @@ COMMANDS = [
         },
     ),
     EmacsBridgeCommand(
-        name="get_buffer_text",
-        description="Return the full contents of a named Emacs buffer as a string.",
+        name="emacs_get_buffer_text",
+        description=(
+            "Retrieve the full contents of a named Emacs buffer as a string. "
+            "For use when you need to view an Emacs buffer specifically, not as a general purpose file-text reader."
+        ),
         inputSchema={
             "type": "object",
             "properties": {"buffer": {"type": "string"}},
@@ -56,8 +59,8 @@ COMMANDS = [
         },
     ),
     EmacsBridgeCommand(
-        name="get_diagnostics",
-        description="Return Flymake or Flycheck diagnostics for a buffer name.",
+        name="emacs_get_buffer_diagnostics",
+        description="Retrieve Flymake or Flycheck diagnostics for an Emacs buffer.",
         inputSchema={
             "type": "object",
             "properties": {"buffer": {"type": "string"}},
@@ -66,8 +69,8 @@ COMMANDS = [
         },
     ),
     EmacsBridgeCommand(
-        name="get_window_list",
-        description="List visible windows in the selected frame and their buffers.",
+        name="emacs_get_all_windows",
+        description="Retrieve all visible windows in the selected frame and their buffers.",
         inputSchema={
             "type": "object",
             "properties": {},
@@ -75,7 +78,7 @@ COMMANDS = [
         },
     ),
     EmacsBridgeCommand(
-        name="ensure_file_buffer_open",
+        name="emacs_ensure_file_buffer_open",
         description="Ensure a file-backed buffer exists without displaying it in a window.",
         inputSchema={
             "type": "object",
@@ -85,8 +88,8 @@ COMMANDS = [
         },
     ),
     EmacsBridgeCommand(
-        name="view_file_buffer",
-        description="Display a file-backed buffer in a non-selected window and optionally jump to line and column.",
+        name="emacs_show_file_buffer",
+        description="Show a file-backed buffer in a non-selected Emacs window and optionally jump to line and column.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -99,7 +102,7 @@ COMMANDS = [
         },
     ),
     EmacsBridgeCommand(
-        name="kill_file_buffer",
+        name="emacs_kill_file_buffer",
         description="Kill the buffer visiting a file, prompting if it has unsaved changes.",
         inputSchema={
             "type": "object",
@@ -109,7 +112,7 @@ COMMANDS = [
         },
     ),
     EmacsBridgeCommand(
-        name="lisp_check_parens",
+        name="emacs_lisp_check_parens",
         description="Check a Lisp source file for mismatched parentheses and report the mismatch location when found.",
         inputSchema={
             "type": "object",

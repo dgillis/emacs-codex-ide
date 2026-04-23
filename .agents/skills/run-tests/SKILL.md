@@ -9,7 +9,7 @@ Use this skill to execute the repository's canonical test runner.
 
 ## Workflow
 
-1. Run `./.agents/skills/run-tests/scripts/run-tests.sh` with no arguments to execute the full ERT suite.
+1. Run `./bin/run-tests.sh` with no arguments to execute the full ERT suite.
 2. Pass `--test-file FILE` one or more times to scope the run to specific files.
 3. Report the failing command, failing test file, and the first useful error when tests fail.
 
@@ -17,4 +17,4 @@ Use this skill to execute the repository's canonical test runner.
 
 - Prefer this skill over ad hoc `emacs --batch` invocations when the goal is normal project validation.
 - Use the explicit repo-root path above; do not reinterpret it relative to `SKILL.md`.
-- The script runs from the repo root and forwards arguments to `bin/run-tests.sh`.
+

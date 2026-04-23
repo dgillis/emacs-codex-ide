@@ -1490,7 +1490,7 @@
        '((id . "mcp-1")
          (type . "mcpToolCall")
          (server . "emacs")
-         (tool . "get_buffer_text")
+         (tool . "emacs_get_buffer_text")
          (arguments . ((buffer . "scratch")))))
       (codex-ide--render-item-completion
        session
@@ -1499,7 +1499,7 @@
          (status . "completed")
          (result . ((text . "line 1\nline 2\n")))))
       (goto-char (point-min))
-      (search-forward "* Called emacs/get_buffer_text")
+      (search-forward "* Called emacs/emacs_get_buffer_text")
       (should (search-forward "result: 2 lines [expand]" nil t))
       (let ((overlay (get-char-property
                       (match-beginning 0)
@@ -1530,7 +1530,7 @@
        '((id . "mcp-1")
          (type . "mcpToolCall")
          (server . "emacs")
-         (tool . "get_buffer_text")))
+         (tool . "emacs_get_buffer_text")))
       (codex-ide--handle-notification
        session
        '((method . "item/agentMessage/delta")
@@ -1548,7 +1548,7 @@
          (type . "agentMessage")
          (status . "completed")))
       (goto-char (point-min))
-      (search-forward "* Called emacs/get_buffer_text")
+      (search-forward "* Called emacs/emacs_get_buffer_text")
       (let ((call-pos (match-beginning 0)))
         (search-forward "result: 1 line [expand]")
         (let ((result-pos (match-beginning 0)))
@@ -4565,7 +4565,7 @@
               (read-only . t)))))
       (kill-buffer buffer))))
 
-(ert-deftest codex-ide-mcp-bridge-get-all-open-file-buffers-uses-shared-buffer-info ()
+(ert-deftest codex-ide-mcp-bridge-get-all-buffers-uses-shared-buffer-info ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-path (codex-ide-test--make-project-file
                      project-dir "lib/buffer-info.el" "(message \"hi\")\n"))
@@ -4574,7 +4574,7 @@
         (with-current-buffer buffer
           (emacs-lisp-mode)
           (set-buffer-modified-p t)
-          (let* ((result (codex-ide-mcp-bridge--tool-call--get_all_open_file_buffers nil))
+          (let* ((result (codex-ide-mcp-bridge--tool-call--get_all_buffers nil))
                  (files (alist-get 'files result nil nil #'equal))
                  (entry (seq-find
                          (lambda (item)
@@ -4605,8 +4605,8 @@
   (with-temp-buffer
     (insert-file-contents (expand-file-name "bin/codex-ide-mcp-server.py"
                                             default-directory))
-    (should (re-search-forward "name=\"get_buffer_info\"" nil t))
-    (should (re-search-forward "name=\"get_buffer_text\"" nil t))))
+    (should (re-search-forward "name=\"emacs_get_buffer_info\"" nil t))
+    (should (re-search-forward "name=\"emacs_get_buffer_text\"" nil t))))
 
 (ert-deftest codex-ide-stop-errors-outside-session-buffer ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -4914,7 +4914,7 @@
     (should
      (codex-ide-mcp-bridge-request-exempt-from-approval-p
       '((serverName . "emacs")
-        (message . "Allow the emacs MCP server to run tool \"view_file_buffer\"?"))))
+        (message . "Allow the emacs MCP server to run tool \"emacs_show_file_buffer\"?"))))
     (let ((codex-ide-emacs-bridge-require-approval t))
       (should-not
        (codex-ide-mcp-bridge-request-exempt-from-approval-p

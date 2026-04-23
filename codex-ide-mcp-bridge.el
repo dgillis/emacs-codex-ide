@@ -108,16 +108,22 @@ refer to the configured Emacs MCP bridge server or one of its tools."
   :group 'codex-ide)
 
 (defconst codex-ide-mcp-bridge--tool-names
-  '("get_all_open_file_buffers"
-    "get_buffer_info"
-    "get_buffer_text"
-    "get_diagnostics"
-    "get_window_list"
-    "ensure_file_buffer_open"
-    "view_file_buffer"
-    "kill_file_buffer"
-    "lisp_check_parens")
+  '("emacs_get_all_buffers"
+    "emacs_get_buffer_info"
+    "emacs_get_buffer_text"
+    "emacs_get_buffer_diagnostics"
+    "emacs_get_all_windows"
+    "emacs_ensure_file_buffer_open"
+    "emacs_show_file_buffer"
+    "emacs_kill_file_buffer"
+    "emacs_lisp_check_parens")
   "Tool names exposed by the Emacs MCP bridge.")
+
+(defun codex-ide-mcp-bridge--tool-handler-suffix (name)
+  "Return the handler suffix for external bridge tool NAME."
+  (if (string-prefix-p "emacs_" name)
+      (substring name (length "emacs_"))
+    name))
 
 (defun codex-ide-mcp-bridge--toml-string (value)
   "Encode VALUE as a TOML string."
@@ -363,7 +369,8 @@ Errors from `server-running-p' are treated as nil."
 
 (defun codex-ide-mcp-bridge--tool-call (name params)
   "Dispatch bridge tool NAME using PARAMS."
-  (let ((handler (intern-soft (format "codex-ide-mcp-bridge--tool-call--%s" name))))
+  (let* ((suffix (codex-ide-mcp-bridge--tool-handler-suffix name))
+         (handler (intern-soft (format "codex-ide-mcp-bridge--tool-call--%s" suffix))))
     (if (fboundp handler)
         (funcall handler params)
       (let ((error-message (format "Bridge tool not implemented: %s" name)))
@@ -437,8 +444,8 @@ Errors from `server-running-p' are treated as nil."
      buffer
      `((already-open . ,already-open)))))
 
-(defun codex-ide-mcp-bridge--tool-call--view_file_buffer (params)
-  "Handle a `view_file_buffer' bridge request with PARAMS."
+(defun codex-ide-mcp-bridge--tool-call--show_file_buffer (params)
+  "Handle a `show_file_buffer' bridge request with PARAMS."
   (let ((path (alist-get 'path params))
         (line (alist-get 'line params))
         (column (alist-get 'column params))
@@ -507,8 +514,8 @@ Errors from `server-running-p' are treated as nil."
                                 (1+ (current-column))))
                    (message . ,(error-message-string err))))))))))))
 
-(defun codex-ide-mcp-bridge--tool-call--get_all_open_file_buffers (_params)
-  "Handle a `get_all_open_file_buffers' bridge request."
+(defun codex-ide-mcp-bridge--tool-call--get_all_buffers (_params)
+  "Handle a `get_all_buffers' bridge request."
   `((files . ,(seq-filter
                #'identity
                (mapcar
@@ -537,8 +544,8 @@ Errors from `server-running-p' are treated as nil."
       `((buffer . ,(buffer-name buffer))
         (text . ,(buffer-substring-no-properties (point-min) (point-max)))))))
 
-(defun codex-ide-mcp-bridge--tool-call--get_diagnostics (params)
-  "Handle a `get_diagnostics' bridge request with PARAMS."
+(defun codex-ide-mcp-bridge--tool-call--get_buffer_diagnostics (params)
+  "Handle a `get_buffer_diagnostics' bridge request with PARAMS."
   (let* ((buffer-name (alist-get 'buffer params))
          (buffer (and (stringp buffer-name)
                       (get-buffer buffer-name))))
@@ -552,8 +559,8 @@ Errors from `server-running-p' are treated as nil."
                             (codex-ide-mcp-bridge--flycheck-diagnostics)
                             '()))))))
 
-(defun codex-ide-mcp-bridge--tool-call--get_window_list (_params)
-  "Handle a `get_window_list' bridge request."
+(defun codex-ide-mcp-bridge--tool-call--get_all_windows (_params)
+  "Handle a `get_all_windows' bridge request."
   (let ((windows
          (mapcar
           (lambda (window)

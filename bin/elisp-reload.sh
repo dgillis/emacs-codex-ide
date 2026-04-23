@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$BIN_DIR/.." && pwd)"
 
 elisp_string_literal() {
   local value="$1"
@@ -11,12 +11,15 @@ elisp_string_literal() {
   printf '"%s"' "$value"
 }
 
-if [[ $# -lt 1 ]]; then
-  echo "usage: $(basename "$0") FILE..." >&2
-  exit 1
+if [[ $# -eq 0 ]]; then
+  set -- "$REPO_ROOT"/*.el
+  if [[ "$1" = "$REPO_ROOT/*.el" ]]; then
+    echo "error: no .el files found in $REPO_ROOT" >&2
+    exit 1
+  fi
 fi
 
-LOAD_FORMS=()
+load_forms=""
 for input_path in "$@"; do
   if [[ "$input_path" = /* ]]; then
     file_path="$input_path"
@@ -29,8 +32,8 @@ for input_path in "$@"; do
     exit 1
   fi
 
-  LOAD_FORMS+=("(load-file $(elisp_string_literal "$file_path"))")
+  load_forms="$load_forms (load-file $(elisp_string_literal "$file_path"))"
 done
 
-eval_form="(progn ${LOAD_FORMS[*]} \"ok\")"
+eval_form="(progn$load_forms \"ok\")"
 exec emacsclient --eval "$eval_form"

@@ -37,7 +37,7 @@
                 '((jsonrpc . "2.0")
                   (id . 1)
                   (method . "tools/call")
-                  (params . ((name . "view_file_buffer")
+                  (params . ((name . "emacs_show_file_buffer")
                              (arguments . ((path . "/tmp/example.el")))))))
                "\n")))
           (should
@@ -91,13 +91,13 @@
             (insert "import sys\n")
             (insert "expr = sys.argv[-1]\n")
             (insert "response = []\n")
-            (insert "if 'view_file_buffer' in expr:\n")
-            (insert "    response = {'tool': 'view_file_buffer', 'params': {'path': '/tmp/example.el', 'line': 9, 'column': 2}}\n")
-            (insert "elif 'get_all_open_file_buffers' in expr:\n")
+            (insert "if 'emacs_show_file_buffer' in expr:\n")
+            (insert "    response = {'tool': 'emacs_show_file_buffer', 'params': {'path': '/tmp/example.el', 'line': 9, 'column': 2}}\n")
+            (insert "elif 'emacs_get_all_buffers' in expr:\n")
             (insert "    response = {'files': [{'buffer': 'example.el', 'file': '/tmp/example.el'}]}\n")
-            (insert "elif 'get_diagnostics' in expr:\n")
+            (insert "elif 'emacs_get_buffer_diagnostics' in expr:\n")
             (insert "    response = {'buffer': 'example.el', 'diagnostics': [{'severity': 'error', 'message': 'Boom'}]}\n")
-            (insert "elif 'lisp_check_parens' in expr:\n")
+            (insert "elif 'emacs_lisp_check_parens' in expr:\n")
             (insert "    response = {'path': '/tmp/example.el', 'balanced': False, 'mismatch': True, 'line': 9, 'column': 2, 'point': 123}\n")
             (insert "payload = json.dumps(response, separators=(',', ':'), ensure_ascii=False).encode('utf-8')\n")
             (insert "print(json.dumps(base64.b64encode(payload).decode('ascii')))\n"))
@@ -112,18 +112,18 @@
                       `((jsonrpc . "2.0") (id . 2) (method . "tools/list")
                         (params . ,(make-hash-table)))
                       `((jsonrpc . "2.0") (id . 3) (method . "tools/call")
-                        (params . ((name . "view_file_buffer")
+                        (params . ((name . "emacs_show_file_buffer")
                                    (arguments . ((path . "/tmp/example.el")
                                                  (line . 9)
                                                  (column . 2))))))
                       `((jsonrpc . "2.0") (id . 4) (method . "tools/call")
-                        (params . ((name . "get_all_open_file_buffers")
+                        (params . ((name . "emacs_get_all_buffers")
                                    (arguments . ()))))
                       `((jsonrpc . "2.0") (id . 5) (method . "tools/call")
-                        (params . ((name . "get_diagnostics")
+                        (params . ((name . "emacs_get_buffer_diagnostics")
                                    (arguments . ((buffer . "example.el"))))))
                       `((jsonrpc . "2.0") (id . 6) (method . "tools/call")
-                        (params . ((name . "lisp_check_parens")
+                        (params . ((name . "emacs_lisp_check_parens")
                                    (arguments . ((path . "/tmp/example.el"))))))))
               (let ((json-object-type 'alist)
                     (json-array-type 'list)
@@ -175,15 +175,15 @@
                  (equal (mapcar (lambda (tool)
                                   (alist-get "name" tool nil nil #'equal))
                                 tools)
-                        '("get_all_open_file_buffers"
-                          "get_buffer_info"
-                          "get_buffer_text"
-                          "get_diagnostics"
-                          "get_window_list"
-                          "ensure_file_buffer_open"
-                          "view_file_buffer"
-                          "kill_file_buffer"
-                          "lisp_check_parens"))))
+                        '("emacs_get_all_buffers"
+                          "emacs_get_buffer_info"
+                          "emacs_get_buffer_text"
+                          "emacs_get_buffer_diagnostics"
+                          "emacs_get_all_windows"
+                          "emacs_ensure_file_buffer_open"
+                          "emacs_show_file_buffer"
+                          "emacs_kill_file_buffer"
+                          "emacs_lisp_check_parens"))))
               (let* ((open-file-text
                       (alist-get "text"
                                  (car (alist-get "content"
@@ -208,7 +208,7 @@
                                                  (alist-get "result" (nth 5 responses) nil nil #'equal)
                                                  nil nil #'equal))
                                  nil nil #'equal)))
-                (should (string-match-p "\"tool\": \"view_file_buffer\"" open-file-text))
+                (should (string-match-p "\"tool\": \"emacs_show_file_buffer\"" open-file-text))
                 (should (string-match-p "\"path\": \"/tmp/example.el\"" open-file-text))
                 (should (string-match-p "\"files\"" open-files-text))
                 (should (string-match-p "\"diagnostics\"" diagnostics-text))
@@ -244,7 +244,7 @@
                 '((jsonrpc . "2.0")
                   (id . 1)
                   (method . "tools/call")
-                  (params . ((name . "get_buffer_text")
+                  (params . ((name . "emacs_get_buffer_text")
                              (arguments . ((buffer . "example.el")))))))
                "\n")))
           (should
