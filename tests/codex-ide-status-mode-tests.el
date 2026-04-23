@@ -235,6 +235,43 @@
               (forward-line 1)
               (should (invisible-p (point))))))))))
 
+(ert-deftest codex-ide-status-reopening-buffer-does-not-duplicate-content ()
+  (let* ((root-dir (codex-ide-test--make-temp-project))
+         (project-dir (expand-file-name "alpha" root-dir))
+         (threads `(((id . "thread-alpha")
+                     (preview . "Stored preview")
+                     (createdAt . 10)
+                     (updatedAt . 20)))))
+    (make-directory project-dir t)
+    (codex-ide-test-with-fixture root-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session nil))
+          (let ((default-directory project-dir))
+            (setq session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-alpha"
+                (codex-ide-session-status session) "idle")
+          (cl-letf (((symbol-function 'codex-ide--prepare-session-operations)
+                     (lambda () nil))
+                    ((symbol-function 'codex-ide--ensure-query-session-for-thread-selection)
+                     (lambda (_directory) session))
+                    ((symbol-function 'codex-ide--thread-list-data)
+                     (lambda (&optional _session _omit-thread-id)
+                       threads)))
+            (let ((default-directory project-dir))
+              (codex-ide-status)
+              (codex-ide-status))
+            (with-current-buffer "codex-ide: alpha"
+              (let ((content (buffer-string)))
+                (should (= (how-many "Stored preview"
+                                     (point-min)
+                                     (point-max))
+                           1))
+                (should (= (how-many "Thread ID"
+                                     (point-min)
+                                     (point-max))
+                           1))
+                (should (string-match-p "Stored preview" content))))))))))
+
 (ert-deftest codex-ide-status-stripes-every-other-session-heading ()
   (let* ((root-dir (codex-ide-test--make-temp-project))
          (project-dir (expand-file-name "alpha" root-dir))

@@ -1234,7 +1234,7 @@ When IS-REFRESH is non-nil, existing buffer content will be erased/reset."
       (codex-ide-status-mode)
       (setq-local default-directory directory)
       (setq-local codex-ide-status-mode--directory directory)
-      (codex-ide-status-mode--render-buffer directory))
+      (codex-ide-status-mode--render-buffer directory :is-refresh t))
     (pop-to-buffer buffer)))
 
 (provide 'codex-ide-status-mode)
