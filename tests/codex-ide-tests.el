@@ -15,7 +15,6 @@
 (require 'codex-ide)
 (require 'codex-ide-delete-session-thread-tests)
 (require 'codex-ide-session-buffer-list-tests)
-(require 'codex-ide-session-thread-list-tests)
 
 (defun codex-ide-test--prompt-prefix-at-line ()
   "Return the visible prompt prefix string at the current line."

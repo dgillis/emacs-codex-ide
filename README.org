@@ -33,13 +33,10 @@ tool approvals without leaving the editor.
 #+CAPTION: Prompting Codex from an Emacs session buffer.
 [[file:screenshots/codex-approval-in-emacs.png]]
 
-*** Codex Thread Lists
+*** Codex Session Lists
 
-=codex-ide-session-thread-list= provides a tabulated Emacs mode for finding,
-resuming, and deleting previous Codex sessions for the current workspace.
-
-#+CAPTION: Stored workspace threads with previews, status, live buffers, and timestamps.
-[[file:screenshots/codex-threads-list.png]]
+=codex-ide-session-buffer-list= provides a tabulated Emacs mode for finding
+and switching between live Codex session buffers across workspaces.
 
 #+CAPTION: Active Codex session buffers across workspaces.
 [[file:screenshots/codex-buffer-list.png]]
@@ -97,7 +94,7 @@ session for the current project.
 
 Use =M-x codex-ide-menu= as the main entry point. It opens a transient menu for
 starting a new session, continuing the most recent session, sending a prompt
-from the minibuffer, switching to existing buffers, opening session lists, and
+from the minibuffer, switching to existing buffers, opening buffer lists, and
 adjusting configuration.
 
 #+CAPTION: The main menu is the recommended starting point for everyday Codex IDE commands.
@@ -118,20 +115,6 @@ Key bindings:
 - =M-p= and =M-n= cycle prompt history while point is in the active prompt.
 - =TAB= and =S-TAB= move between clickable buttons and file links.
 
-** =codex-ide-session-thread-list=
-
-=codex-ide-session-thread-list= opens a tabulated list of active and previous
-Codex sessions for the current workspace. Use it to inspect stored thread
-previews, see which threads already have live buffers, resume previous work, or
-delete old threads.
-
-Key bindings:
-
-- =RET= opens or resumes the thread at point.
-- =D= deletes the thread at point, or every thread touched by the active region.
-- =l= refreshes the list.
-- Standard =tabulated-list-mode= keys sort and navigate the table.
-
 * Examples
 
 ** Interactive Approvals
@@ -149,23 +132,6 @@ tool use, and follow-up prompts in one place.
 
 #+CAPTION: Following a larger Codex change from the live session transcript.
 [[file:screenshots/codex-ide-large-change-2x.gif]]
-
-** Thread Navigation
-
-Stored threads can be reopened from the workspace thread list, including older
-sessions that are no longer live in an Emacs buffer.
-
-#+CAPTION: Navigating the thread list and opening a previous Codex conversation.
-[[file:screenshots/codex-threads-navigation-2x.gif]]
-
-** Resume Stored Threads
-
-Previous conversations can be restored into a new session buffer and continued
-with their Codex thread context intact.
-
-#+CAPTION: Resuming a stored thread and continuing the conversation in a session buffer.
-[[file:screenshots/codex-resume-stored-thread-2x.gif]]
-
 
 * License
 

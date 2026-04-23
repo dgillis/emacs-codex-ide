@@ -28,8 +28,6 @@
 
 (autoload 'codex-ide-session-buffer-list "codex-ide-session-buffer-list"
   "Show a tabulated list of live Codex session buffers." t)
-(autoload 'codex-ide-session-thread-list "codex-ide-session-thread-list"
-  "Show a tabulated list of stored Codex threads for the current workspace." t)
 (autoload 'codex-ide-status "codex-ide-status-mode"
   "Show the Codex status buffer for the current project." t)
 
@@ -275,7 +273,6 @@
      :if codex-ide--in-session-buffer-p)]
    ["Manage"
     ("m" "Manage sessions" codex-ide-status)
-    ("t" "Previous sessions" codex-ide-session-thread-list)
     ("l" "Live session buffers" codex-ide-session-buffer-list)]
    ["Submenus"
     ("C" "Configuration" codex-ide-config-menu)

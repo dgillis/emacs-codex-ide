@@ -302,6 +302,9 @@
                          "Later↵prompt body")))))))
 
 (ert-deftest codex-ide-session-buffer-list-inherits-session-display-bindings ()
+  (should (eq (lookup-key codex-ide-session-buffer-list-mode-map (kbd "K"))
+              #'codex-ide-session-buffer-list-delete-buffer))
+  (should-not (lookup-key codex-ide-session-buffer-list-mode-map (kbd "D")))
   (should (eq (lookup-key codex-ide-session-buffer-list-mode-map (kbd "RET"))
               #'codex-ide-session-list-display-session-at-point))
   (should (eq (lookup-key codex-ide-session-buffer-list-mode-map (kbd "M-<return>"))

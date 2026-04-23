@@ -14,7 +14,7 @@
   (should (transient-get-suffix 'codex-ide-menu "b"))
   (should (transient-get-suffix 'codex-ide-menu "p"))
   (should (transient-get-suffix 'codex-ide-menu "l"))
-  (should (transient-get-suffix 'codex-ide-menu "t")))
+  (should-error (transient-get-suffix 'codex-ide-menu "t")))
 
 (ert-deftest codex-ide-config-menu-exposes-reasoning-effort-suffix ()
   (should (transient-get-suffix 'codex-ide-config-menu "R")))

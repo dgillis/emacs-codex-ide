@@ -17,7 +17,7 @@
 (set-keymap-parent codex-ide-session-buffer-list-mode-map
                    codex-ide-session-list-mode-map)
 (define-key codex-ide-session-buffer-list-mode-map
-            (kbd "D")
+            (kbd "K")
             #'codex-ide-session-buffer-list-delete-buffer)
 (define-key codex-ide-session-buffer-list-mode-map
             (kbd "l")

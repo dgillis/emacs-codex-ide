@@ -35,7 +35,7 @@ Following summarizes the intended module structure:
 - `codex-ide-transient.el`: transient-based command menus and configuration UI. Treat this as command-surface glue, not the home for core business logic.
 - `codex-ide-mcp-bridge.el`: Emacs-side bridge helpers. Owns optional bridge configuration, server readiness checks, tool dispatch, and context reporting for the external bridge process.
 - `codex-ide-mcp-elicitation.el`: MCP elicitation payload normalization and formatting helpers shared by bridge/transcript code.
-- `codex-ide-nav.el`, `codex-ide-section.el`, `codex-ide-status-mode.el`, `codex-ide-session-list.el`, `codex-ide-session-buffer-list.el`, `codex-ide-session-thread-list.el`, `codex-ide-debug-info.el`, `codex-ide-delete-session-thread.el`, `codex-ide-utils.el`: focused support modules whose names should continue to match their single responsibility.
+- `codex-ide-nav.el`, `codex-ide-section.el`, `codex-ide-status-mode.el`, `codex-ide-session-list.el`, `codex-ide-session-buffer-list.el`, `codex-ide-debug-info.el`, `codex-ide-delete-session-thread.el`, `codex-ide-utils.el`: focused support modules whose names should continue to match their single responsibility.
 - `codex-ide-*.el`: if a new concern does not fit an existing file cleanly, prefer creating a new focused module over growing an unrelated one.
 - `bin/codex-ide-mcp-server.py`: standalone MCP proxy that talks to a running Emacs via `emacsclient` and forwards JSON tool calls into `codex-ide-mcp-bridge--json-tool-call`.
 - `tests/*-tests.el`: ERT coverage organized alongside the source modules they exercise.

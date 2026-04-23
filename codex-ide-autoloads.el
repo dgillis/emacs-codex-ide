@@ -267,13 +267,6 @@ Show a tabulated list of live Codex session buffers." t)
 (register-definition-prefixes "codex-ide-session-list" '("codex-ide-session-list-"))
 
 
-;;; Generated autoloads from codex-ide-session-thread-list.el
-
-(autoload 'codex-ide-session-thread-list "codex-ide-session-thread-list" "\
-Show a tabulated list of stored Codex threads for the current workspace." t)
-(register-definition-prefixes "codex-ide-session-thread-list" '("codex-ide-session-thread-list-"))
-
-
 ;;; Generated autoloads from codex-ide-delete-session-thread.el
 
 (autoload 'codex-ide-delete-session-thread "codex-ide-delete-session-thread" "\
