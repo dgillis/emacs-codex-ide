@@ -445,6 +445,10 @@ Major mode for Codex app-server session buffers.
 (register-definition-prefixes "codex-ide-window" '("codex-ide-"))
 
 
+;;; Generated autoloads from codex-ide-config.el
+
+(register-definition-prefixes "codex-ide-config" '("codex-ide-config-"))
+
 ;;; End of scraped data
 
 (provide 'codex-ide-autoloads)

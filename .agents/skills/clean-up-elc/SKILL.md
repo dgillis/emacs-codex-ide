@@ -9,7 +9,7 @@ Use this skill to remove generated `.elc` files without touching source files.
 
 ## Workflow
 
-1. Pass one or more `.el` or `.elc` paths to `./skills/clean-up-elc/scripts/clean-up-elc.sh`.
+1. Pass one or more `.el` or `.elc` paths to `./.agents/skills/clean-up-elc/scripts/clean-up-elc.sh`.
 2. For `.el` inputs, the script deletes the sibling `.elc` file if present.
 3. For `.elc` inputs, the script deletes that file directly.
 

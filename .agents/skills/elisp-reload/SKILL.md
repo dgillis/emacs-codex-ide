@@ -9,7 +9,7 @@ Use this skill to load changed Elisp into the running Emacs session.
 
 ## Workflow
 
-1. Pass one or more file paths to `./skills/elisp-reload/scripts/elisp-reload.sh`.
+1. Pass one or more file paths to `./.agents/skills/elisp-reload/scripts/elisp-reload.sh`.
 2. Prefer absolute or repo-relative `.el` paths.
 3. Only use this when live reloading is appropriate; editing files does not imply reload permission.
 

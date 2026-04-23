@@ -9,7 +9,7 @@ Use this skill to execute the repository's canonical test runner.
 
 ## Workflow
 
-1. Run `./skills/run-tests/scripts/run-tests.sh` with no arguments to execute the full ERT suite.
+1. Run `./.agents/skills/run-tests/scripts/run-tests.sh` with no arguments to execute the full ERT suite.
 2. Pass `--test-file FILE` one or more times to scope the run to specific files.
 3. Report the failing command, failing test file, and the first useful error when tests fail.
 

@@ -22,4 +22,4 @@ fi
 
 cd "$REPO_ROOT"
 emacs -Q --batch --eval "(setq load-prefer-newer t)" -L . -f batch-byte-compile "$file_path"
-"$REPO_ROOT/skills/clean-up-elc/scripts/clean-up-elc.sh" "$file_path"
+"$REPO_ROOT/.agents/skills/clean-up-elc/scripts/clean-up-elc.sh" "$file_path"
