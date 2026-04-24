@@ -8,10 +8,10 @@
 
 (require 'subr-x)
 (require 'transient)
+(require 'codex-ide-config)
 
 (declare-function codex-ide-mcp-bridge-enable "codex-ide-mcp-bridge" ())
 (declare-function codex-ide-mcp-bridge-disable "codex-ide-mcp-bridge" ())
-(declare-function codex-ide--available-model-names "codex-ide" ())
 (declare-function codex-ide "codex-ide" ())
 (declare-function codex-ide-continue "codex-ide" ())
 (declare-function codex-ide-prompt "codex-ide" ())
@@ -44,12 +44,6 @@
 (defvar codex-ide-want-mcp-bridge)
 (defvar codex-ide-emacs-bridge-require-approval)
 
-(defconst codex-ide--other-model-choice "Other..."
-  "Sentinel choice used to enter a custom model name.")
-
-(defconst codex-ide--empty-model-choice "<empty>"
-  "Sentinel choice used to clear the configured model.")
-
 (defconst codex-ide--new-session-split-choices
   '(("default display" . nil)
     ("vertical split" . vertical)
@@ -80,88 +74,98 @@
        'face 'success)
     (propertize "No active session" 'face 'transient-inactive-value)))
 
-(defun codex-ide--read-model ()
-  "Prompt for a model, preferring server-provided choices when available."
-  (let* ((default (or codex-ide-model ""))
-         (models (codex-ide--available-model-names)))
-    (if models
-        (let ((choice (completing-read
-                       "Model (choose or use Other...; empty clears): "
-                       (append models
-                               (list codex-ide--empty-model-choice
-                                     codex-ide--other-model-choice))
-                       nil nil nil nil default)))
-          (cond
-           ((equal choice codex-ide--empty-model-choice)
-            "")
-           ((equal choice codex-ide--other-model-choice)
-            (read-string "Custom model (leave empty to clear): " default))
-           (t
-            choice)))
-      (read-string "Model (leave empty to clear): " default))))
+(defun codex-ide--with-transient-minibuffer-quit (fn)
+  "Call FN and treat minibuffer quit as a no-op transient return."
+  (condition-case nil
+      (funcall fn)
+    (quit nil)))
 
-(transient-define-suffix codex-ide--set-cli-path (path)
+(transient-define-suffix codex-ide--set-cli-path (&optional path)
   "Set the Codex CLI path."
   :description "Set CLI path"
-  (interactive (list (read-file-name "Codex CLI path: " nil codex-ide-cli-path t)))
-  (setq codex-ide-cli-path path)
-  (message "Codex CLI path set to %s" path))
+  :transient t
+  (interactive)
+  (codex-ide--with-transient-minibuffer-quit
+   (lambda ()
+     (let ((path (or path
+                     (read-file-name "Codex CLI path: " nil codex-ide-cli-path t))))
+       (setq codex-ide-cli-path path)
+       (message "Codex CLI path set to %s" path)))))
 
-(transient-define-suffix codex-ide--set-cli-extra-flags (flags)
+(transient-define-suffix codex-ide--set-cli-extra-flags (&optional flags)
   "Set additional Codex CLI flags."
   :description "Set extra flags"
-  (interactive (list (read-string "Additional CLI flags: " codex-ide-cli-extra-flags)))
-  (setq codex-ide-cli-extra-flags flags)
-  (message "Codex extra flags set to %s" flags))
+  :transient t
+  (interactive)
+  (codex-ide--with-transient-minibuffer-quit
+   (lambda ()
+     (let ((flags (or flags
+                      (read-string "Additional CLI flags: " codex-ide-cli-extra-flags))))
+       (setq codex-ide-cli-extra-flags flags)
+       (message "Codex extra flags set to %s" flags)))))
 
-(transient-define-suffix codex-ide--set-approval-policy (value)
+(transient-define-suffix codex-ide--set-approval-policy (&optional value)
   "Set `codex-ide-approval-policy'."
   :description "Set approval policy"
-  (interactive (list (completing-read "Approval policy: "
-                                      '("untrusted" "on-failure" "on-request" "never")
-                                      nil t nil nil codex-ide-approval-policy)))
-  (setq codex-ide-approval-policy value)
-  (message "Codex approval policy set to %s" value))
+  :transient t
+  (interactive)
+  (codex-ide--with-transient-minibuffer-quit
+   (lambda ()
+     (codex-ide-config-apply-interactively
+      'approval-policy
+      (or value
+          (codex-ide-config-read-value 'approval-policy))))))
 
-(transient-define-suffix codex-ide--set-sandbox-mode (value)
+(transient-define-suffix codex-ide--set-sandbox-mode (&optional value)
   "Set `codex-ide-sandbox-mode'."
   :description "Set sandbox mode"
-  (interactive (list (completing-read "Sandbox mode: "
-                                      '("read-only" "workspace-write" "danger-full-access")
-                                      nil t nil nil codex-ide-sandbox-mode)))
-  (setq codex-ide-sandbox-mode value)
-  (message "Codex sandbox mode set to %s" value))
+  :transient t
+  (interactive)
+  (codex-ide--with-transient-minibuffer-quit
+   (lambda ()
+     (codex-ide-config-apply-interactively
+      'sandbox-mode
+      (or value
+          (codex-ide-config-read-value 'sandbox-mode))))))
 
-(transient-define-suffix codex-ide--set-personality (value)
+(transient-define-suffix codex-ide--set-personality (&optional value)
   "Set `codex-ide-personality'."
   :description "Set personality"
-  (interactive (list (completing-read "Personality: "
-                                      '("none" "friendly" "pragmatic")
-                                      nil t nil nil codex-ide-personality)))
-  (setq codex-ide-personality value)
-  (message "Codex personality set to %s" value))
+  :transient t
+  (interactive)
+  (codex-ide--with-transient-minibuffer-quit
+   (lambda ()
+     (codex-ide-config-apply-interactively
+      'personality
+      (or value
+          (codex-ide-config-read-value 'personality))))))
 
-(transient-define-suffix codex-ide--set-model (model)
+(transient-define-suffix codex-ide--set-model (&optional model)
   "Set the Codex model."
   :description "Set model"
-  (interactive (list (codex-ide--read-model)))
-  (setq codex-ide-model (unless (string-empty-p model) model))
-  (message "Codex model %s"
-           (if codex-ide-model
-               (format "set to %s" codex-ide-model)
-             "cleared")))
+  :transient t
+  (interactive)
+  (codex-ide--with-transient-minibuffer-quit
+   (lambda ()
+     (let ((model (or model
+                      (codex-ide-config-read-value 'model))))
+       (codex-ide-config-apply-interactively
+        'model
+        (unless (string-empty-p model) model))))))
 
-(transient-define-suffix codex-ide--set-reasoning-effort (value)
+(transient-define-suffix codex-ide--set-reasoning-effort (&optional value)
   "Set `codex-ide-reasoning-effort'."
   :description "Set reasoning effort"
-  (interactive (list (completing-read "Reasoning effort (leave empty to clear): "
-                                      '("none" "minimal" "low" "medium" "high" "xhigh")
-                                      nil nil nil nil codex-ide-reasoning-effort)))
-  (setq codex-ide-reasoning-effort (unless (string-empty-p value) value))
-  (message "Codex reasoning effort %s"
-           (if codex-ide-reasoning-effort
-               (format "set to %s" codex-ide-reasoning-effort)
-             "cleared")))
+  :transient t
+  (interactive)
+  (codex-ide--with-transient-minibuffer-quit
+   (lambda ()
+     (let ((value
+            (or value
+                (codex-ide-config-read-value 'reasoning-effort))))
+       (codex-ide-config-apply-interactively
+        'reasoning-effort
+        (unless (string-empty-p value) value))))))
 
 (defun codex-ide--running-submit-action-label ()
   "Return a short label for `codex-ide-running-submit-action'."
@@ -169,22 +173,25 @@
                    codex-ide--running-submit-action-choices))
       (format "%S" codex-ide-running-submit-action)))
 
-(transient-define-suffix codex-ide--set-running-submit-action (action)
+(transient-define-suffix codex-ide--set-running-submit-action (&optional action)
   "Set `codex-ide-running-submit-action'."
   :description "Set running submit action"
-  (interactive
-   (list
-    (cdr
-     (assoc
-      (completing-read
-       "Running submit action: "
-       codex-ide--running-submit-action-choices
-       nil t nil nil
-       (codex-ide--running-submit-action-label))
-      codex-ide--running-submit-action-choices))))
-  (setq codex-ide-running-submit-action action)
-  (message "Running submit action set to %s"
-           (codex-ide--running-submit-action-label)))
+  :transient t
+  (interactive)
+  (codex-ide--with-transient-minibuffer-quit
+   (lambda ()
+     (setq codex-ide-running-submit-action
+           (or action
+               (cdr
+                (assoc
+                 (completing-read
+                  "Running submit action: "
+                  codex-ide--running-submit-action-choices
+                  nil t nil nil
+                  (codex-ide--running-submit-action-label))
+                 codex-ide--running-submit-action-choices))))
+     (message "Running submit action set to %s"
+              (codex-ide--running-submit-action-label)))))
 
 (defun codex-ide--new-session-split-label ()
   "Return a short label for `codex-ide-new-session-split'."
@@ -192,22 +199,25 @@
                    codex-ide--new-session-split-choices))
       (format "%S" codex-ide-new-session-split)))
 
-(transient-define-suffix codex-ide--set-new-session-split (split)
+(transient-define-suffix codex-ide--set-new-session-split (&optional split)
   "Set `codex-ide-new-session-split'."
   :description "Set new session split"
-  (interactive
-   (list
-    (cdr
-     (assoc
-      (completing-read
-       "New session split: "
-       codex-ide--new-session-split-choices
-       nil t nil nil
-       (codex-ide--new-session-split-label))
-      codex-ide--new-session-split-choices))))
-  (setq codex-ide-new-session-split split)
-  (message "New session split set to %s"
-           (codex-ide--new-session-split-label)))
+  :transient t
+  (interactive)
+  (codex-ide--with-transient-minibuffer-quit
+   (lambda ()
+     (setq codex-ide-new-session-split
+           (or split
+               (cdr
+                (assoc
+                 (completing-read
+                  "New session split: "
+                  codex-ide--new-session-split-choices
+                  nil t nil nil
+                  (codex-ide--new-session-split-label))
+                 codex-ide--new-session-split-choices))))
+     (message "New session split set to %s"
+              (codex-ide--new-session-split-label)))))
 
 (transient-define-suffix codex-ide--toggle-emacs-tool-bridge ()
   "Toggle `codex-ide-want-mcp-bridge'."
@@ -281,25 +291,15 @@
 ;;;###autoload
 (transient-define-prefix codex-ide-config-menu ()
   "Open the Codex IDE configuration menu."
-  ["Codex IDE Configuration"
-   ["CLI"
-    ("p" "Set CLI path" codex-ide--set-cli-path)
+  [["Agent"
     ("m" "Set model" codex-ide--set-model)
-    ("R" "Set reasoning effort" codex-ide--set-reasoning-effort)
-    ("u" "Set running submit action" codex-ide--set-running-submit-action
-     :description (lambda ()
-                     (format "Running submit action (%s)"
-                             (codex-ide--running-submit-action-label))))
+    ("r" "Set reasoning effort" codex-ide--set-reasoning-effort)
+    ("a" "Set approval policy" codex-ide--set-approval-policy)
+    ("s" "Set sandbox mode" codex-ide--set-sandbox-mode)
+    ("p" "Set personality" codex-ide--set-personality)]
+   ["Codex-IDE"
+    ("c" "Set CLI path" codex-ide--set-cli-path)
     ("x" "Set extra flags" codex-ide--set-cli-extra-flags)
-   ("a" "Set approval policy" codex-ide--set-approval-policy)
-   ("P" "Set personality" codex-ide--set-personality)
-   ("S" "Set sandbox mode" codex-ide--set-sandbox-mode)]
-   ["Window"
-    ("w" "Set new session split" codex-ide--set-new-session-split
-     :description (lambda ()
-                     (format "New session split (%s)"
-                             (codex-ide--new-session-split-label))))]
-   ["Bridge"
     ("e" "Toggle Emacs callback bridge" codex-ide--toggle-emacs-tool-bridge
      :description (lambda ()
                      (format "Emacs callback bridge (%s)"
@@ -312,9 +312,17 @@
                      (format "Bridge approvals (%s)"
                              (if codex-ide-emacs-bridge-require-approval
                                  "ON"
-                               "OFF"))))]]
-  ["Save"
-   ("V" "Save configuration" codex-ide--save-config)])
+                               "OFF"))))
+    ("u" "Set running submit action" codex-ide--set-running-submit-action
+     :description (lambda ()
+                     (format "Running submit action (%s)"
+                             (codex-ide--running-submit-action-label))))
+    ("w" "Set new session split" codex-ide--set-new-session-split
+     :description (lambda ()
+                     (format "New session split (%s)"
+                             (codex-ide--new-session-split-label))))]
+   ["Save"
+    ("S" "Save configuration" codex-ide--save-config)]])
 
 ;;;###autoload
 (transient-define-prefix codex-ide-debug-menu ()

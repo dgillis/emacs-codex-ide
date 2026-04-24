@@ -29,6 +29,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'codex-ide-core)
+(require 'codex-ide-config)
 (require 'codex-ide-errors)
 
 (declare-function codex-ide-log-message "codex-ide-log" (session format-string &rest args))
@@ -140,28 +141,32 @@
                                        (params . ,params)))
     id))
 
-(defun codex-ide--thread-start-params ()
-  "Build `thread/start` params for the current working directory."
+(defun codex-ide--thread-start-params (&optional session)
+  "Build `thread/start` params for SESSION's current working directory."
   (let ((working-dir (codex-ide--get-working-directory)))
     (delq nil
           `((cwd . ,working-dir)
-            (approvalPolicy . ,codex-ide-approval-policy)
-            (sandbox . ,codex-ide-sandbox-mode)
-            (personality . ,codex-ide-personality)
-            ,@(when codex-ide-model
-                `((model . ,codex-ide-model)))))))
+            (approvalPolicy . ,(codex-ide-config-effective-value
+                                'approval-policy
+                                session))
+            (sandbox . ,(codex-ide-config-effective-value 'sandbox-mode session))
+            (personality . ,(codex-ide-config-effective-value 'personality session))
+            ,@(when-let ((model (codex-ide-config-effective-value 'model session)))
+                `((model . ,model)))))))
 
-(defun codex-ide--thread-resume-params (thread-id)
-  "Build `thread/resume` params for THREAD-ID in the current working directory."
+(defun codex-ide--thread-resume-params (thread-id &optional session)
+  "Build `thread/resume` params for THREAD-ID in SESSION's current working directory."
   (let ((working-dir (codex-ide--get-working-directory)))
     (delq nil
           `((threadId . ,thread-id)
             (cwd . ,working-dir)
-            (approvalPolicy . ,codex-ide-approval-policy)
-            (sandbox . ,codex-ide-sandbox-mode)
-            (personality . ,codex-ide-personality)
-            ,@(when codex-ide-model
-                `((model . ,codex-ide-model)))))))
+            (approvalPolicy . ,(codex-ide-config-effective-value
+                                'approval-policy
+                                session))
+            (sandbox . ,(codex-ide-config-effective-value 'sandbox-mode session))
+            (personality . ,(codex-ide-config-effective-value 'personality session))
+            ,@(when-let ((model (codex-ide-config-effective-value 'model session)))
+                `((model . ,model)))))))
 
 (defun codex-ide--thread-read-params (thread-id &optional include-turns)
   "Build `thread/read` params for THREAD-ID."

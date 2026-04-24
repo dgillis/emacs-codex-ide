@@ -53,6 +53,7 @@
 (declare-function codex-ide--session-for-current-project "codex-ide-session" ())
 (declare-function codex-ide--show-session-buffer "codex-ide-session" (session &key newly-created))
 (declare-function codex-ide--sync-prompt-minor-mode "codex-ide-session-mode" (&optional session))
+(declare-function codex-ide-config-effective-value "codex-ide-config" (key &optional session))
 (declare-function codex-ide-log-message "codex-ide-log" (session format-string &rest args))
 
 (defvar codex-ide-log-max-lines)
@@ -3628,25 +3629,27 @@ Signal an error when THREAD-READ lacks replayable transcript items."
 
 (defun codex-ide--send-turn-start (session thread-id payload)
   "Send a `turn/start` request for SESSION THREAD-ID using PAYLOAD."
-  (when codex-ide-reasoning-effort
+  (when-let ((effort (codex-ide-config-effective-value 'reasoning-effort session)))
     (codex-ide--session-metadata-put
      session
      :reasoning-effort
-     codex-ide-reasoning-effort))
+     effort))
   (codex-ide--request-sync
    session
    "turn/start"
    `((threadId . ,thread-id)
-     ,@(when codex-ide-model
-         `((model . ,codex-ide-model)))
-     ,@(when codex-ide-reasoning-effort
-         `((effort . ,codex-ide-reasoning-effort)))
+     ,@(when-let ((model (codex-ide-config-effective-value 'model session)))
+         `((model . ,model)))
+     ,@(when-let ((effort (codex-ide-config-effective-value
+                           'reasoning-effort
+                           session)))
+         `((effort . ,effort)))
      (input . ,(alist-get 'input payload)))))
 
 (defun codex-ide--after-turn-start-submitted (session payload)
   "Update SESSION state after successfully submitting PAYLOAD."
-  (when codex-ide-model
-    (codex-ide--set-session-model-name session codex-ide-model)
+  (when-let ((model (codex-ide-config-effective-value 'model session)))
+    (codex-ide--set-session-model-name session model)
     (codex-ide--update-header-line session))
   (codex-ide--mark-session-prompt-submitted session)
   (when (alist-get 'included-session-context payload)

@@ -144,7 +144,8 @@ while 1 would fully replace the background with the foreground color."
 
 (defconst codex-ide-status-mode--session-events
   '(created destroyed thread-attached status-changed turn-started
-            turn-completed approval-requested reset thread-deleted)
+            turn-completed approval-requested reset thread-deleted
+            config-changed)
   "Session events that should trigger a status buffer refresh.")
 
 (defun codex-ide-status-mode--cancel-refresh-timer ()

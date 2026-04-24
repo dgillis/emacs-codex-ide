@@ -8,6 +8,8 @@
 
 (require 'ert)
 (require 'cl-lib)
+(require 'codex-ide)
+(require 'codex-ide-test-fixtures)
 (require 'codex-ide-transient)
 
 (ert-deftest codex-ide-menu-exposes-navigation-and-view-suffixes ()
@@ -17,7 +19,11 @@
   (should-error (transient-get-suffix 'codex-ide-menu "t")))
 
 (ert-deftest codex-ide-config-menu-exposes-reasoning-effort-suffix ()
-  (should (transient-get-suffix 'codex-ide-config-menu "R")))
+  (should (transient-get-suffix 'codex-ide-config-menu "r")))
+
+(ert-deftest codex-ide-config-menu-exposes-agent-setting-suffixes-with-lowercase-mnemonics ()
+  (should (transient-get-suffix 'codex-ide-config-menu "p"))
+  (should (transient-get-suffix 'codex-ide-config-menu "s")))
 
 (ert-deftest codex-ide-config-menu-exposes-new-session-split-suffix ()
   (should (transient-get-suffix 'codex-ide-config-menu "w")))
@@ -27,6 +33,40 @@
 
 (ert-deftest codex-ide-config-menu-exposes-running-submit-action-suffix ()
   (should (transient-get-suffix 'codex-ide-config-menu "u")))
+
+(ert-deftest codex-ide-config-menu-exposes-save-suffix ()
+  (should (transient-get-suffix 'codex-ide-config-menu "S")))
+
+(ert-deftest codex-ide-config-menu-groups-codex-ide-settings-under-one-column ()
+  (let* ((layout (plist-get (symbol-plist 'codex-ide-config-menu) 'transient--layout))
+         (columns (aref (car layout) 3))
+         (descriptions (mapcar (lambda (column)
+                                 (plist-get (aref column 2) :description))
+                               columns))
+         (codex-ide-column (seq-find (lambda (column)
+                                       (equal (plist-get (aref column 2) :description)
+                                              "Codex-IDE"))
+                                     columns))
+         (keys (mapcar (lambda (suffix)
+                         (plist-get (nth 2 suffix) :key))
+                       (aref codex-ide-column 3))))
+    (should (equal descriptions '("Agent" "Codex-IDE" "Save")))
+    (should (equal keys '("c" "x" "e" "A" "u" "w")))))
+
+(ert-deftest codex-ide-config-menu-prompting-suffixes-stay-active ()
+  (dolist (command '(codex-ide--set-cli-path
+                     codex-ide--set-model
+                     codex-ide--set-reasoning-effort
+                     codex-ide--set-running-submit-action
+                     codex-ide--set-cli-extra-flags
+                     codex-ide--set-approval-policy
+                     codex-ide--set-personality
+                     codex-ide--set-sandbox-mode
+                     codex-ide--set-new-session-split))
+    (let ((obj (transient-suffix-object command)))
+      (should obj)
+      (should (slot-boundp obj 'transient))
+      (should (eq (oref obj transient) t)))))
 
 (ert-deftest codex-ide-menu-session-suffixes-use-current-commands ()
   (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "s")) :command)
@@ -72,61 +112,60 @@
       (codex-ide--set-running-submit-action 'queue))
     (should (eq codex-ide-running-submit-action 'queue))))
 
-(ert-deftest codex-ide-read-model-uses-server-provided-choices ()
-  (let ((called nil))
-    (cl-letf (((symbol-function 'codex-ide--available-model-names)
-               (lambda ()
-                 '("gpt-5.4" "gpt-5.4-mini")))
-              ((symbol-function 'completing-read)
-               (lambda (prompt collection predicate require-match
-                        &optional initial-input hist def inherit-input-method)
-                 (setq called (list prompt collection predicate require-match
-                                    initial-input hist def inherit-input-method))
-                 "gpt-5.4")))
-      (should (equal (codex-ide--read-model) "gpt-5.4")))
-    (should (equal (nth 0 called)
-                   "Model (choose or use Other...; empty clears): "))
-    (should (equal (nth 1 called)
-                   '("gpt-5.4" "gpt-5.4-mini" "<empty>" "Other...")))
-    (should-not (nth 3 called))))
-
-(ert-deftest codex-ide-read-model-empty-choice-clears-value ()
-  (cl-letf (((symbol-function 'codex-ide--available-model-names)
-             (lambda ()
-               '("gpt-5.4" "gpt-5.4-mini")))
-            ((symbol-function 'completing-read)
-             (lambda (&rest _) "<empty>")))
-    (should (equal (codex-ide--read-model) ""))))
-
-(ert-deftest codex-ide-read-model-other-choice-prompts-for-custom-value ()
-  (cl-letf (((symbol-function 'codex-ide--available-model-names)
-             (lambda ()
-               '("gpt-5.4" "gpt-5.4-mini")))
-            ((symbol-function 'completing-read)
-             (lambda (&rest _) "Other..."))
-            ((symbol-function 'read-string)
-             (lambda (prompt initial-input)
-               (should (equal prompt "Custom model (leave empty to clear): "))
-               (should (equal initial-input ""))
-               "my-custom-model")))
-    (should (equal (codex-ide--read-model) "my-custom-model"))))
-
-(ert-deftest codex-ide-read-model-falls-back-to-freeform-when-server-list-unavailable ()
-  (cl-letf (((symbol-function 'codex-ide--available-model-names)
-             (lambda () nil))
-            ((symbol-function 'read-string)
-             (lambda (prompt initial-input)
-               (should (equal prompt "Model (leave empty to clear): "))
-               (should (equal initial-input ""))
-               "manual-model")))
-    (should (equal (codex-ide--read-model) "manual-model"))))
-
 (ert-deftest codex-ide-set-model-updates-global-default ()
   (let ((codex-ide-model nil))
     (cl-letf (((symbol-function 'message)
                (lambda (&rest _) nil)))
       (codex-ide--set-model "gpt-5.4"))
     (should (equal codex-ide-model "gpt-5.4"))))
+
+(ert-deftest codex-ide-with-transient-minibuffer-quit-returns-nil-on-quit ()
+  (should-not
+   (codex-ide--with-transient-minibuffer-quit
+    (lambda ()
+      (signal 'quit nil)))))
+
+(ert-deftest codex-ide-set-sandbox-mode-can-target-current-session ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-sandbox-mode "workspace-write"))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (cl-letf (((symbol-function 'completing-read)
+                       (lambda (prompt collection &rest _)
+                         (cond
+                          ((equal prompt "Apply to: ") "This session")
+                          ((equal prompt "Sandbox mode: ") "read-only")
+                          (t (car collection)))))
+                      ((symbol-function 'message)
+                       (lambda (&rest _) nil)))
+              (call-interactively #'codex-ide--set-sandbox-mode)))
+          (should (equal codex-ide-sandbox-mode "workspace-write"))
+          (should (equal (codex-ide-config-effective-value 'sandbox-mode session)
+                         "read-only")))))))
+
+(ert-deftest codex-ide-set-approval-policy-ignores-minibuffer-quit ()
+  (let ((applied nil))
+    (cl-letf (((symbol-function 'codex-ide-config-read-value)
+               (lambda (&rest _)
+                 (signal 'quit nil)))
+              ((symbol-function 'codex-ide-config-apply-interactively)
+               (lambda (&rest _)
+                 (setq applied t))))
+      (should-not (call-interactively #'codex-ide--set-approval-policy)))
+    (should-not applied)))
+
+(ert-deftest codex-ide-set-model-ignores-minibuffer-quit ()
+  (let ((applied nil))
+    (cl-letf (((symbol-function 'codex-ide-config-read-value)
+               (lambda (&rest _)
+                 (signal 'quit nil)))
+              ((symbol-function 'codex-ide-config-apply-interactively)
+               (lambda (&rest _)
+                 (setq applied t))))
+      (should-not (call-interactively #'codex-ide--set-model)))
+    (should-not applied)))
 
 (ert-deftest codex-ide-debug-menu-exposes-show-debug-info ()
   (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-debug-menu "i")) :command)

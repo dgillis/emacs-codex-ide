@@ -201,6 +201,7 @@ thread-list limit."
            (if codex-ide-logging-enabled "enabled" "disabled")))
 
 (require 'codex-ide-core)
+(require 'codex-ide-config)
 (require 'codex-ide-errors)
 (require 'codex-ide-window)
 (require 'codex-ide-log)

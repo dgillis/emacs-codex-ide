@@ -433,7 +433,7 @@ protocol requests such as thread listing."
             session
             "thread/resume"
             (with-current-buffer (codex-ide-session-buffer session)
-              (codex-ide--thread-resume-params thread-id)))))
+              (codex-ide--thread-resume-params thread-id session)))))
       (codex-ide--remember-reasoning-effort session result)
       (codex-ide--remember-model-name session result))
     (setf (codex-ide-session-thread-id session) thread-id)
@@ -516,7 +516,7 @@ protocol requests such as thread listing."
                               session
                               "thread/start"
                               (with-current-buffer (codex-ide-session-buffer session)
-                                (codex-ide--thread-start-params)))))
+                                (codex-ide--thread-start-params session)))))
                  (codex-ide--remember-reasoning-effort session result)
                  (codex-ide--remember-model-name session result)
                  (setf (codex-ide-session-thread-id session)
@@ -764,7 +764,7 @@ protocol requests such as thread listing."
                          new-session
                          "thread/start"
                          (with-current-buffer buffer
-                           (codex-ide--thread-start-params)))))
+                           (codex-ide--thread-start-params new-session)))))
             (codex-ide--remember-reasoning-effort new-session result)
             (setf (codex-ide-session-thread-id new-session)
                   (codex-ide--extract-thread-id result))
