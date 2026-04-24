@@ -119,12 +119,6 @@
       (codex-ide--set-model "gpt-5.4"))
     (should (equal codex-ide-model "gpt-5.4"))))
 
-(ert-deftest codex-ide-with-transient-minibuffer-quit-returns-nil-on-quit ()
-  (should-not
-   (codex-ide--with-transient-minibuffer-quit
-    (lambda ()
-      (signal 'quit nil)))))
-
 (ert-deftest codex-ide-set-sandbox-mode-can-target-current-session ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (codex-ide-sandbox-mode "workspace-write"))
@@ -145,7 +139,7 @@
           (should (equal (codex-ide-config-effective-value 'sandbox-mode session)
                          "read-only")))))))
 
-(ert-deftest codex-ide-set-approval-policy-ignores-minibuffer-quit ()
+(ert-deftest codex-ide-set-approval-policy-signals-quit-when-called-directly ()
   (let ((applied nil))
     (cl-letf (((symbol-function 'codex-ide-config-read-value)
                (lambda (&rest _)
@@ -153,10 +147,16 @@
               ((symbol-function 'codex-ide-config-apply-interactively)
                (lambda (&rest _)
                  (setq applied t))))
-      (should-not (call-interactively #'codex-ide--set-approval-policy)))
+      (should
+       (eq (condition-case nil
+               (progn
+                 (call-interactively #'codex-ide--set-approval-policy)
+                 :no-quit)
+             (quit :quit))
+           :quit)))
     (should-not applied)))
 
-(ert-deftest codex-ide-set-model-ignores-minibuffer-quit ()
+(ert-deftest codex-ide-set-model-signals-quit-when-called-directly ()
   (let ((applied nil))
     (cl-letf (((symbol-function 'codex-ide-config-read-value)
                (lambda (&rest _)
@@ -164,7 +164,13 @@
               ((symbol-function 'codex-ide-config-apply-interactively)
                (lambda (&rest _)
                  (setq applied t))))
-      (should-not (call-interactively #'codex-ide--set-model)))
+      (should
+       (eq (condition-case nil
+               (progn
+                 (call-interactively #'codex-ide--set-model)
+                 :no-quit)
+             (quit :quit))
+           :quit)))
     (should-not applied)))
 
 (ert-deftest codex-ide-debug-menu-exposes-show-debug-info ()
