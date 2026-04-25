@@ -77,7 +77,7 @@
 (transient-define-suffix codex-ide--set-cli-path (&optional path)
   "Set the Codex CLI path."
   :description "Set CLI path"
-  :transient t
+  :transient nil
   (interactive)
   (let ((path (or path
                   (read-file-name "Codex CLI path: " nil codex-ide-cli-path t))))
@@ -87,7 +87,7 @@
 (transient-define-suffix codex-ide--set-cli-extra-flags (&optional flags)
   "Set additional Codex CLI flags."
   :description "Set extra flags"
-  :transient t
+  :transient nil
   (interactive)
   (let ((flags (or flags
                    (read-string "Additional CLI flags: " codex-ide-cli-extra-flags))))
@@ -97,7 +97,7 @@
 (transient-define-suffix codex-ide--set-approval-policy (&optional value)
   "Set `codex-ide-approval-policy'."
   :description "Set approval policy"
-  :transient t
+  :transient nil
   (interactive)
   (codex-ide-config-apply-interactively
    'approval-policy
@@ -107,7 +107,7 @@
 (transient-define-suffix codex-ide--set-sandbox-mode (&optional value)
   "Set `codex-ide-sandbox-mode'."
   :description "Set sandbox mode"
-  :transient t
+  :transient nil
   (interactive)
   (codex-ide-config-apply-interactively
    'sandbox-mode
@@ -117,7 +117,7 @@
 (transient-define-suffix codex-ide--set-personality (&optional value)
   "Set `codex-ide-personality'."
   :description "Set personality"
-  :transient t
+  :transient nil
   (interactive)
   (codex-ide-config-apply-interactively
    'personality
@@ -127,7 +127,7 @@
 (transient-define-suffix codex-ide--set-model (&optional model)
   "Set the Codex model."
   :description "Set model"
-  :transient t
+  :transient nil
   (interactive)
   (let ((model (or model
                    (codex-ide-config-read-value 'model))))
@@ -138,7 +138,7 @@
 (transient-define-suffix codex-ide--set-reasoning-effort (&optional value)
   "Set `codex-ide-reasoning-effort'."
   :description "Set reasoning effort"
-  :transient t
+  :transient nil
   (interactive)
   (let ((value
          (or value
@@ -156,7 +156,7 @@
 (transient-define-suffix codex-ide--set-running-submit-action (&optional action)
   "Set `codex-ide-running-submit-action'."
   :description "Set running submit action"
-  :transient t
+  :transient nil
   (interactive)
   (setq codex-ide-running-submit-action
         (or action
@@ -180,7 +180,7 @@
 (transient-define-suffix codex-ide--set-new-session-split (&optional split)
   "Set `codex-ide-new-session-split'."
   :description "Set new session split"
-  :transient t
+  :transient nil
   (interactive)
   (setq codex-ide-new-session-split
         (or split
@@ -197,6 +197,7 @@
 
 (transient-define-suffix codex-ide--toggle-emacs-tool-bridge ()
   "Toggle `codex-ide-want-mcp-bridge'."
+  :transient nil
   (interactive)
   (if (eq codex-ide-want-mcp-bridge t)
       (progn
@@ -209,6 +210,7 @@
 
 (transient-define-suffix codex-ide--toggle-emacs-bridge-approval ()
   "Toggle `codex-ide-emacs-bridge-require-approval'."
+  :transient nil
   (interactive)
   (setq codex-ide-emacs-bridge-require-approval
         (not codex-ide-emacs-bridge-require-approval))
@@ -289,16 +291,16 @@
                              (if codex-ide-emacs-bridge-require-approval
                                  "ON"
                                "OFF"))))
-    ("u" "Set running submit action" codex-ide--set-running-submit-action
-     :description (lambda ()
-                     (format "Running submit action (%s)"
-                             (codex-ide--running-submit-action-label))))
-    ("w" "Set new session split" codex-ide--set-new-session-split
-     :description (lambda ()
-                     (format "New session split (%s)"
-                             (codex-ide--new-session-split-label))))]
+	    ("u" "Set running submit action" codex-ide--set-running-submit-action
+	     :description (lambda ()
+	                     (format "Running submit action (%s)"
+	                             (codex-ide--running-submit-action-label))))
+	    ("w" "Set new session split" codex-ide--set-new-session-split
+	     :description (lambda ()
+	                     (format "New session split (%s)"
+	                             (codex-ide--new-session-split-label))))]
    ["Save"
-    ("S" "Save configuration" codex-ide--save-config)]])
+    ("S" "Save configuration" codex-ide--save-config :transient nil)]])
 
 ;;;###autoload
 (transient-define-prefix codex-ide-debug-menu ()

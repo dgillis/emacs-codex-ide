@@ -2323,23 +2323,97 @@ non-nil, render query detail lines even when only a single query is present."
          (format "* Plan: %s\n" delta)
          'font-lock-doc-face)))))
 
+(defun codex-ide--reasoning-summary-entry (state summary-index)
+  "Return reasoning summary entry from STATE for SUMMARY-INDEX."
+  (alist-get summary-index (plist-get state :reasoning-summaries) nil nil #'equal))
+
+(defun codex-ide--put-reasoning-summary-entry (state summary-index entry)
+  "Store reasoning summary ENTRY in STATE for SUMMARY-INDEX."
+  (let* ((summaries (copy-tree (plist-get state :reasoning-summaries)))
+         (existing (assoc summary-index summaries)))
+    (if existing
+        (setcdr existing entry)
+      (push (cons summary-index entry) summaries))
+    (plist-put state :reasoning-summaries summaries)))
+
+(defun codex-ide--render-reasoning-summary-entry
+    (buffer text start-marker end-marker)
+  "Render reasoning summary TEXT in BUFFER between START-MARKER and END-MARKER."
+  (with-current-buffer buffer
+    (let ((active-boundary (codex-ide--active-input-boundary-marker buffer))
+          (restore-point (codex-ide--input-point-marker
+                          (codex-ide--session-for-buffer buffer)))
+          (moving (= (point) (point-max)))
+          (start (marker-position start-marker)))
+      (codex-ide--maybe-save-transcript-position start
+        (codex-ide--without-undo-recording
+          (let ((inhibit-read-only t))
+            (delete-region start (marker-position end-marker))
+            (goto-char start)
+            (insert (propertize (format "* Reasoning: %s\n" text)
+                                'face 'shadow
+                                'font-lock-face 'shadow
+                                'rear-nonsticky t
+                                'front-sticky t))
+            (add-text-properties start (point)
+                                 (codex-ide--current-agent-text-properties))
+            (codex-ide--freeze-region start (point))
+            (set-marker end-marker (point))
+            (when (and active-boundary
+                       (= (marker-position active-boundary) start))
+              (set-marker active-boundary (point)))
+            (if restore-point
+                (codex-ide--restore-input-point-marker restore-point)
+              (when moving
+                (goto-char (point-max))))))))))
+
 (defun codex-ide--render-reasoning-delta (&optional session params)
   "Render a reasoning summary delta PARAMS for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
-  (let ((delta (or (alist-get 'delta params)
-                   (alist-get 'text params)
-                   ""))
-        (buffer (codex-ide-session-buffer session)))
+  (let* ((delta (or (alist-get 'delta params)
+                    (alist-get 'text params)
+                    ""))
+         (item-id (alist-get 'itemId params))
+         (summary-index (or (alist-get 'summaryIndex params) 0))
+         (buffer (codex-ide-session-buffer session)))
     (let ((codex-ide--current-agent-item-type "reasoning"))
       (unless (string-empty-p delta)
         (unless (codex-ide-session-output-prefix-inserted session)
           (codex-ide--begin-turn-display session))
         (codex-ide--clear-pending-output-indicator session)
-        (codex-ide--ensure-output-spacing buffer)
-        (codex-ide--append-agent-text
-         buffer
-         (format "* Reasoning: %s\n" delta)
-         'shadow)))))
+        (if (not item-id)
+            (progn
+              (codex-ide--ensure-output-spacing buffer)
+              (codex-ide--append-agent-text
+               buffer
+               (format "* Reasoning: %s\n" delta)
+               'shadow))
+          (let* ((state (copy-tree (or (codex-ide--item-state session item-id) '())))
+                 (entry (copy-tree
+                         (or (codex-ide--reasoning-summary-entry state summary-index)
+                             '())))
+                 (start-marker (plist-get entry :start-marker))
+                 (end-marker (plist-get entry :end-marker))
+                 (text (concat (or (plist-get entry :text) "") delta)))
+            (unless (and (markerp start-marker)
+                         (markerp end-marker)
+                         (eq (marker-buffer start-marker) buffer)
+                         (eq (marker-buffer end-marker) buffer))
+              (codex-ide--ensure-output-spacing buffer)
+              (with-current-buffer buffer
+                (let ((inhibit-read-only t))
+                  (goto-char (codex-ide--transcript-insertion-position buffer))
+                  (setq start-marker (copy-marker (point)))
+                  (setq end-marker (copy-marker (point) t)))))
+            (codex-ide--render-reasoning-summary-entry
+             buffer text start-marker end-marker)
+            (setq entry (plist-put entry :text text))
+            (setq entry (plist-put entry :start-marker start-marker))
+            (setq entry (plist-put entry :end-marker end-marker))
+            (codex-ide--put-item-state
+             session
+             item-id
+             (codex-ide--put-reasoning-summary-entry state summary-index entry))))))))
 
 (defun codex-ide--render-item-completion (&optional session item)
   "Render any completion-only details for ITEM in SESSION."

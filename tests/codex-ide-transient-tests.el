@@ -53,7 +53,7 @@
     (should (equal descriptions '("Agent" "Codex-IDE" "Save")))
     (should (equal keys '("c" "x" "e" "A" "u" "w")))))
 
-(ert-deftest codex-ide-config-menu-prompting-suffixes-stay-active ()
+(ert-deftest codex-ide-config-menu-setting-suffixes-exit-after-applying ()
   (dolist (command '(codex-ide--set-cli-path
                      codex-ide--set-model
                      codex-ide--set-reasoning-effort
@@ -62,11 +62,17 @@
                      codex-ide--set-approval-policy
                      codex-ide--set-personality
                      codex-ide--set-sandbox-mode
-                     codex-ide--set-new-session-split))
+                     codex-ide--set-new-session-split
+                     codex-ide--toggle-emacs-tool-bridge
+                     codex-ide--toggle-emacs-bridge-approval))
     (let ((obj (transient-suffix-object command)))
       (should obj)
       (should (slot-boundp obj 'transient))
-      (should (eq (oref obj transient) t)))))
+      (should-not (oref obj transient)))))
+
+(ert-deftest codex-ide-config-menu-save-suffix-exits-after-applying ()
+  (should-not (plist-get (nth 2 (transient-get-suffix 'codex-ide-config-menu "S"))
+                         :transient)))
 
 (ert-deftest codex-ide-menu-session-suffixes-use-current-commands ()
   (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "s")) :command)

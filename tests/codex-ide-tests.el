@@ -2005,6 +2005,29 @@
       (codex-ide--ensure-agent-message-prefix session "msg-1")
       (should-not (string-match-p "Reasoning\\.\\.\\." (buffer-string))))))
 
+(ert-deftest codex-ide-reasoning-summary-deltas-accumulate-into-one-block ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (dolist (delta '("since" " reading" " should" " be" " allowed"))
+        (codex-ide--handle-notification
+         session
+         `((method . "item/reasoning/summaryTextDelta")
+           (params . ((itemId . "reason-1")
+                      (summaryIndex . 1)
+                      (delta . ,delta))))))
+      (let ((buffer-text (buffer-string)))
+        (should (equal (how-many "^\\* Reasoning: " (point-min) (point-max)) 1))
+        (should (string-match-p
+                 (regexp-quote "* Reasoning: since reading should be allowed\n")
+                 buffer-text))))))
+
 (ert-deftest codex-ide-pending-output-indicator-starts-on-new-line ()
   (with-temp-buffer
     (codex-ide-session-mode)
