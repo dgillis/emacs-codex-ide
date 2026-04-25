@@ -197,10 +197,24 @@
     (should (equal (codex-ide-config-read-value 'model) "manual-model"))))
 
 (ert-deftest codex-ide-config-applies-to-live-session-p-flags-turn-scoped-settings ()
+  (should-not (codex-ide-config-applies-to-live-session-p 'approval-policy))
+  (should-not (codex-ide-config-applies-to-live-session-p 'sandbox-mode))
   (should (codex-ide-config-applies-to-live-session-p 'reasoning-effort))
   (should-not (codex-ide-config-applies-to-live-session-p 'personality)))
 
 (ert-deftest codex-ide-config-format-apply-message-warns-for-live-session-restart ()
+  (should
+   (equal
+    (codex-ide-config-format-apply-message 'approval-policy "never" 'this-session 1)
+    (concat
+     "Codex Approval Policy set to never for this session."
+     " This will take effect when the live session is restarted or resumed.")))
+  (should
+   (equal
+    (codex-ide-config-format-apply-message 'sandbox-mode "read-only" 'all-sessions 2)
+    (concat
+     "Codex Sandbox Mode set to read-only for 2 live sessions and future sessions."
+     " Changes for live sessions will take effect when each session is restarted or resumed.")))
   (should
    (equal
     (codex-ide-config-format-apply-message 'personality "friendly" 'this-session 1)

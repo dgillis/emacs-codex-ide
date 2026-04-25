@@ -52,14 +52,14 @@
      :prompt "Approval policy"
      :choices ("untrusted" "on-failure" "on-request" "never")
      :global-var codex-ide-approval-policy
-     :applies-to-live-session t
+     :applies-to-live-session nil
      :protocol-key approvalPolicy)
     (sandbox-mode
      :label "sandbox mode"
      :prompt "Sandbox mode"
      :choices ("read-only" "workspace-write" "danger-full-access")
      :global-var codex-ide-sandbox-mode
-     :applies-to-live-session t
+     :applies-to-live-session nil
      :protocol-key sandbox)
     (personality
      :label "personality"
