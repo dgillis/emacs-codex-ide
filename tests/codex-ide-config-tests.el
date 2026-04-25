@@ -196,6 +196,28 @@
                "manual-model")))
     (should (equal (codex-ide-config-read-value 'model) "manual-model"))))
 
+(ert-deftest codex-ide-config-applies-to-live-session-p-flags-turn-scoped-settings ()
+  (should (codex-ide-config-applies-to-live-session-p 'reasoning-effort))
+  (should-not (codex-ide-config-applies-to-live-session-p 'personality)))
+
+(ert-deftest codex-ide-config-format-apply-message-warns-for-live-session-restart ()
+  (should
+   (equal
+    (codex-ide-config-format-apply-message 'personality "friendly" 'this-session 1)
+    (concat
+     "Codex Personality set to friendly for this session."
+     " This will take effect when the live session is restarted or resumed.")))
+  (should
+   (equal
+    (codex-ide-config-format-apply-message 'personality "friendly" 'all-sessions 2)
+    (concat
+     "Codex Personality set to friendly for 2 live sessions and future sessions."
+     " Changes for live sessions will take effect when each session is restarted or resumed.")))
+  (should
+   (equal
+    (codex-ide-config-format-apply-message 'reasoning-effort "high" 'this-session 1)
+    "Codex Reasoning Effort set to high for this session.")))
+
 (ert-deftest codex-ide-thread-start-params-use-session-aware-config ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (codex-ide-model "gpt-5.4")

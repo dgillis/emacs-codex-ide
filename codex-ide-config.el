@@ -52,18 +52,21 @@
      :prompt "Approval policy"
      :choices ("untrusted" "on-failure" "on-request" "never")
      :global-var codex-ide-approval-policy
+     :applies-to-live-session t
      :protocol-key approvalPolicy)
     (sandbox-mode
      :label "sandbox mode"
      :prompt "Sandbox mode"
      :choices ("read-only" "workspace-write" "danger-full-access")
      :global-var codex-ide-sandbox-mode
+     :applies-to-live-session t
      :protocol-key sandbox)
     (personality
      :label "personality"
      :prompt "Personality"
      :choices ("none" "friendly" "pragmatic")
      :global-var codex-ide-personality
+     :applies-to-live-session nil
      :protocol-key personality)
     (model
      :label "model"
@@ -73,6 +76,7 @@
      :allow-empty t
      :custom-prompt "Custom model: "
      :global-var codex-ide-model
+     :applies-to-live-session t
      :protocol-key model)
     (reasoning-effort
      :label "reasoning effort"
@@ -80,6 +84,7 @@
      :choices ("none" "minimal" "low" "medium" "high" "xhigh")
      :allow-empty t
      :global-var codex-ide-reasoning-effort
+     :applies-to-live-session t
      :protocol-key effort))
   "Descriptor table for session-aware Codex IDE settings.")
 
@@ -119,6 +124,10 @@
 (defun codex-ide-config--global-var (key)
   "Return the default variable symbol for config KEY."
   (plist-get (codex-ide-config--descriptor key) :global-var))
+
+(defun codex-ide-config-applies-to-live-session-p (key)
+  "Return non-nil when config KEY affects future turns in a live session."
+  (plist-get (codex-ide-config--descriptor key) :applies-to-live-session))
 
 (defun codex-ide-config--protocol-key (key)
   "Return the protocol payload symbol for config KEY."
@@ -334,6 +343,14 @@ SESSION defaults to the session associated with the current buffer."
   "Return a user-facing message for KEY VALUE applied with SCOPE to COUNT sessions."
   (let* ((label (capitalize (codex-ide-config--label key)))
          (verb (if value "set to" "cleared for"))
+         (live-session-note
+          (unless (codex-ide-config-applies-to-live-session-p key)
+            (pcase scope
+              ('this-session
+               " This will take effect when the live session is restarted or resumed.")
+              ('all-sessions
+               (when (> count 0)
+                 " Changes for live sessions will take effect when each session is restarted or resumed.")))))
          (scope-text
           (pcase scope
             ('this-session "this session")
@@ -343,14 +360,16 @@ SESSION defaults to the session associated with the current buffer."
                      (if (= count 1) "" "s")))
             ('future-sessions "future sessions")
             (_ "the selected scope"))))
-    (format "Codex %s %s %s"
-            label
-            verb
-            (if value
-                (format "%s for %s"
-                        (codex-ide-config-format-value value)
-                        scope-text)
-              scope-text))))
+    (concat
+     (format "Codex %s %s %s."
+             label
+             verb
+             (if value
+                 (format "%s for %s"
+                         (codex-ide-config-format-value value)
+                         scope-text)
+               scope-text))
+     live-session-note)))
 
 (defun codex-ide-config-format-value-prompt (key base-prompt &optional session)
   "Return BASE-PROMPT annotated with effective and default values for KEY.
