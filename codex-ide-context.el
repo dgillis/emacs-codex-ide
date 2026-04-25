@@ -35,6 +35,77 @@
 (defconst codex-ide--session-context-close-tag "[/Emacs session context]")
 (defconst codex-ide--prompt-context-open-tag "[Emacs prompt context]")
 (defconst codex-ide--prompt-context-close-tag "[/Emacs prompt context]")
+(defconst codex-ide--selection-text-limit 400
+  "Maximum number of selection characters to include in context payloads.")
+
+(defconst codex-ide--selection-summary-text-limit 12
+  "Maximum selection text length to render directly in context summaries.")
+
+(cl-defun codex-ide--make-buffer-context (&optional buffer &key working-dir)
+  "Build Codex context for BUFFER or the current buffer.
+When WORKING-DIR is nil, infer the project directory from BUFFER."
+  (when-let ((buffer (or buffer (current-buffer))))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when-let ((working-dir (codex-ide--normalize-directory
+                                 (or working-dir
+                                     (codex-ide--get-working-directory)))))
+          (let ((file-path (buffer-file-name)))
+            `((file . ,(and file-path (expand-file-name file-path)))
+              (buffer-name . ,(buffer-name))
+              (point . ,(point))
+              (line . ,(line-number-at-pos))
+              (column . ,(current-column))
+              (project-dir . ,working-dir))))))))
+
+(defun codex-ide--buffer-context-ambient-project-p (context &optional working-dir)
+  "Return non-nil when CONTEXT should be tracked as ambient project context.
+When WORKING-DIR is non-nil, require CONTEXT to belong to that project."
+  (let* ((project-dir (codex-ide--normalize-directory
+                       (or working-dir
+                           (alist-get 'project-dir context))))
+         (file (alist-get 'file context)))
+    (and project-dir
+         file
+         (file-in-directory-p file (file-name-as-directory project-dir))
+         (string= (alist-get 'project-dir context) project-dir))))
+
+(defun codex-ide--buffer-selection-context (&optional buffer)
+  "Return BUFFER's active region bounds as an alist, or nil.
+The return value contains 1-based line numbers and 0-based columns."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (use-region-p)
+        (let ((start (region-beginning))
+              (end (region-end)))
+          (append
+           `((start . ,start)
+             (end . ,end)
+             (start-line . ,(line-number-at-pos start))
+             (start-column . ,(save-excursion
+                                (goto-char start)
+                                (current-column)))
+             (end-line . ,(line-number-at-pos end))
+             (end-column . ,(save-excursion
+                              (goto-char end)
+                              (current-column))))
+           (when (<= (- end start) codex-ide--selection-text-limit)
+             `((text . ,(buffer-substring-no-properties start end))))))))))
+
+(defun codex-ide--buffer-context-display-file (context)
+  "Return the display label for CONTEXT."
+  (let* ((file (alist-get 'file context))
+         (buffer-name (alist-get 'buffer-name context))
+         (project-dir (alist-get 'project-dir context))
+         (project-dir-path (and project-dir (file-name-as-directory project-dir))))
+    (cond
+     ((not file)
+      (format "[buffer] %s" buffer-name))
+     ((and project-dir-path
+           (file-in-directory-p file project-dir-path))
+      (file-relative-name file project-dir-path))
+     (t
+      (abbreviate-file-name file)))))
 
 (defun codex-ide--format-session-context ()
   "Format the one-time session baseline prompt block."
@@ -55,20 +126,22 @@
     (format (concat "%s\n"
                     "Last file/buffer focused in Emacs: %s\n"
                     "Buffer: %s\n"
-                    "Cursor: line %s, column %s\n"
+                    "Cursor: point %s, line %s, column %s\n"
                     "%s"
                     "%s\n")
             codex-ide--prompt-context-open-tag
-            (alist-get 'display-file context)
+            (codex-ide--buffer-context-display-file context)
             (alist-get 'buffer-name context)
+            (alist-get 'point context)
             (alist-get 'line context)
             (alist-get 'column context)
             (if selection
-                (format "Selected region: line %s, column %s to line %s, column %s\n"
-                        (alist-get 'start-line selection)
-                        (alist-get 'start-column selection)
-                        (alist-get 'end-line selection)
-                        (alist-get 'end-column selection))
+                (format (concat "Selected region start: %s\n"
+                                "Selected region end: %s\n"
+                                "Selected region text: %s\n")
+                        (alist-get 'start selection)
+                        (alist-get 'end selection)
+                        (or (alist-get 'text selection) ""))
               "")
             codex-ide--prompt-context-close-tag)))
 
@@ -78,18 +151,31 @@
     (string-join
      (delq nil
            (list
-            (format "Context: file=%S" (alist-get 'display-file context))
-            (format "buffer=%S" (alist-get 'buffer-name context))
-            (format "line=%s" (alist-get 'line context))
-            (format "column=%s" (alist-get 'column context))
+            (format "Context: %s %s:%s"
+                    (alist-get 'buffer-name context)
+                    (alist-get 'line context)
+                    (alist-get 'column context))
             (when selection
-              (format "selection=%S"
-                      (format "%s:%s-%s:%s"
-                              (alist-get 'start-line selection)
-                              (alist-get 'start-column selection)
-                              (alist-get 'end-line selection)
-                              (alist-get 'end-column selection))))))
+              (let ((text (alist-get 'text selection)))
+                (format "selection=%s"
+                        (if (and text
+                                 (< (length text) codex-ide--selection-summary-text-limit))
+                            (replace-regexp-in-string
+                             "\n" "\\\\n"
+                             (prin1-to-string text)
+                             t t)
+                          (format "%s:%s-%s:%s"
+                                  (alist-get 'start-line selection)
+                                  (alist-get 'start-column selection)
+                                  (alist-get 'end-line selection)
+                                  (alist-get 'end-column selection))))))))
      " ")))
+
+(defun codex-ide--context-with-selected-region (context &optional buffer)
+  "Return CONTEXT augmented with BUFFER's active region, when present."
+  (if-let ((selection (codex-ide--buffer-selection-context buffer)))
+      (append context `((selection . ,selection)))
+    context))
 
 (defun codex-ide--push-prompt-history (session prompt)
   "Record PROMPT in SESSION history."
@@ -111,9 +197,9 @@
     (when-let* ((context-buffer (or codex-ide--prompt-origin-buffer
                                     (codex-ide--get-active-buffer-object)))
                 (context (or (and codex-ide--prompt-origin-buffer
-                                  (codex-ide--make-explicit-buffer-context
+                                  (codex-ide--make-buffer-context
                                    codex-ide--prompt-origin-buffer
-                                   working-dir))
+                                   :working-dir working-dir))
                              (codex-ide--get-active-buffer-context))))
       (let* ((context-with-selection
               (codex-ide--context-with-selected-region

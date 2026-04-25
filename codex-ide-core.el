@@ -16,6 +16,10 @@
 (require 'seq)
 (require 'subr-x)
 
+(declare-function codex-ide--buffer-context-ambient-project-p "codex-ide-context" (context &optional working-dir))
+(declare-function codex-ide--context-with-selected-region "codex-ide-context" (context &optional buffer))
+(declare-function codex-ide--buffer-selection-context "codex-ide-context" (&optional buffer))
+(declare-function codex-ide--make-buffer-context "codex-ide-context" (&optional buffer &key working-dir))
 (declare-function codex-ide--update-header-line "codex-ide-transcript" (&optional session))
 (declare-function codex-ide-log-message "codex-ide-log" (session format-string &rest args))
 
@@ -544,53 +548,6 @@ current buffer's project directory."
   (setf (codex-ide-session-prompt-history-index session) nil
         (codex-ide-session-prompt-history-draft session) nil))
 
-(defun codex-ide--make-buffer-context (&optional buffer)
-  "Build Codex context for BUFFER or the current buffer.
-Returns nil for buffers that should not be tracked."
-  (when-let ((buffer (or buffer (current-buffer))))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (let ((file-path (buffer-file-name)))
-          (when file-path
-            (let* ((working-dir (codex-ide--normalize-directory
-                                 (codex-ide--get-working-directory)))
-                   (expanded-file (expand-file-name file-path))
-                   (working-dir-path (file-name-as-directory working-dir)))
-              (when (file-in-directory-p expanded-file working-dir-path)
-                (let ((line (line-number-at-pos))
-                      (column (current-column)))
-                  `((file . ,expanded-file)
-                    (display-file . ,(file-relative-name expanded-file working-dir-path))
-                    (buffer-name . ,(buffer-name))
-                    (line . ,line)
-                    (column . ,column)
-                    (project-dir . ,working-dir)))))))))))
-
-(defun codex-ide--make-explicit-buffer-context (buffer working-dir)
-  "Build Codex context for BUFFER using WORKING-DIR, even for non-file buffers.
-This is used for explicit prompt submissions where the invoking buffer should
-be treated as authoritative context for the next turn."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (let* ((working-dir (codex-ide--normalize-directory working-dir))
-             (working-dir-path (file-name-as-directory working-dir))
-             (file-path (buffer-file-name))
-             (expanded-file (and file-path (expand-file-name file-path)))
-             (display-file
-              (cond
-               ((not expanded-file)
-                (format "[buffer] %s" (buffer-name)))
-               ((file-in-directory-p expanded-file working-dir-path)
-                (file-relative-name expanded-file working-dir-path))
-               (t
-                (abbreviate-file-name expanded-file)))))
-        `((file . ,expanded-file)
-          (display-file . ,display-file)
-          (buffer-name . ,(buffer-name))
-          (line . ,(line-number-at-pos))
-          (column . ,(current-column))
-          (project-dir . ,working-dir))))))
-
 (defun codex-ide--safe-current-buffer ()
   "Return the current buffer, or nil during buffer teardown.
 Global hooks can run while the selected buffer is being killed, in which case
@@ -608,6 +565,7 @@ This cache is maintained even when no Codex session is currently active."
   (when-let* ((buffer (or (car (seq-filter #'bufferp args))
                           (codex-ide--safe-current-buffer)))
               (context (codex-ide--make-buffer-context buffer))
+              ((codex-ide--buffer-context-ambient-project-p context))
               (working-dir (alist-get 'project-dir context)))
     (puthash working-dir context codex-ide--active-buffer-contexts)
     (puthash working-dir buffer codex-ide--active-buffer-objects)
@@ -629,10 +587,11 @@ When BUFFER is nil, use the current buffer."
     (unless (or (minibufferp target)
                 (codex-ide--session-buffer-p target))
       (when-let ((context (codex-ide--make-buffer-context target)))
-        (let ((working-dir (alist-get 'project-dir context)))
-          (puthash working-dir context codex-ide--active-buffer-contexts)
-          (puthash working-dir target codex-ide--active-buffer-objects)
-          (codex-ide--refresh-project-header-lines working-dir))))))
+        (when (codex-ide--buffer-context-ambient-project-p context)
+          (let ((working-dir (alist-get 'project-dir context)))
+            (puthash working-dir context codex-ide--active-buffer-contexts)
+            (puthash working-dir target codex-ide--active-buffer-objects)
+            (codex-ide--refresh-project-header-lines working-dir)))))))
 
 (defun codex-ide--infer-recent-file-context ()
   "Infer the most recently used real file buffer context for the current project."
@@ -642,9 +601,8 @@ When BUFFER is nil, use the current buffer."
        (unless (or (minibufferp buffer)
                    (codex-ide--session-buffer-p buffer))
          (let ((context (codex-ide--make-buffer-context buffer)))
-           (when (and context
-                      (string= (alist-get 'project-dir context)
-                               working-dir))
+           (when (codex-ide--buffer-context-ambient-project-p
+                  context working-dir)
              context))))
      (buffer-list))))
 
@@ -656,9 +614,8 @@ When BUFFER is nil, use the current buffer."
        (unless (or (minibufferp buffer)
                    (codex-ide--session-buffer-p buffer))
          (let ((context (codex-ide--make-buffer-context buffer)))
-           (when (and context
-                      (string= (alist-get 'project-dir context)
-                               working-dir))
+           (when (codex-ide--buffer-context-ambient-project-p
+                  context working-dir)
              buffer))))
      (buffer-list))))
 
@@ -680,29 +637,6 @@ When BUFFER is nil, use the current buffer."
         (when-let ((context (codex-ide--infer-recent-file-context)))
           (puthash working-dir context codex-ide--active-buffer-contexts)
           context))))
-
-(defun codex-ide--buffer-selection-context (&optional buffer)
-  "Return BUFFER's active region bounds as an alist, or nil.
-The return value contains 1-based line numbers and 0-based columns."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (when (use-region-p)
-        (let ((start (region-beginning))
-              (end (region-end)))
-          `((start-line . ,(line-number-at-pos start))
-            (start-column . ,(save-excursion
-                               (goto-char start)
-                               (current-column)))
-            (end-line . ,(line-number-at-pos end))
-            (end-column . ,(save-excursion
-                             (goto-char end)
-                             (current-column)))))))))
-
-(defun codex-ide--context-with-selected-region (context &optional buffer)
-  "Return CONTEXT augmented with BUFFER's active region, when present."
-  (if-let ((selection (codex-ide--buffer-selection-context buffer)))
-      (append context `((selection . ,selection)))
-    context))
 
 (provide 'codex-ide-core)
 
