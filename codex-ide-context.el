@@ -35,6 +35,8 @@
 (defconst codex-ide--session-context-close-tag "[/Emacs session context]")
 (defconst codex-ide--prompt-context-open-tag "[Emacs prompt context]")
 (defconst codex-ide--prompt-context-close-tag "[/Emacs prompt context]")
+(defconst codex-ide--discarded-buffer-context-message
+  "Codex buffer context is being discarded since the buffer does not exist.")
 (defconst codex-ide--selection-text-limit 400
   "Maximum number of selection characters to include in context payloads.")
 
@@ -171,11 +173,46 @@ The return value contains 1-based line numbers and 0-based columns."
                                   (alist-get 'end-column selection))))))))
      " ")))
 
+(defun codex-ide--format-discarded-buffer-context ()
+  "Return a prompt-context block for a discarded stale buffer context."
+  (format "%s\n%s\n%s\n"
+          codex-ide--prompt-context-open-tag
+          codex-ide--discarded-buffer-context-message
+          codex-ide--prompt-context-close-tag))
+
 (defun codex-ide--context-with-selected-region (context &optional buffer)
   "Return CONTEXT augmented with BUFFER's active region, when present."
   (if-let ((selection (codex-ide--buffer-selection-context buffer)))
       (append context `((selection . ,selection)))
     context))
+
+(defun codex-ide--context-buffer-resolution (&optional working-dir)
+  "Resolve the live buffer to use for prompt context in WORKING-DIR.
+Return an alist containing either `(buffer . BUFFER)' or `(discarded . t)'."
+  (let ((working-dir (codex-ide--normalize-directory
+                      (or working-dir
+                          (codex-ide--get-working-directory)))))
+    (cond
+     ((buffer-live-p codex-ide--prompt-origin-buffer)
+      `((buffer . ,codex-ide--prompt-origin-buffer)))
+     (codex-ide--prompt-origin-buffer
+      `((discarded . t)))
+     (t
+      (let ((tracked-buffer (and working-dir
+                                 (gethash working-dir
+                                          codex-ide--active-buffer-objects))))
+        (cond
+         ((buffer-live-p tracked-buffer)
+          `((buffer . ,tracked-buffer)))
+         ((when-let ((inferred (codex-ide--infer-recent-file-buffer)))
+            (puthash working-dir inferred codex-ide--active-buffer-objects)
+            `((buffer . ,inferred))))
+         ((and working-dir
+               (gethash working-dir codex-ide--active-buffer-contexts))
+          (remhash working-dir codex-ide--active-buffer-contexts)
+          (remhash working-dir codex-ide--active-buffer-objects)
+          `((discarded . t)))
+         (t nil)))))))
 
 (defun codex-ide--push-prompt-history (session prompt)
   "Record PROMPT in SESSION history."
@@ -193,24 +230,29 @@ The return value contains 1-based line numbers and 0-based columns."
 
 (defun codex-ide--context-payload-for-prompt ()
   "Return context payload metadata for the current prompt, or nil."
-  (let ((working-dir (codex-ide--get-working-directory)))
-    (when-let* ((context-buffer (or codex-ide--prompt-origin-buffer
-                                    (codex-ide--get-active-buffer-object)))
-                (context (or (and codex-ide--prompt-origin-buffer
-                                  (codex-ide--make-buffer-context
-                                   codex-ide--prompt-origin-buffer
-                                   :working-dir working-dir))
-                             (codex-ide--get-active-buffer-context))))
-      (let* ((context-with-selection
-              (codex-ide--context-with-selected-region
-               context
-               context-buffer))
-             (formatted-context
-              (codex-ide--format-buffer-context context-with-selection))
-             (context-summary
-              (codex-ide--format-buffer-context-summary context-with-selection)))
-        `((formatted . ,formatted-context)
-          (summary . ,context-summary))))))
+  (let* ((working-dir (codex-ide--get-working-directory))
+         (resolution (codex-ide--context-buffer-resolution working-dir))
+         (context-buffer (alist-get 'buffer resolution)))
+    (cond
+     (context-buffer
+      (when-let ((context (codex-ide--make-buffer-context
+                           context-buffer
+                           :working-dir working-dir)))
+        (unless codex-ide--prompt-origin-buffer
+          (puthash working-dir context codex-ide--active-buffer-contexts))
+        (let* ((context-with-selection
+                (codex-ide--context-with-selected-region
+                 context
+                 context-buffer))
+               (formatted-context
+                (codex-ide--format-buffer-context context-with-selection))
+               (context-summary
+                (codex-ide--format-buffer-context-summary context-with-selection)))
+          `((formatted . ,formatted-context)
+            (summary . ,context-summary)))))
+     ((alist-get 'discarded resolution)
+      `((formatted . ,(codex-ide--format-discarded-buffer-context))
+        (summary . ,codex-ide--discarded-buffer-context-message))))))
 
 (defun codex-ide--compose-turn-payload (prompt)
   "Build prompt payload metadata for PROMPT in the current working directory."

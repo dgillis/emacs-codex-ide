@@ -281,6 +281,52 @@
                            summary)))))
           (kill-buffer origin-buffer))))))
 
+(ert-deftest codex-ide-context-payload-discards-killed-origin-buffer-context ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (let ((origin-buffer (generate-new-buffer " *codex-ide-dead-origin*")))
+        (kill-buffer origin-buffer)
+        (let ((codex-ide--prompt-origin-buffer origin-buffer))
+          (let* ((payload (codex-ide--context-payload-for-prompt))
+                 (formatted (alist-get 'formatted payload))
+                 (summary (alist-get 'summary payload)))
+            (should (string-match-p "\\[Emacs prompt context\\]" formatted))
+            (should (string-match-p
+                     (regexp-quote
+                      "Codex buffer context is being discarded since the buffer does not exist.")
+                     formatted))
+            (should (equal summary
+                           "Codex buffer context is being discarded since the buffer does not exist."))))))))
+
+(ert-deftest codex-ide-context-payload-discards-stale-active-buffer-context ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (let* ((working-dir (codex-ide--normalize-directory project-dir))
+             (buffer (generate-new-buffer " *codex-ide-stale-context*")))
+        (unwind-protect
+            (progn
+              (with-current-buffer buffer
+                (setq-local default-directory (file-name-as-directory project-dir))
+                (insert "ephemeral")
+                (puthash working-dir
+                         (codex-ide--make-buffer-context buffer :working-dir project-dir)
+                         codex-ide--active-buffer-contexts)
+                (puthash working-dir buffer codex-ide--active-buffer-objects))
+              (kill-buffer buffer)
+              (let* ((payload (codex-ide--context-payload-for-prompt))
+                     (formatted (alist-get 'formatted payload))
+                     (summary (alist-get 'summary payload)))
+                (should (string-match-p
+                         (regexp-quote
+                          "Codex buffer context is being discarded since the buffer does not exist.")
+                         formatted))
+                (should (equal summary
+                               "Codex buffer context is being discarded since the buffer does not exist."))
+                (should-not (gethash working-dir codex-ide--active-buffer-contexts))
+                (should-not (gethash working-dir codex-ide--active-buffer-objects))))
+          (when (buffer-live-p buffer)
+            (kill-buffer buffer)))))))
+
 (ert-deftest codex-ide-make-buffer-context-uses-explicit-working-dir-for-non-file-buffers ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
