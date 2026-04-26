@@ -197,36 +197,28 @@
     (should (equal (codex-ide-config-read-value 'model) "manual-model"))))
 
 (ert-deftest codex-ide-config-applies-to-live-session-p-flags-turn-scoped-settings ()
-  (should-not (codex-ide-config-applies-to-live-session-p 'approval-policy))
-  (should-not (codex-ide-config-applies-to-live-session-p 'sandbox-mode))
+  (should (codex-ide-config-applies-to-live-session-p 'approval-policy))
+  (should (codex-ide-config-applies-to-live-session-p 'sandbox-mode))
   (should (codex-ide-config-applies-to-live-session-p 'reasoning-effort))
-  (should-not (codex-ide-config-applies-to-live-session-p 'personality)))
+  (should (codex-ide-config-applies-to-live-session-p 'personality)))
 
-(ert-deftest codex-ide-config-format-apply-message-warns-for-live-session-restart ()
+(ert-deftest codex-ide-config-format-apply-message-omits-live-session-restart-note-for-turn-scoped-settings ()
   (should
    (equal
     (codex-ide-config-format-apply-message 'approval-policy "never" 'this-session 1)
-    (concat
-     "Codex Approval Policy set to never for this session."
-     " This will take effect when the live session is restarted or resumed.")))
+    "Codex Approval Policy set to never for this session."))
   (should
    (equal
     (codex-ide-config-format-apply-message 'sandbox-mode "read-only" 'all-sessions 2)
-    (concat
-     "Codex Sandbox Mode set to read-only for 2 live sessions and future sessions."
-     " Changes for live sessions will take effect when each session is restarted or resumed.")))
+    "Codex Sandbox Mode set to read-only for 2 live sessions and future sessions."))
   (should
    (equal
     (codex-ide-config-format-apply-message 'personality "friendly" 'this-session 1)
-    (concat
-     "Codex Personality set to friendly for this session."
-     " This will take effect when the live session is restarted or resumed.")))
+    "Codex Personality set to friendly for this session."))
   (should
    (equal
     (codex-ide-config-format-apply-message 'personality "friendly" 'all-sessions 2)
-    (concat
-     "Codex Personality set to friendly for 2 live sessions and future sessions."
-     " Changes for live sessions will take effect when each session is restarted or resumed.")))
+    "Codex Personality set to friendly for 2 live sessions and future sessions."))
   (should
    (equal
     (codex-ide-config-format-apply-message 'reasoning-effort "high" 'this-session 1)
@@ -255,14 +247,20 @@
 (ert-deftest codex-ide-submit-uses-session-aware-turn-config ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (codex-ide-model "gpt-5.4")
+        (codex-ide-approval-policy "on-request")
+        (codex-ide-sandbox-mode "workspace-write")
         (codex-ide-reasoning-effort "medium")
+        (codex-ide-personality "pragmatic")
         (submitted nil))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
         (let ((session (codex-ide--create-process-session)))
           (setf (codex-ide-session-thread-id session) "thread-config-1")
+          (codex-ide-config-set-session-value 'approval-policy "never" session)
+          (codex-ide-config-set-session-value 'sandbox-mode "read-only" session)
           (codex-ide-config-set-session-value 'model "gpt-5.4-mini" session)
           (codex-ide-config-set-session-value 'reasoning-effort "high" session)
+          (codex-ide-config-set-session-value 'personality "friendly" session)
           (with-current-buffer (codex-ide-session-buffer session)
             (codex-ide--insert-input-prompt session "Explain this")
             (cl-letf (((symbol-function 'codex-ide--request-sync)
@@ -270,8 +268,12 @@
                          (setq submitted params)
                          nil)))
               (codex-ide--submit-prompt)))
+          (should (equal (alist-get 'approvalPolicy submitted) "never"))
+          (should (equal (alist-get 'sandboxPolicy submitted)
+                         '((type . "readOnly"))))
           (should (equal (alist-get 'model submitted) "gpt-5.4-mini"))
-          (should (equal (alist-get 'effort submitted) "high")))))))
+          (should (equal (alist-get 'effort submitted) "high"))
+          (should (equal (alist-get 'personality submitted) "friendly")))))))
 
 (provide 'codex-ide-config-tests)
 

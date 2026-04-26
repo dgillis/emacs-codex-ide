@@ -52,21 +52,21 @@
      :prompt "Approval policy"
      :choices ("untrusted" "on-failure" "on-request" "never")
      :global-var codex-ide-approval-policy
-     :applies-to-live-session nil
+     :applies-to-live-session t
      :protocol-key approvalPolicy)
     (sandbox-mode
      :label "sandbox mode"
      :prompt "Sandbox mode"
      :choices ("read-only" "workspace-write" "danger-full-access")
      :global-var codex-ide-sandbox-mode
-     :applies-to-live-session nil
+     :applies-to-live-session t
      :protocol-key sandbox)
     (personality
      :label "personality"
      :prompt "Personality"
      :choices ("none" "friendly" "pragmatic")
      :global-var codex-ide-personality
-     :applies-to-live-session nil
+     :applies-to-live-session t
      :protocol-key personality)
     (model
      :label "model"

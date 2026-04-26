@@ -62,7 +62,7 @@
 
 ;;;###autoload
 (defcustom codex-ide-model nil
-  "Optional model name for new or resumed threads."
+  "Optional model name for new or resumed threads and later turns."
   :type '(choice (const :tag "Default" nil)
                  (string :tag "Model"))
   :group 'codex-ide)
@@ -129,7 +129,7 @@
 
 ;;;###autoload
 (defcustom codex-ide-approval-policy "on-request"
-  "Approval policy for new or resumed Codex threads."
+  "Approval policy for new or resumed Codex threads and later turns."
   :type '(choice (const "untrusted")
                  (const "on-failure")
                  (const "on-request")
@@ -138,7 +138,7 @@
 
 ;;;###autoload
 (defcustom codex-ide-sandbox-mode "workspace-write"
-  "Sandbox mode for new or resumed Codex threads."
+  "Sandbox mode for new or resumed Codex threads and later turns."
   :type '(choice (const "read-only")
                  (const "workspace-write")
                  (const "danger-full-access"))
@@ -146,7 +146,7 @@
 
 ;;;###autoload
 (defcustom codex-ide-personality "pragmatic"
-  "Personality for new or resumed Codex threads."
+  "Personality for new or resumed Codex threads and later turns."
   :type '(choice (const "none")
                  (const "friendly")
                  (const "pragmatic"))

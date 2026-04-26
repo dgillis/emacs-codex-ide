@@ -154,6 +154,22 @@
             ,@(when-let ((model (codex-ide-config-effective-value 'model session)))
                 `((model . ,model)))))))
 
+(defun codex-ide--turn-start-sandbox-policy (&optional session)
+  "Build a `sandboxPolicy` object for `turn/start` from SESSION settings."
+  (when-let ((mode (codex-ide-config-effective-value 'sandbox-mode session)))
+    (pcase mode
+      ("read-only"
+       '((type . "readOnly")))
+      ("workspace-write"
+       `((type . "workspaceWrite")
+         (writableRoots . [,(codex-ide--get-working-directory)])))
+      ;; `danger-full-access` remains the local UI spelling while app-server
+      ;; expects the camelCase sandbox policy type on turn-scoped overrides.
+      ("danger-full-access"
+       '((type . "dangerFullAccess")))
+      (_
+       (error "Unsupported Codex sandbox mode: %S" mode)))))
+
 (defun codex-ide--thread-resume-params (thread-id &optional session)
   "Build `thread/resume` params for THREAD-ID in SESSION's current working directory."
   (let ((working-dir (codex-ide--get-working-directory)))

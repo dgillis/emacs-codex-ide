@@ -3712,12 +3712,21 @@ Signal an error when THREAD-READ lacks replayable transcript items."
    session
    "turn/start"
    `((threadId . ,thread-id)
+     ,@(when-let ((approval-policy
+                   (codex-ide-config-effective-value 'approval-policy session)))
+         `((approvalPolicy . ,approval-policy)))
+     ,@(when-let ((sandbox-policy
+                   (codex-ide--turn-start-sandbox-policy session)))
+         `((sandboxPolicy . ,sandbox-policy)))
      ,@(when-let ((model (codex-ide-config-effective-value 'model session)))
          `((model . ,model)))
      ,@(when-let ((effort (codex-ide-config-effective-value
                            'reasoning-effort
                            session)))
          `((effort . ,effort)))
+     ,@(when-let ((personality
+                   (codex-ide-config-effective-value 'personality session)))
+         `((personality . ,personality)))
      (input . ,(alist-get 'input payload)))))
 
 (defun codex-ide--after-turn-start-submitted (session payload)

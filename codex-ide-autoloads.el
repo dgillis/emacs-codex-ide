@@ -22,7 +22,7 @@ Function used to derive the Codex session buffer name.")
 Additional flags appended to the `codex app-server` command.")
 (custom-autoload 'codex-ide-cli-extra-flags "codex-ide" t)
 (defvar codex-ide-model nil "\
-Optional model name for new or resumed threads.")
+Optional model name for new or resumed threads and later turns.")
 (custom-autoload 'codex-ide-model "codex-ide" t)
 (defvar codex-ide-reasoning-effort nil "\
 Optional reasoning effort for new Codex turns.")
@@ -43,13 +43,13 @@ Window split direction to use when showing newly created Codex sessions.")
 Whether Codex session buffers should enable `visual-line-mode' by default.")
 (custom-autoload 'codex-ide-session-enable-visual-line-mode "codex-ide" t)
 (defvar codex-ide-approval-policy "on-request" "\
-Approval policy for new or resumed Codex threads.")
+Approval policy for new or resumed Codex threads and later turns.")
 (custom-autoload 'codex-ide-approval-policy "codex-ide" t)
 (defvar codex-ide-sandbox-mode "workspace-write" "\
-Sandbox mode for new or resumed Codex threads.")
+Sandbox mode for new or resumed Codex threads and later turns.")
 (custom-autoload 'codex-ide-sandbox-mode "codex-ide" t)
 (defvar codex-ide-personality "pragmatic" "\
-Personality for new or resumed Codex threads.")
+Personality for new or resumed Codex threads and later turns.")
 (custom-autoload 'codex-ide-personality "codex-ide" t)
 (defvar codex-ide-request-timeout 10 "\
 Seconds to wait for synchronous app-server responses.")
