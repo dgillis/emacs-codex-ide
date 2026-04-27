@@ -122,6 +122,22 @@
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-diff-inline-fold-threshold 12
+  "Maximum inline diff lines to show before folding by default.
+When nil, inline diffs never start folded."
+  :type '(choice (const :tag "Never fold" nil)
+                 (integer :tag "Maximum visible lines"))
+  :group 'codex-ide)
+
+;;;###autoload
+(defcustom codex-ide-diff-auto-display-policy 'never
+  "When Codex should auto-display file-change diffs in a standalone diff buffer."
+  :type '(choice (const :tag "Never" never)
+                 (const :tag "Approval only" approval-only)
+                 (const :tag "Always" always))
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-session-enable-visual-line-mode t
   "Whether Codex session buffers should enable `visual-line-mode' by default."
   :type 'boolean
@@ -207,6 +223,7 @@ thread-list limit."
 (require 'codex-ide-log)
 (require 'codex-ide-context)
 (require 'codex-ide-nav)
+(require 'codex-ide-diff)
 (require 'codex-ide-renderer)
 (require 'codex-ide-session-mode)
 (require 'codex-ide-protocol)

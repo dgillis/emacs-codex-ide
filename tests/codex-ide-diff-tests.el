@@ -1,0 +1,79 @@
+;;; codex-ide-diff-tests.el --- Tests for codex-ide diffs -*- lexical-binding: t; -*-
+
+;;; Commentary:
+
+;; Diff viewer coverage.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'ert)
+(require 'subr-x)
+(require 'codex-ide)
+
+(ert-deftest codex-ide-diff-open-buffer-displays-diff-mode-buffer ()
+  (let ((display-call nil)
+        diff-buffer)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex-ide-display-buffer)
+                   (lambda (buffer &optional action)
+                     (setq display-call (list buffer action))
+                     nil)))
+          (setq diff-buffer
+                (codex-ide-diff-open-buffer
+                 (string-join
+                  '("diff --git a/foo.txt b/foo.txt"
+                    "--- a/foo.txt"
+                    "+++ b/foo.txt"
+                    "@@ -1 +1 @@"
+                    "-old"
+                    "+new")
+                  "\n")))
+          (should (buffer-live-p diff-buffer))
+          (should (equal (car display-call) diff-buffer))
+          (with-current-buffer diff-buffer
+            (should (derived-mode-p 'diff-mode))
+            (should buffer-read-only)
+            (should (string-match-p
+                     (regexp-quote "diff --git a/foo.txt b/foo.txt")
+                     (buffer-string)))
+            (should (string-suffix-p "\n" (buffer-string)))
+            (should (string-match-p "foo\\.txt" (buffer-name)))))
+      (when (buffer-live-p diff-buffer)
+        (kill-buffer diff-buffer)))))
+
+(ert-deftest codex-ide-diff-open-buffer-reuses-explicit-buffer-name ()
+  (let ((display-calls nil)
+        (buffer-name "*codex[my-project]*-diff")
+        first-buffer
+        second-buffer)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex-ide-display-buffer)
+                   (lambda (buffer &optional action)
+                     (push (list buffer action) display-calls)
+                     nil)))
+          (setq first-buffer
+                (codex-ide-diff-open-buffer
+                 "diff --git a/foo.txt b/foo.txt\n@@ -1 +1 @@\n-old\n+new"
+                 buffer-name))
+          (setq second-buffer
+                (codex-ide-diff-open-buffer
+                 "diff --git a/bar.txt b/bar.txt\n@@ -1 +1 @@\n-older\n+newer"
+                 buffer-name))
+          (should (eq first-buffer second-buffer))
+          (should (equal (buffer-name first-buffer) buffer-name))
+          (with-current-buffer first-buffer
+            (should (string-match-p "bar\\.txt" (buffer-string)))
+            (should-not (string-match-p "foo\\.txt" (buffer-string)))))
+      (when (get-buffer buffer-name)
+        (kill-buffer buffer-name)))))
+
+(ert-deftest codex-ide-diff-buffer-name-for-session-appends-suffix ()
+  (should (equal (codex-ide-diff-buffer-name-for-session "*codex[my-project]*")
+                 "*codex[my-project]*-diff")))
+
+(ert-deftest codex-ide-diff-open-buffer-errors-without-diff-text ()
+  (should-error (codex-ide-diff-open-buffer nil) :type 'user-error)
+  (should-error (codex-ide-diff-open-buffer "  \n") :type 'user-error))
+
+;;; codex-ide-diff-tests.el ends here

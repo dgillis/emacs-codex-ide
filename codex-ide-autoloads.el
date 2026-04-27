@@ -39,6 +39,13 @@ Prefix used when creating Codex session buffer names.")
 (defvar codex-ide-new-session-split nil "\
 Window split direction to use when showing newly created Codex sessions.")
 (custom-autoload 'codex-ide-new-session-split "codex-ide" t)
+(defvar codex-ide-diff-inline-fold-threshold 12 "\
+Maximum inline diff lines to show before folding by default.
+When nil, inline diffs never start folded.")
+(custom-autoload 'codex-ide-diff-inline-fold-threshold "codex-ide" t)
+(defvar codex-ide-diff-auto-display-policy 'never "\
+When Codex should auto-display file-change diffs in a standalone diff buffer.")
+(custom-autoload 'codex-ide-diff-auto-display-policy "codex-ide" t)
 (defvar codex-ide-session-enable-visual-line-mode t "\
 Whether Codex session buffers should enable `visual-line-mode' by default.")
 (custom-autoload 'codex-ide-session-enable-visual-line-mode "codex-ide" t)
@@ -448,6 +455,11 @@ Major mode for Codex app-server session buffers.
 ;;; Generated autoloads from codex-ide-config.el
 
 (register-definition-prefixes "codex-ide-config" '("codex-ide-config-"))
+
+
+;;; Generated autoloads from codex-ide-diff.el
+
+(register-definition-prefixes "codex-ide-diff" '("codex-ide-diff-"))
 
 
 ;;; End of scraped data

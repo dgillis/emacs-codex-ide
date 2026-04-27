@@ -537,10 +537,11 @@ HELP-ECHO, KEYMAP, and PROPERTIES are applied to the created button."
                             (funcall face-fn line))))
       (insert "\n"))))
 
-(cl-defun codex-ide-renderer-insert-command-output-header
+(cl-defun codex-ide-renderer-insert-item-result-header
     (overlay prefix-text toggle-fn open-fn
-             &key keymap overlay-property)
-  "Insert a command-output header for OVERLAY using PREFIX-TEXT.
+             &key keymap overlay-property toggle-help-echo
+             toggle-button-help open-button-label open-button-help)
+  "Insert an expandable item-result header for OVERLAY using PREFIX-TEXT.
 TOGGLE-FN and OPEN-FN receive OVERLAY when invoked."
   (let ((prefix-start (point)))
     (insert prefix-text)
@@ -549,25 +550,39 @@ TOGGLE-FN and OPEN-FN receive OVERLAY when invoked."
      (point)
      (list 'face 'codex-ide-item-detail-face
            'keymap keymap
-           'help-echo "RET toggles command output"
+           'help-echo (or toggle-help-echo "RET toggles this section")
            overlay-property overlay))
     (codex-ide-renderer-insert-action-button
      (if (overlay-get overlay :folded) "expand" "fold")
      (lambda ()
        (funcall toggle-fn overlay))
-     "Toggle command output"
+     (or toggle-button-help "Toggle this section")
      keymap
      (list overlay-property overlay))
-    (when (overlay-get overlay :truncated)
+    (when open-button-label
       (insert " ")
       (codex-ide-renderer-insert-action-button
-       "full output"
+       open-button-label
        (lambda ()
          (funcall open-fn overlay))
-       "Open full command output in a separate buffer"
+       open-button-help
        keymap
        (list overlay-property overlay)))
     (insert "\n")))
+
+(cl-defun codex-ide-renderer-insert-command-output-header
+    (overlay prefix-text toggle-fn open-fn
+             &key keymap overlay-property)
+  "Insert a command-output header for OVERLAY using PREFIX-TEXT.
+TOGGLE-FN and OPEN-FN receive OVERLAY when invoked."
+  (codex-ide-renderer-insert-item-result-header
+   overlay prefix-text toggle-fn open-fn
+   :keymap keymap
+   :overlay-property overlay-property
+   :toggle-help-echo "RET toggles command output"
+   :toggle-button-help "Toggle command output"
+   :open-button-label (and (overlay-get overlay :truncated) "full output")
+   :open-button-help "Open full command output in a separate buffer"))
 
 (cl-defun codex-ide-renderer-insert-read-only
     (text &optional face properties)
@@ -720,19 +735,33 @@ Return (START . END) for the inserted text."
     (set-marker end-marker (cdr range))
     range))
 
+(cl-defun codex-ide-renderer-insert-item-result-body
+    (display-text &key keymap overlay overlay-property properties face help-echo)
+  "Insert DISPLAY-TEXT as a frozen expandable body.
+KEYMAP is applied to the body text.  OVERLAY is attached via OVERLAY-PROPERTY.
+PROPERTIES is appended to the inserted region.  Return (START . END)."
+  (codex-ide-renderer-insert-read-only
+   display-text
+   (or face 'codex-ide-command-output-face)
+   (append
+    (list 'keymap keymap
+          'help-echo (or help-echo "RET toggles this section")
+          overlay-property overlay)
+    properties)))
+
 (cl-defun codex-ide-renderer-insert-command-output-body
     (display-text &key keymap overlay overlay-property properties)
   "Insert DISPLAY-TEXT as a frozen command-output body.
 KEYMAP is applied to the body text.  OVERLAY is attached via OVERLAY-PROPERTY.
 PROPERTIES is appended to the inserted region.  Return (START . END)."
-  (codex-ide-renderer-insert-read-only
+  (codex-ide-renderer-insert-item-result-body
    display-text
-   'codex-ide-command-output-face
-   (append
-    (list 'keymap keymap
-          'help-echo "RET toggles command output"
-          overlay-property overlay)
-    properties)))
+   :keymap keymap
+   :overlay overlay
+   :overlay-property overlay-property
+   :properties properties
+   :face 'codex-ide-command-output-face
+   :help-echo "RET toggles command output"))
 
 (defun codex-ide-renderer-insert-shell-command-detail (command &optional properties)
   "Insert COMMAND as an indented shell-highlighted detail line.

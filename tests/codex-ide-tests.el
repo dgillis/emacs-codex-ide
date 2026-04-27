@@ -3496,6 +3496,18 @@
       (codex-ide-test-with-fake-processes
         (let* ((session (codex-ide--create-process-session))
                (process (codex-ide-session-process session))
+               (opened-diff nil)
+               (opened-diff-buffer-name nil)
+               (expected-diff
+                (string-join
+                 '("diff -- foo.txt"
+                   "diff --git a/foo.txt b/foo.txt"
+                   "--- a/foo.txt"
+                   "+++ b/foo.txt"
+                   "@@ -1 +1 @@"
+                   "-old"
+                   "+new")
+                 "\n"))
                (diff-text (string-join
                            '("diff --git a/foo.txt b/foo.txt"
                              "--- a/foo.txt"
@@ -3511,6 +3523,11 @@
                        (funcall function)))
                     ((symbol-function 'codex-ide-display-buffer)
                      (lambda (_buffer &optional _action) (selected-window)))
+                    ((symbol-function 'codex-ide-diff-open-buffer)
+                     (lambda (text &optional buffer-name)
+                       (setq opened-diff text)
+                       (setq opened-diff-buffer-name buffer-name)
+                       nil))
                     ((symbol-function 'message)
                      (lambda (&rest _) nil)))
             (codex-ide--handle-notification
@@ -3525,30 +3542,40 @@
              session
              45
              '((itemId . "file-change-1")
-               (reason . "edit foo.txt"))))
-          (with-current-buffer (codex-ide-session-buffer session)
-            (let ((text (buffer-string)))
-              (should (string-match-p "Approve file changes: edit foo\\.txt" text))
-              (should (string-match-p "Proposed changes:\n\n" text))
-              (should (< (string-match-p "Proposed changes:" text)
-                         (string-match-p "\\[accept\\]" text)))
-              (should (string-match-p "diff --git a/foo\\.txt b/foo\\.txt" text))
-              (should (string-match-p "-old" text))
-              (should (string-match-p "+new" text)))
-            (goto-char (point-min))
-            (search-forward "Proposed changes:")
-            (should (eq (get-text-property (match-beginning 0) 'face)
-                        'codex-ide-approval-label-face))
-            (search-forward "-old")
-            (should (eq (get-text-property (match-beginning 0) 'face)
-                        'codex-ide-file-diff-removed-face))
-            (search-forward "+new")
-            (should (eq (get-text-property (match-beginning 0) 'face)
-                        'codex-ide-file-diff-added-face))
-            (goto-char (point-min))
-            (search-forward "[accept]")
-            (backward-char 1)
-            (push-button))
+               (reason . "edit foo.txt")))
+            (with-current-buffer (codex-ide-session-buffer session)
+              (let ((text (buffer-string)))
+                (should (string-match-p "Approve file changes: edit foo\\.txt" text))
+                (should (string-match-p "Proposed changes:\n\n" text))
+                (should (< (string-match-p "Proposed changes:" text)
+                           (string-match-p "diff: foo\\.txt (\\+1/-1, 7 lines) \\[fold\\] \\[open diff\\]" text)))
+                (should (< (string-match-p "\\[open diff\\]" text)
+                           (string-match-p "\\[accept\\]" text)))
+                (should (string-match-p "diff --git a/foo\\.txt b/foo\\.txt" text))
+                (should (string-match-p "-old" text))
+                (should (string-match-p "+new" text)))
+              (goto-char (point-min))
+              (search-forward "Proposed changes:")
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'codex-ide-approval-label-face))
+              (search-forward "-old")
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'codex-ide-file-diff-removed-face))
+              (search-forward "+new")
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'codex-ide-file-diff-added-face))
+              (goto-char (point-min))
+              (search-forward "[open diff]")
+              (backward-char 1)
+              (button-activate (button-at (point)))
+              (should (equal opened-diff expected-diff))
+              (should (equal opened-diff-buffer-name
+                             (codex-ide-diff-buffer-name-for-session
+                              (codex-ide-session-buffer session))))
+              (goto-char (point-min))
+              (search-forward "[accept]")
+              (backward-char 1)
+              (button-activate (button-at (point)))))
           (let* ((payloads
                   (mapcar (lambda (json)
                             (json-parse-string json
@@ -3587,6 +3614,441 @@
                (string-match-p "diff --git a/foo\\.txt b/foo\\.txt"
                                text
                                first-diff-end)))))))))
+
+(ert-deftest codex-ide-diff-config-defaults ()
+  (should (= codex-ide-diff-inline-fold-threshold 12))
+  (should (eq codex-ide-diff-auto-display-policy 'never)))
+
+(ert-deftest codex-ide-file-change-completion-renders-open-diff-button ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (diff-text (string-join
+                           '("diff --git a/foo.txt b/foo.txt"
+                             "--- a/foo.txt"
+                             "+++ b/foo.txt"
+                             "@@ -1 +1 @@"
+                             "-old"
+                             "+new")
+                           "\n")))
+          (setf (codex-ide-session-current-turn-id session) "turn-file-change"
+                (codex-ide-session-status session) "running")
+          (cl-letf (((symbol-function 'message)
+                     (lambda (&rest _) nil)))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/started")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "inProgress")))))))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/completed")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "completed"))))))))
+            (with-current-buffer (codex-ide-session-buffer session)
+              (let ((text (buffer-string)))
+                (should (string-match-p "diff: foo\\.txt (\\+1/-1, 7 lines) \\[fold\\] \\[open diff\\]" text))
+                (should (string-match-p "diff --git a/foo\\.txt b/foo\\.txt" text))
+                (should (string-match-p "\\[open diff\\]" text))
+                (should (< (string-match-p "\\[open diff\\]" text)
+                           (string-match-p "diff --git a/foo\\.txt b/foo\\.txt" text))))))))))
+
+(ert-deftest codex-ide-file-change-completion-does-not-auto-open-diff-by-default ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-diff-auto-display-policy 'approval-only))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (opened-diff nil)
+               (opened-diff-buffer-name nil)
+               (diff-text (string-join
+                           '("diff --git a/foo.txt b/foo.txt"
+                             "--- a/foo.txt"
+                             "+++ b/foo.txt"
+                             "@@ -1 +1 @@"
+                             "-old"
+                             "+new")
+                           "\n")))
+          (setf (codex-ide-session-current-turn-id session) "turn-file-change"
+                (codex-ide-session-status session) "running")
+          (cl-letf (((symbol-function 'codex-ide-diff-open-buffer)
+                     (lambda (text &optional buffer-name)
+                       (setq opened-diff text)
+                       (setq opened-diff-buffer-name buffer-name)
+                       nil))
+                    ((symbol-function 'message)
+                     (lambda (&rest _) nil)))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/started")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "inProgress")))))))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/completed")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "completed"))))))))
+          (should-not opened-diff)
+          (should-not opened-diff-buffer-name))))))
+
+(ert-deftest codex-ide-file-change-completion-auto-opens-diff-when-policy-is-always ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-diff-auto-display-policy 'always))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (opened-diff nil)
+               (opened-diff-buffer-name nil)
+               (expected-diff
+                (string-join
+                 '("diff -- foo.txt"
+                   "diff --git a/foo.txt b/foo.txt"
+                   "--- a/foo.txt"
+                   "+++ b/foo.txt"
+                   "@@ -1 +1 @@"
+                   "-old"
+                   "+new")
+                 "\n"))
+               (diff-text (string-join
+                           '("diff --git a/foo.txt b/foo.txt"
+                             "--- a/foo.txt"
+                             "+++ b/foo.txt"
+                             "@@ -1 +1 @@"
+                             "-old"
+                             "+new")
+                           "\n")))
+          (setf (codex-ide-session-current-turn-id session) "turn-file-change"
+                (codex-ide-session-status session) "running")
+          (cl-letf (((symbol-function 'codex-ide-diff-open-buffer)
+                     (lambda (text &optional buffer-name)
+                       (setq opened-diff text)
+                       (setq opened-diff-buffer-name buffer-name)
+                       nil))
+                    ((symbol-function 'message)
+                     (lambda (&rest _) nil)))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/started")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "inProgress")))))))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/completed")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "completed"))))))))
+          (should (equal opened-diff expected-diff))
+          (should (equal opened-diff-buffer-name
+                         (codex-ide-diff-buffer-name-for-session
+                          (codex-ide-session-buffer session)))))))))
+
+(ert-deftest codex-ide-file-change-approval-auto-opens-diff-by-default ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-diff-auto-display-policy 'approval-only))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (opened-diff nil)
+               (opened-diff-buffer-name nil)
+               (expected-diff
+                (string-join
+                 '("diff -- foo.txt"
+                   "diff --git a/foo.txt b/foo.txt"
+                   "--- a/foo.txt"
+                   "+++ b/foo.txt"
+                   "@@ -1 +1 @@"
+                   "-old"
+                   "+new")
+                 "\n"))
+               (diff-text (string-join
+                           '("diff --git a/foo.txt b/foo.txt"
+                             "--- a/foo.txt"
+                             "+++ b/foo.txt"
+                             "@@ -1 +1 @@"
+                             "-old"
+                             "+new")
+                           "\n")))
+          (setf (codex-ide-session-current-turn-id session) "turn-file-approval"
+                (codex-ide-session-status session) "running")
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function)
+                       (funcall function)))
+                    ((symbol-function 'get-buffer-window)
+                     (lambda (&rest _)
+                       (selected-window)))
+                    ((symbol-function 'codex-ide-display-buffer)
+                     (lambda (_buffer &optional _action) (selected-window)))
+                    ((symbol-function 'codex-ide-diff-open-buffer)
+                     (lambda (text &optional buffer-name)
+                       (setq opened-diff text)
+                       (setq opened-diff-buffer-name buffer-name)
+                       nil))
+                    ((symbol-function 'message)
+                     (lambda (&rest _) nil)))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/started")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "inProgress")))))))
+            (codex-ide--handle-file-change-approval
+             session
+             45
+             '((itemId . "file-change-1")
+               (reason . "edit foo.txt"))))
+          (should (equal opened-diff expected-diff))
+          (should (equal opened-diff-buffer-name
+                         (codex-ide-diff-buffer-name-for-session
+                          (codex-ide-session-buffer session)))))))))
+
+(ert-deftest codex-ide-file-change-approval-auto-open-keeps-buttons-out-of-diff-buffer ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-diff-auto-display-policy 'approval-only))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (diff-buffer-name
+                (codex-ide-diff-buffer-name-for-session
+                 (codex-ide-session-buffer session)))
+               diff-buffer
+               (diff-text (string-join
+                           '("diff --git a/foo.txt b/foo.txt"
+                             "--- a/foo.txt"
+                             "+++ b/foo.txt"
+                             "@@ -1 +1 @@"
+                             "-old"
+                             "+new")
+                           "\n")))
+          (setf (codex-ide-session-current-turn-id session) "turn-file-approval"
+                (codex-ide-session-status session) "running")
+          (unwind-protect
+              (cl-letf (((symbol-function 'run-at-time)
+                         (lambda (_time _repeat function)
+                           (funcall function)))
+                        ((symbol-function 'get-buffer-window)
+                         (lambda (&rest _)
+                           (selected-window)))
+                        ((symbol-function 'codex-ide-display-buffer)
+                         (lambda (buffer &optional _action)
+                           ;; Simulate the auto-open path switching the current
+                           ;; buffer while approval rendering is still active.
+                           (when (equal (buffer-name buffer) diff-buffer-name)
+                             (setq diff-buffer buffer)
+                             (set-buffer buffer))
+                           (selected-window)))
+                        ((symbol-function 'message)
+                         (lambda (&rest _) nil)))
+                (codex-ide--handle-notification
+                 session
+                 `((method . "item/started")
+                   (params . ((item . ((type . "fileChange")
+                                       (id . "file-change-1")
+                                       (changes . (((path . "foo.txt")
+                                                    (diff . ,diff-text))))
+                                       (status . "inProgress")))))))
+                (codex-ide--handle-file-change-approval
+                 session
+                 45
+                 '((itemId . "file-change-1")
+                   (reason . "edit foo.txt")))
+                (should (buffer-live-p diff-buffer))
+                (should (equal (buffer-name diff-buffer) diff-buffer-name))
+                (with-current-buffer (codex-ide-session-buffer session)
+                  (let ((text (buffer-string)))
+                    (should (string-match-p "\\[accept\\]" text))
+                    (should (string-match-p "\\[accept for session\\]" text))
+                    (should (string-match-p "\\[decline\\]" text))
+                    (should (string-match-p "\\[cancel turn\\]" text))))
+                (with-current-buffer diff-buffer
+                  (let ((text (buffer-string)))
+                    (should-not (string-match-p "\\[accept\\]" text))
+                    (should-not (string-match-p "\\[accept for session\\]" text))
+                    (should-not (string-match-p "\\[decline\\]" text))
+                    (should-not (string-match-p "\\[cancel turn\\]" text))
+                    (should (string-match-p "diff --git a/foo\\.txt b/foo\\.txt" text)))))
+            (when (buffer-live-p diff-buffer)
+              (kill-buffer diff-buffer))))))))
+
+(ert-deftest codex-ide-file-change-approval-does-not-auto-open-diff-when-session-stays-hidden ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-diff-auto-display-policy 'approval-only)
+        (codex-ide-buffer-display-when-approval-required nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (opened-diff nil)
+               (opened-diff-buffer-name nil)
+               (diff-text (string-join
+                           '("diff --git a/foo.txt b/foo.txt"
+                             "--- a/foo.txt"
+                             "+++ b/foo.txt"
+                             "@@ -1 +1 @@"
+                             "-old"
+                             "+new")
+                           "\n")))
+          (setf (codex-ide-session-current-turn-id session) "turn-file-approval-hidden"
+                (codex-ide-session-status session) "running")
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function)
+                       (funcall function)))
+                    ((symbol-function 'get-buffer-window)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'codex-ide-display-buffer)
+                     (lambda (&rest _)
+                       (ert-fail "hidden approval buffer should not be displayed")))
+                    ((symbol-function 'codex-ide-diff-open-buffer)
+                     (lambda (text &optional buffer-name)
+                       (setq opened-diff text)
+                       (setq opened-diff-buffer-name buffer-name)
+                       nil))
+                    ((symbol-function 'message)
+                     (lambda (&rest _) nil)))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/started")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "inProgress")))))))
+            (codex-ide--handle-file-change-approval
+             session
+             45
+             '((itemId . "file-change-1")
+               (reason . "edit foo.txt"))))
+          (should-not opened-diff)
+          (should-not opened-diff-buffer-name))))))
+
+(ert-deftest codex-ide-file-change-approval-auto-opens-diff-when-session-is-already-visible ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-diff-auto-display-policy 'approval-only)
+        (codex-ide-buffer-display-when-approval-required nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (opened-diff nil)
+               (opened-diff-buffer-name nil)
+               (expected-diff
+                (string-join
+                 '("diff -- foo.txt"
+                   "diff --git a/foo.txt b/foo.txt"
+                   "--- a/foo.txt"
+                   "+++ b/foo.txt"
+                   "@@ -1 +1 @@"
+                   "-old"
+                   "+new")
+                 "\n"))
+               (diff-text (string-join
+                           '("diff --git a/foo.txt b/foo.txt"
+                             "--- a/foo.txt"
+                             "+++ b/foo.txt"
+                             "@@ -1 +1 @@"
+                             "-old"
+                             "+new")
+                           "\n")))
+          (setf (codex-ide-session-current-turn-id session) "turn-file-approval-visible"
+                (codex-ide-session-status session) "running")
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function)
+                       (funcall function)))
+                    ((symbol-function 'get-buffer-window)
+                     (lambda (&rest _)
+                       (selected-window)))
+                    ((symbol-function 'codex-ide-display-buffer)
+                     (lambda (_buffer &optional _action) (selected-window)))
+                    ((symbol-function 'codex-ide-diff-open-buffer)
+                     (lambda (text &optional buffer-name)
+                       (setq opened-diff text)
+                       (setq opened-diff-buffer-name buffer-name)
+                       nil))
+                    ((symbol-function 'message)
+                     (lambda (&rest _) nil)))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/started")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "inProgress")))))))
+            (codex-ide--handle-file-change-approval
+             session
+             45
+             '((itemId . "file-change-1")
+               (reason . "edit foo.txt"))))
+          (should (equal opened-diff expected-diff))
+          (should (equal opened-diff-buffer-name
+                         (codex-ide-diff-buffer-name-for-session
+                          (codex-ide-session-buffer session)))))))))
+
+(ert-deftest codex-ide-file-change-completion-folds-inline-diff-when-threshold-exceeded ()
+  (let ((project-dir (codex-ide-test--make-temp-project))
+        (codex-ide-diff-inline-fold-threshold 4))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (diff-text (string-join
+                           '("diff --git a/foo.txt b/foo.txt"
+                             "--- a/foo.txt"
+                             "+++ b/foo.txt"
+                             "@@ -1 +1 @@"
+                             "-old"
+                             "+new")
+                           "\n")))
+          (setf (codex-ide-session-current-turn-id session) "turn-file-change"
+                (codex-ide-session-status session) "running")
+          (cl-letf (((symbol-function 'message)
+                     (lambda (&rest _) nil)))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/started")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "inProgress")))))))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/completed")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "completed"))))))))
+          (with-current-buffer (codex-ide-session-buffer session)
+            (goto-char (point-min))
+            (search-forward "diff: foo.txt (+1/-1, 7 lines) [expand] [open diff]")
+            (let ((overlay (get-char-property
+                            (match-beginning 0)
+                            codex-ide-item-result-overlay-property)))
+              (should (overlayp overlay))
+              (should (overlay-get overlay 'invisible))
+              (should-not (string-match-p "diff --git a/foo\\.txt b/foo\\.txt"
+                                          (buffer-string)))
+              (codex-ide-toggle-item-result-at-point (match-beginning 0))
+              (should-not (overlay-get overlay 'invisible))
+              (should (string-match-p "diff --git a/foo\\.txt b/foo\\.txt"
+                                      (buffer-string))))))))))
 
 (ert-deftest codex-ide-permissions-approval-inline-decline-sends-empty-permissions ()
   (let ((project-dir (codex-ide-test--make-temp-project)))

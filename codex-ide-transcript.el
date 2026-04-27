@@ -62,6 +62,8 @@
 (defvar codex-ide-renderer-command-output-fold-on-start)
 (defvar codex-ide-renderer-command-output-max-rendered-lines)
 (defvar codex-ide-renderer-command-output-max-rendered-chars)
+ (defvar codex-ide-diff-inline-fold-threshold)
+ (defvar codex-ide-diff-auto-display-policy)
 (defvar codex-ide-reasoning-effort)
 (defvar codex-ide-resume-summary-turn-limit)
 (defvar codex-ide-running-submit-action)
@@ -71,12 +73,15 @@
 (defvar codex-ide--display-buffer-other-window-pop-up-action)
 (defvar codex-ide-log-stream-deltas)
 (defvar codex-ide--sessions)
-(defvar codex-ide-command-output-map
+(defvar codex-ide-item-result-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET") #'codex-ide-toggle-command-output-at-point)
-    (define-key map (kbd "<return>") #'codex-ide-toggle-command-output-at-point)
+    (define-key map (kbd "RET") #'codex-ide-toggle-item-result-at-point)
+    (define-key map (kbd "<return>") #'codex-ide-toggle-item-result-at-point)
     map)
-  "Keymap used on command output transcript text.")
+  "Keymap used on expandable item-result transcript text.")
+
+(defvar codex-ide-command-output-map codex-ide-item-result-map
+  "Compatibility alias for `codex-ide-item-result-map'.")
 
 (defvar codex-ide--current-transcript-log-marker nil
   "Marker for the log line associated with the transcript text being inserted.")
@@ -1523,6 +1528,11 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
               "")
             (if complete "" ", streaming"))))
 
+(defun codex-ide--item-result-open-function (overlay)
+  "Return the open function for item result OVERLAY."
+  (or (overlay-get overlay :open-function)
+      #'codex-ide--open-item-result-overlay))
+
 (defun codex-ide--item-result-text (overlay)
   "Return the full result text for item result OVERLAY."
   (let* ((session (overlay-get overlay :session))
@@ -1647,7 +1657,7 @@ Return non-nil when an item result block was found."
   (interactive)
   (if-let ((overlay (codex-ide--item-result-overlay-at-point pos)))
       (progn
-        (codex-ide--open-item-result-overlay overlay)
+        (funcall (codex-ide--item-result-open-function overlay) overlay)
         t)
     (user-error "No item result at point")))
 
@@ -1678,16 +1688,34 @@ Return non-nil when a command output block was found."
                   (moving (= (point) (point-max)))
                   (body-empty (= (marker-position body-start)
                                  (marker-position body-end)))
-                  (start (marker-position header-start)))
+                  (start (marker-position header-start))
+                  (header-prefix-function
+                   (or (overlay-get overlay :header-prefix-function)
+                       #'codex-ide--item-result-header-prefix-text))
+                  (open-function (codex-ide--item-result-open-function overlay))
+                  (command-output-p
+                   (equal (overlay-get overlay :item-type) "commandExecution")))
               (goto-char start)
               (delete-region start (marker-position header-end))
-              (codex-ide-renderer-insert-command-output-header
-               overlay
-               (codex-ide--item-result-header-prefix-text overlay)
-               #'codex-ide--toggle-item-result-overlay
-               #'codex-ide--open-item-result-overlay
-               :keymap codex-ide-command-output-map
-               :overlay-property codex-ide-item-result-overlay-property)
+              (if command-output-p
+                  (codex-ide-renderer-insert-command-output-header
+                   overlay
+                   (funcall header-prefix-function overlay)
+                   #'codex-ide--toggle-item-result-overlay
+                   open-function
+                   :keymap codex-ide-item-result-map
+                   :overlay-property codex-ide-item-result-overlay-property)
+                (codex-ide-renderer-insert-item-result-header
+                 overlay
+                 (funcall header-prefix-function overlay)
+                 #'codex-ide--toggle-item-result-overlay
+                 open-function
+                 :keymap codex-ide-item-result-map
+                 :overlay-property codex-ide-item-result-overlay-property
+                 :toggle-help-echo (overlay-get overlay :toggle-help-echo)
+                 :toggle-button-help (overlay-get overlay :toggle-button-help)
+                 :open-button-label (overlay-get overlay :open-button-label)
+                 :open-button-help (overlay-get overlay :open-button-help)))
               (set-marker header-start start)
               (set-marker header-end (point))
               (set-marker body-start (point))
@@ -1727,15 +1755,18 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                     (restore-point (codex-ide--input-point-marker
                                     (codex-ide--session-for-buffer buffer)))
                     (moving (= (point) (point-max)))
+                    (body-insert-function
+                     (or (overlay-get overlay :body-insert-function)
+                         #'codex-ide-renderer-insert-item-result-body))
                     start)
                 (delete-region (marker-position body-start)
                                (marker-position body-end))
                 (goto-char (marker-position body-start))
                 (setq start (point))
                 (unless (overlay-get overlay :folded)
-                  (codex-ide-renderer-insert-command-output-body
+                  (funcall body-insert-function
                    display-text
-                   :keymap codex-ide-command-output-map
+                   :keymap codex-ide-item-result-map
                    :overlay overlay
                    :overlay-property codex-ide-item-result-overlay-property
                    :properties (overlay-get overlay :body-properties))
@@ -1783,11 +1814,16 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                        (advance-active-boundary
                         (and active-boundary
                              (= insertion-position (marker-position active-boundary))))
-                       (initial-folded codex-ide-renderer-command-output-fold-on-start)
+                       (initial-folded
+                        (if (plist-member state :item-result-initial-folded)
+                            (plist-get state :item-result-initial-folded)
+                          codex-ide-renderer-command-output-fold-on-start))
                        header-start
                        header-end
                        body-start
-                       body-end)
+                       body-end
+                       (command-output-p (equal (plist-get state :type)
+                                                "commandExecution")))
                   (codex-ide--maybe-save-transcript-position insertion-position
                     (goto-char insertion-position)
                     (setq header-start (copy-marker (point)))
@@ -1800,6 +1836,24 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                     (overlay-put overlay :item-type (plist-get state :type))
                     (overlay-put overlay :label (or (plist-get state :item-result-label)
                                                     "output"))
+                    (overlay-put overlay :header-prefix-function
+                                 (plist-get state :item-result-header-prefix-function))
+                    (overlay-put overlay :body-insert-function
+                                 (plist-get state :item-result-body-insert-function))
+                    (overlay-put overlay :open-function
+                                 (plist-get state :item-result-open-function))
+                    (overlay-put overlay :open-button-label
+                                 (plist-get state :item-result-open-button-label))
+                    (overlay-put overlay :open-button-help
+                                 (plist-get state :item-result-open-button-help))
+                    (overlay-put overlay :toggle-help-echo
+                                 (plist-get state :item-result-toggle-help-echo))
+                    (overlay-put overlay :toggle-button-help
+                                 (plist-get state :item-result-toggle-button-help))
+                    (overlay-put overlay :buffer-name
+                                 (plist-get state :item-result-buffer-name))
+                    (overlay-put overlay :diff-stats
+                                 (plist-get state :item-result-stats))
                     (overlay-put overlay :header-start header-start)
                     (overlay-put overlay :display-text "")
                     (overlay-put overlay :line-count 0)
@@ -1809,13 +1863,31 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
                     (overlay-put overlay :complete nil)
                     (overlay-put overlay 'invisible (and initial-folded t))
                     (overlay-put overlay :body-properties nil)
-                    (codex-ide-renderer-insert-command-output-header
-                     overlay
-                     (codex-ide--item-result-header-prefix-text overlay)
-                     #'codex-ide--toggle-item-result-overlay
-                     #'codex-ide--open-item-result-overlay
-                     :keymap codex-ide-command-output-map
-                     :overlay-property codex-ide-item-result-overlay-property)
+                    (if command-output-p
+                        (codex-ide-renderer-insert-command-output-header
+                         overlay
+                         (funcall
+                          (or (overlay-get overlay :header-prefix-function)
+                              #'codex-ide--item-result-header-prefix-text)
+                          overlay)
+                         #'codex-ide--toggle-item-result-overlay
+                         (codex-ide--item-result-open-function overlay)
+                         :keymap codex-ide-item-result-map
+                         :overlay-property codex-ide-item-result-overlay-property)
+                      (codex-ide-renderer-insert-item-result-header
+                       overlay
+                       (funcall
+                        (or (overlay-get overlay :header-prefix-function)
+                            #'codex-ide--item-result-header-prefix-text)
+                        overlay)
+                       #'codex-ide--toggle-item-result-overlay
+                       (codex-ide--item-result-open-function overlay)
+                       :keymap codex-ide-item-result-map
+                       :overlay-property codex-ide-item-result-overlay-property
+                       :toggle-help-echo (overlay-get overlay :toggle-help-echo)
+                       :toggle-button-help (overlay-get overlay :toggle-button-help)
+                       :open-button-label (overlay-get overlay :open-button-label)
+                       :open-button-help (overlay-get overlay :open-button-help)))
                     (setq header-end (copy-marker (point)))
                     (setq body-start (copy-marker (point)))
                     (setq body-end (copy-marker (point)))
@@ -2093,21 +2165,156 @@ non-nil, render query detail lines even when only a single query is present."
    ((string-prefix-p "-" line) 'codex-ide-file-diff-removed-face)
    (t 'codex-ide-file-diff-context-face)))
 
-(defun codex-ide--render-file-change-diff-text (buffer text)
-  "Render file-change diff TEXT into BUFFER."
+(defun codex-ide--diff-line-count (text)
+  "Return the raw line count for TEXT."
+  (if (string-empty-p text)
+      0
+    (length (split-string text "\n"))))
+
+(defun codex-ide--file-change-diff-stats (diff-text)
+  "Return a plist summarizing DIFF-TEXT."
+  (let ((added 0)
+        (removed 0)
+        filename)
+    (dolist (line (split-string diff-text "\n"))
+      (cond
+       ((and (not filename)
+             (string-match
+              (rx line-start "diff --git " (? "a/")
+                  (group (+ (not (any " \n")))))
+              line))
+        (setq filename (match-string 1 line)))
+       ((string-match (rx line-start "+++" (+ space) (? "b/")
+                          (group (+ (not (any " \n")))))
+                      line)
+        (setq filename (or filename (match-string 1 line))))
+       ((and (string-prefix-p "+" line)
+             (not (string-prefix-p "+++" line)))
+        (setq added (1+ added)))
+       ((and (string-prefix-p "-" line)
+             (not (string-prefix-p "---" line)))
+        (setq removed (1+ removed)))))
+    (list :filename (or filename "changes")
+          :added added
+          :removed removed
+          :line-count (codex-ide--diff-line-count diff-text))))
+
+(defun codex-ide--file-change-diff-header-prefix-text (overlay)
+  "Return summary header text for file-change diff OVERLAY."
+  (let* ((stats (or (overlay-get overlay :diff-stats) '()))
+         (filename (or (plist-get stats :filename) "changes"))
+         (added (or (plist-get stats :added) 0))
+         (removed (or (plist-get stats :removed) 0))
+         (line-count (or (plist-get stats :line-count) 0))
+         (line-label (if (= line-count 1) "line" "lines")))
+    (format "  └ diff: %s (+%d/-%d, %d %s) "
+            filename added removed line-count line-label)))
+
+(defun codex-ide--file-change-diff-folded-p (diff-text)
+  "Return non-nil when DIFF-TEXT should start folded inline."
+  (and (integerp codex-ide-diff-inline-fold-threshold)
+       (> (codex-ide--diff-line-count diff-text)
+          codex-ide-diff-inline-fold-threshold)))
+
+(defun codex-ide--interactive-request-display-p (session-buffer)
+  "Return non-nil when SESSION-BUFFER should be surfaced for approvals."
+  (or codex-ide-buffer-display-when-approval-required
+      (get-buffer-window session-buffer 0)))
+
+(defun codex-ide--maybe-auto-open-file-change-diff
+    (diff-text session-buffer &optional context)
+  "Auto-open DIFF-TEXT for SESSION-BUFFER when configured for CONTEXT."
+  (when (and (memq codex-ide-diff-auto-display-policy
+                   '(always approval-only))
+             (or (eq codex-ide-diff-auto-display-policy 'always)
+                 (and (eq context 'approval)
+                      (codex-ide--interactive-request-display-p session-buffer)))
+             (stringp diff-text)
+             (not (string-empty-p diff-text)))
+    ;; Opening the standalone diff may select another window and switch the
+    ;; current buffer. Keep approval/transcript rendering anchored where it was.
+    (save-current-buffer
+      (codex-ide-diff-open-buffer
+       diff-text
+       (codex-ide-diff-buffer-name-for-session session-buffer)))))
+
+(cl-defun codex-ide--insert-file-change-diff-body
+    (display-text &key keymap overlay overlay-property properties)
+  "Insert DISPLAY-TEXT as a styled file-change diff body."
+  (let ((start (point)))
+    (dolist (line (split-string display-text "\n"))
+      (codex-ide-renderer-insert-read-only
+       (concat line "\n")
+       (codex-ide--file-change-diff-face line)
+       (append
+        (list 'keymap keymap
+              'help-echo "RET toggles this diff"
+              overlay-property overlay)
+        properties)))
+    (cons start (point))))
+
+(defun codex-ide--open-file-change-diff-overlay (overlay)
+  "Open the dedicated diff buffer for file-change OVERLAY."
+  (codex-ide-diff-open-buffer
+   (codex-ide--item-result-text overlay)
+   (overlay-get overlay :buffer-name)))
+
+(defun codex-ide--render-file-change-diff-text
+    (session item-id text &optional context)
+  "Render file-change diff TEXT for SESSION ITEM-ID.
+CONTEXT is either nil for ordinary transcript rendering or `approval'."
   (when (and (stringp text)
              (not (string-empty-p text)))
     (let ((trimmed (string-trim-right text)))
       (unless (string-empty-p trimmed)
-        (codex-ide--append-agent-text
-         buffer
-         "diff:\n"
-         'codex-ide-item-detail-face)
-        (dolist (line (split-string trimmed "\n"))
-          (codex-ide--append-agent-text
-           buffer
-           (concat line "\n")
-           (codex-ide--file-change-diff-face line)))))))
+        (let* ((buffer (codex-ide-session-buffer session))
+               (state (copy-tree (or (codex-ide--item-state session item-id) '())))
+               (anchor (plist-get state :item-result-anchor-marker))
+               (stats (codex-ide--file-change-diff-stats trimmed)))
+          (setq state (plist-put state :item-result-text trimmed))
+          (setq state (plist-put state :item-result-label "diff"))
+          (setq state (plist-put state :item-result-initial-folded
+                                 (codex-ide--file-change-diff-folded-p trimmed)))
+          (setq state (plist-put state :item-result-header-prefix-function
+                                 #'codex-ide--file-change-diff-header-prefix-text))
+          (setq state (plist-put state :item-result-body-insert-function
+                                 #'codex-ide--insert-file-change-diff-body))
+          (setq state (plist-put state :item-result-open-function
+                                 #'codex-ide--open-file-change-diff-overlay))
+          (setq state (plist-put state :item-result-open-button-label "open diff"))
+          (setq state (plist-put state :item-result-open-button-help
+                                 "Open this Codex diff in a dedicated diff buffer"))
+          (setq state (plist-put state :item-result-toggle-help-echo
+                                 "RET toggles this diff"))
+          (setq state (plist-put state :item-result-toggle-button-help
+                                 "Toggle this diff"))
+          (setq state (plist-put state :item-result-buffer-name
+                                 (codex-ide-diff-buffer-name-for-session buffer)))
+          (setq state (plist-put state :item-result-stats stats))
+          (unless (and (markerp anchor)
+                       (eq (marker-buffer anchor) buffer))
+            (with-current-buffer buffer
+              (let ((inhibit-read-only t))
+                (goto-char (codex-ide--transcript-insertion-position buffer))
+                (setq state
+                      (plist-put state :item-result-anchor-marker
+                                 (copy-marker (point)))))))
+          (codex-ide--put-item-state session item-id state)
+          (when-let ((overlay (codex-ide--ensure-item-result-block session item-id)))
+            (overlay-put overlay :diff-stats stats)
+            (overlay-put overlay :buffer-name
+                         (codex-ide-diff-buffer-name-for-session buffer))
+            (overlay-put overlay :item-result-fallback-text trimmed)
+            (overlay-put overlay :display-text trimmed)
+            (overlay-put overlay :line-count (plist-get stats :line-count))
+            (overlay-put overlay :visible-line-count (plist-get stats :line-count))
+            (overlay-put overlay :truncated nil)
+            (overlay-put overlay :body-properties
+                         (codex-ide--current-agent-text-properties))
+            (overlay-put overlay :complete t)
+            (codex-ide--set-item-result-header overlay)
+            (codex-ide--set-item-result-body overlay trimmed)
+            (codex-ide--maybe-auto-open-file-change-diff trimmed buffer context)))))))
 
 (defun codex-ide--file-change-diff-text (item)
   "Extract a human-readable diff string from file-change ITEM."
@@ -2266,7 +2473,7 @@ non-nil, render query detail lines even when only a single query is present."
                        (codex-ide--display-command-argv
                         (alist-get 'command item))))))
           (setq state (plist-put state :details-rendered t))
-          (when (member item-type '("commandExecution" "mcpToolCall"))
+          (when (member item-type '("commandExecution" "mcpToolCall" "fileChange"))
             ;; Keep delayed item result output anchored directly after the item
             ;; block; later transcript inserts should not move this placeholder
             ;; forward.
@@ -2280,9 +2487,10 @@ non-nil, render query detail lines even when only a single query is present."
           (setq state
                 (plist-put state
                            :item-result-label
-                           (if (equal item-type "mcpToolCall")
-                               "result"
-                             "output")))
+                           (pcase item-type
+                             ("mcpToolCall" "result")
+                             ("fileChange" "diff")
+                             (_ "output"))))
           (when (equal item-type "commandExecution")
             (setq state
                   (plist-put state
@@ -2505,7 +2713,8 @@ non-nil, render query detail lines even when only a single query is present."
                        (and approval-rendered-items
                             (gethash item-id approval-rendered-items)))
              (codex-ide--render-file-change-diff-text
-              buffer
+              session
+              item-id
               (if (and (stringp diff-text)
                        (not (string-empty-p diff-text)))
                   diff-text
@@ -2936,8 +3145,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
   "Notify the user that SESSION requires attention with MESSAGE-TEXT."
   (let ((buffer (codex-ide-session-buffer session)))
     (message message-text (buffer-name buffer))
-    (when (or codex-ide-buffer-display-when-approval-required
-              (get-buffer-window buffer 0))
+    (when (codex-ide--interactive-request-display-p buffer)
       (codex-ide--show-session-buffer session))))
 
 (cl-defun codex-ide--render-interactive-request
@@ -3010,9 +3218,22 @@ Signal an error when THREAD-READ lacks replayable transcript items."
    :render-body
    (lambda ()
      (dolist (detail details)
-       (codex-ide-renderer-insert-approval-detail
-        detail
-        #'codex-ide--file-change-diff-face))
+       (if-let ((diff-text (and (eq (plist-get detail :kind) 'diff)
+                                (plist-get detail :text)))
+                (item-id (alist-get 'itemId params)))
+           (let ((state (copy-tree (or (codex-ide--item-state session item-id) '()))))
+             (codex-ide-renderer-insert-approval-label "Proposed changes:")
+             (codex-ide-renderer-insert-read-only "\n\n")
+             (setq state
+                   (plist-put state :item-result-anchor-marker
+                              (copy-marker (point))))
+             (codex-ide--put-item-state session item-id state)
+             (codex-ide--render-file-change-diff-text
+              session item-id diff-text 'approval)
+             (codex-ide-renderer-insert-read-only "\n"))
+         (codex-ide-renderer-insert-approval-detail detail))
+       (unless (eq (plist-get detail :kind) 'diff)
+         (codex-ide-renderer-insert-read-only "\n")))
      (dolist (choice choices)
        (codex-ide--insert-approval-choice-button
         session id (car choice) (cdr choice))
