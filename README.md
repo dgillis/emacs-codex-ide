@@ -26,22 +26,22 @@ This package provides native integration with `codex app-server` which, unlike t
 
 #### Codex mode inside Emacs
 
-![Emacs state aware](https://github.com/user-attachments/assets/5b77a646-4edd-4b5c-bd98-5e2a186bdb4f)
+![Emacs state aware](https://github.com/dgillis/emacs-codex-ide/blob/1c0bb00a35c8fcb20e8a30e28cdc56d774267049/screenshots/codex-mode-inside-emacs.png)
 _Codex knows what file and region inside Emacs is active._
 
 #### Run multiple Codex sessions
 
-![Multiple codex sessions](https://github.com/user-attachments/assets/5961777a-4f9f-4993-97a6-27a8c2021341)
+![Multiple codex sessions](https://github.com/dgillis/emacs-codex-ide/blob/1c0bb00a35c8fcb20e8a30e28cdc56d774267049/screenshots/run-multiple-codex-sessions.jpg)
 _Run and manage multiple agents at once._
 
 #### Expandable Codex output
 
-![Toggle agent output](https://github.com/user-attachments/assets/d55a31b8-c349-416f-83b2-c4bac87db321)
+![Toggle agent output](https://github.com/dgillis/emacs-codex-ide/blob/1c0bb00a35c8fcb20e8a30e28cdc56d774267049/screenshots/expandable-codex-output.jpg)
 _Expand or collapse detail within Codex output_
 
 #### View and resume prior Codex sessions
 
-![Manage past sessions](https://github.com/user-attachments/assets/7d457793-1d31-4fe4-81a7-e1500eb5c8ef)
+![Manage past sessions](https://github.com/dgillis/emacs-codex-ide/blob/1c0bb00a35c8fcb20e8a30e28cdc56d774267049/screenshots/view-and-resume-prior-sessions.jpg)
 _Mode for viewing and restoring past Codex sessions._
 
 <!--
@@ -95,7 +95,7 @@ After installation, run `M-x codex-ide-menu` or `M-x codex-ide` to start a sessi
 
 Use `M-x codex-ide-menu` as the main entry point. It opens a transient menu for starting a new session, continuing the most recent session, sending a prompt from the minibuffer, switching to existing buffers, opening buffer lists, and adjusting configuration.
 
-![The main menu is the recommended starting point for everyday Codex IDE commands.](screenshots/codex-ide-menu.jpg)
+![The main menu is the recommended starting point for everyday Codex IDE commands.](https://github.com/dgillis/emacs-codex-ide/blob/1c0bb00a35c8fcb20e8a30e28cdc56d774267049/screenshots/codex-ide-menu.png)
 
 ### `codex-ide-session-mode`
 
@@ -113,13 +113,13 @@ Key bindings:
 
 #### Codex session buffer mode
 
-https://github.com/user-attachments/assets/049c5e6f-c35e-4774-8cfa-6e3daee69c3a
+https://github.com/dgillis/emacs-codex-ide/blob/1c0bb00a35c8fcb20e8a30e28cdc56d774267049/screenshots/context-aware-prompt.mov
 
-https://github.com/user-attachments/assets/0f9d57fc-0f5d-4e14-b1ec-2a887e194c02
+https://github.com/dgillis/emacs-codex-ide/blob/1c0bb00a35c8fcb20e8a30e28cdc56d774267049/screenshots/buffer-code-links.mov
 
 #### Manage sessions mode
 
-https://github.com/user-attachments/assets/8bee227e-dbd3-4f0f-a646-7de68aeefab4
+https://github.com/dgillis/emacs-codex-ide/blob/1c0bb00a35c8fcb20e8a30e28cdc56d774267049/screenshots/manage-sessions-mode.mov
 
 ## License
 
