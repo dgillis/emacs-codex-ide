@@ -113,13 +113,13 @@ Key bindings:
 
 #### Codex session buffer mode
 
-https://github.com/dgillis/emacs-codex-ide/blob/1c0bb00a35c8fcb20e8a30e28cdc56d774267049/screenshots/context-aware-prompt.mov
+https://github.com/user-attachments/assets/e3e7be19-8774-4ae9-bef4-354ee45f9355
 
-https://github.com/dgillis/emacs-codex-ide/blob/1c0bb00a35c8fcb20e8a30e28cdc56d774267049/screenshots/buffer-code-links.mov
+https://github.com/user-attachments/assets/ee21a396-9045-4b65-b0b4-0c17509a2841
 
 #### Manage sessions mode
 
-https://github.com/dgillis/emacs-codex-ide/blob/1c0bb00a35c8fcb20e8a30e28cdc56d774267049/screenshots/manage-sessions-mode.mov
+https://github.com/user-attachments/assets/e82093b9-a93d-408a-93f0-417c1cd69cc7
 
 ## License
 
