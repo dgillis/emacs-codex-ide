@@ -540,7 +540,8 @@ HELP-ECHO, KEYMAP, and PROPERTIES are applied to the created button."
 (cl-defun codex-ide-renderer-insert-item-result-header
     (overlay prefix-text toggle-fn open-fn
              &key keymap overlay-property toggle-help-echo
-             toggle-button-help open-button-label open-button-help)
+             toggle-button-help open-button-label open-button-help
+             open-button-keymap)
   "Insert an expandable item-result header for OVERLAY using PREFIX-TEXT.
 TOGGLE-FN and OPEN-FN receive OVERLAY when invoked."
   (let ((prefix-start (point)))
@@ -566,7 +567,7 @@ TOGGLE-FN and OPEN-FN receive OVERLAY when invoked."
        (lambda ()
          (funcall open-fn overlay))
        open-button-help
-       keymap
+       open-button-keymap
        (list overlay-property overlay)))
     (insert "\n")))
 

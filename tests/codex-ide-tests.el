@@ -3654,11 +3654,60 @@
                                    (status . "completed"))))))))
             (with-current-buffer (codex-ide-session-buffer session)
               (let ((text (buffer-string)))
-                (should (string-match-p "diff: foo\\.txt (\\+1/-1, 7 lines) \\[fold\\] \\[open diff\\]" text))
+                (should
+                 (string-match-p
+                  "diff: foo\\.txt (\\+1/-1, 7 lines) \\[fold\\] \\[open diff\\]"
+                  text))
                 (should (string-match-p "diff --git a/foo\\.txt b/foo\\.txt" text))
                 (should (string-match-p "\\[open diff\\]" text))
                 (should (< (string-match-p "\\[open diff\\]" text)
-                           (string-match-p "diff --git a/foo\\.txt b/foo\\.txt" text))))))))))
+                           (string-match-p "diff --git a/foo\\.txt b/foo\\.txt"
+                                           text))))))))))
+
+(ert-deftest codex-ide-file-change-open-diff-button-ret-opens-buffer ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (diff-text (string-join
+                           '("diff --git a/foo.txt b/foo.txt"
+                             "--- a/foo.txt"
+                             "+++ b/foo.txt"
+                             "@@ -1 +1 @@"
+                             "-old"
+                             "+new")
+                           "\n")))
+          (setf (codex-ide-session-current-turn-id session) "turn-file-change-ret"
+                (codex-ide-session-status session) "running")
+          (cl-letf (((symbol-function 'message)
+                     (lambda (&rest _) nil)))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/started")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "inProgress")))))))
+            (codex-ide--handle-notification
+             session
+             `((method . "item/completed")
+               (params . ((item . ((type . "fileChange")
+                                   (id . "file-change-1")
+                                   (changes . (((path . "foo.txt")
+                                                (diff . ,diff-text))))
+                                   (status . "completed"))))))))
+            (with-current-buffer (codex-ide-session-buffer session)
+              (goto-char (point-min))
+              (search-forward "[open diff]")
+              (backward-char 1)
+              (let* ((button (button-at (point)))
+                     (keymap (and button (button-get button 'keymap))))
+                (should button)
+                (should (eq (lookup-key keymap (kbd "RET"))
+                            #'push-button))
+                (should (eq (key-binding (kbd "RET"))
+                            #'push-button)))))))))
 
 (ert-deftest codex-ide-file-change-completion-does-not-auto-open-diff-by-default ()
   (let ((project-dir (codex-ide-test--make-temp-project))
