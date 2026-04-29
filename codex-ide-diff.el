@@ -20,6 +20,10 @@
 
 (declare-function codex-ide-display-buffer "codex-ide-window"
                   (buffer &optional action))
+(declare-function codex-ide--session-for-current-project "codex-ide-session" ())
+(declare-function codex-ide-session-buffer "codex-ide-core" (session))
+(declare-function codex-ide-transcript-combined-turn-diff-text "codex-ide-transcript"
+                  (&optional session turn-id))
 
 (defvar codex-ide--display-buffer-other-window-pop-up-action)
 
@@ -57,6 +61,25 @@
               (buffer-name session-buffer)
             session-buffer)))
 
+(defun codex-ide-diff-combined-buffer-name-for-session (session-buffer)
+  "Return the combined-turn diff buffer name for SESSION-BUFFER."
+  (format "%s-turn-diff"
+          (if (bufferp session-buffer)
+              (buffer-name session-buffer)
+            session-buffer)))
+
+(defun codex-ide--combine-diff-texts (texts)
+  "Return TEXTS combined into one diff string, or nil when empty."
+  (let ((normalized
+         (delq nil
+               (mapcar (lambda (text)
+                         (when (and (stringp text)
+                                    (not (string-empty-p (string-trim text))))
+                           (string-trim-right text)))
+                       texts))))
+    (when normalized
+      (string-join normalized "\n\n"))))
+
 (defun codex-ide-diff-open-buffer (diff-text &optional buffer-name)
   "Display DIFF-TEXT in a dedicated `diff-mode' buffer.
 When BUFFER-NAME is non-nil, reuse that buffer.
@@ -81,6 +104,22 @@ Return the created buffer."
      buffer
      codex-ide--display-buffer-other-window-pop-up-action)
     buffer))
+
+;;;###autoload
+(defun codex-ide-diff-open-combined-turn-buffer (&optional session turn-id)
+  "Open the combined diff for SESSION TURN-ID in a standalone diff buffer.
+When TURN-ID is nil, prefer the running turn and otherwise use the most recent
+completed turn."
+  (interactive)
+  (let* ((session (or session (codex-ide--session-for-current-project)))
+         (buffer (and session (codex-ide-session-buffer session)))
+         (diff-text (codex-ide-transcript-combined-turn-diff-text session turn-id)))
+    (unless session
+      (user-error "No Codex session available"))
+    (codex-ide-diff-open-buffer
+     diff-text
+     (codex-ide-diff-combined-buffer-name-for-session
+      (or buffer "*codex*")))))
 
 (provide 'codex-ide-diff)
 
