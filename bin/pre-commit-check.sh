@@ -14,6 +14,16 @@ done
 
 ROOT_DIR="$(cd -P "$(dirname "$SOURCE_PATH")/.." && pwd)"
 
+FORMAT_TARGETS=()
+while IFS= read -r path; do
+  FORMAT_TARGETS+=("$path")
+done < <(git -C "$ROOT_DIR" diff --cached --name-only --diff-filter=ACMR -- '*.el' 'bin/elisp-format.sh')
+
+if [[ ${#FORMAT_TARGETS[@]} -gt 0 ]]; then
+  "$ROOT_DIR/bin/elisp-format.sh" "${FORMAT_TARGETS[@]}"
+  git -C "$ROOT_DIR" add -- "${FORMAT_TARGETS[@]}"
+fi
+
 "$ROOT_DIR/bin/generate-autoloads.sh"
 git -C "$ROOT_DIR" add codex-ide-autoloads.el
 
