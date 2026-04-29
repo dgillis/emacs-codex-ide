@@ -331,19 +331,19 @@ theme switches or file reloads in a live Emacs session."
   (when (< start end)
     (remove-text-properties start end
                             '(read-only t
-                              rear-nonsticky (read-only)
-                              front-sticky (read-only)))))
+					rear-nonsticky (read-only)
+					front-sticky (read-only)))))
 
 (defun codex-ide-renderer-freeze-region (start end)
   "Make the region from START to END read-only."
   (when (< start end)
     (remove-text-properties start end
                             '(read-only nil
-                              rear-nonsticky nil
-                              front-sticky nil))
+					rear-nonsticky nil
+					front-sticky nil))
     (add-text-properties start end '(read-only t
-                                     rear-nonsticky (read-only)
-                                     front-sticky (read-only)))))
+					       rear-nonsticky (read-only)
+					       front-sticky (read-only)))))
 
 (defun codex-ide-renderer-insert-prompt-prefix ()
   "Insert the user prompt prefix."
@@ -509,17 +509,17 @@ HELP-ECHO, KEYMAP, and PROPERTIES are applied to the created button."
   (let ((button-keymap (if keymap
                            (make-composed-keymap keymap button-map)
                          button-map)))
-  (apply
-   #'make-text-button
-   (point)
-   (progn (insert (format "[%s]" label)) (point))
-   (append
-    (list 'follow-link t
-          'keymap button-keymap
-          'help-echo (or help-echo label)
-          'action (lambda (_button)
-                    (funcall callback)))
-    properties))))
+    (apply
+     #'make-text-button
+     (point)
+     (progn (insert (format "[%s]" label)) (point))
+     (append
+      (list 'follow-link t
+            'keymap button-keymap
+            'help-echo (or help-echo label)
+            'action (lambda (_button)
+                      (funcall callback)))
+      properties))))
 
 (defun codex-ide-renderer-insert-approval-label (label)
   "Insert an emphasized approval field LABEL."
@@ -628,31 +628,31 @@ the resolved insertion position.
 
 Return (START . END)."
   (codex-ide-renderer--without-undo-recording
-    (let* ((inhibit-read-only t)
-           (resolved-insertion-point (or insertion-point (point)))
-           (original-point (and preserve-point
-                                (not (markerp restore-point))
-                                (copy-marker (point) t)))
-           range)
-      (goto-char resolved-insertion-point)
-      (setq range
-            (codex-ide-renderer-insert-read-only text face properties))
-      (when after-insert
-        (funcall after-insert
-                 (car range)
-                 (cdr range)
-                 resolved-insertion-point))
-      (cond
-       ((markerp restore-point)
-        (when (marker-buffer restore-point)
-          (goto-char restore-point))
-        (set-marker restore-point nil))
-       (original-point
-        (goto-char original-point)
-        (set-marker original-point nil))
-       (move-point-to-end
-        (goto-char (point-max))))
-      range)))
+   (let* ((inhibit-read-only t)
+          (resolved-insertion-point (or insertion-point (point)))
+          (original-point (and preserve-point
+                               (not (markerp restore-point))
+                               (copy-marker (point) t)))
+          range)
+     (goto-char resolved-insertion-point)
+     (setq range
+           (codex-ide-renderer-insert-read-only text face properties))
+     (when after-insert
+       (funcall after-insert
+                (car range)
+                (cdr range)
+                resolved-insertion-point))
+     (cond
+      ((markerp restore-point)
+       (when (marker-buffer restore-point)
+         (goto-char restore-point))
+       (set-marker restore-point nil))
+      (original-point
+       (goto-char original-point)
+       (set-marker original-point nil))
+      (move-point-to-end
+       (goto-char (point-max))))
+     range)))
 
 (defun codex-ide-renderer-insert-output-spacing ()
   "Insert the transcript spacing needed before a new output block.
@@ -949,42 +949,42 @@ Return a plist containing inserted markers and updated writable ranges."
             (remove-text-properties
              pos next
              '(mouse-face nil
-               help-echo nil
-               keymap nil
-               category nil
-               button nil
-               action nil
-               follow-link nil
-               display nil
-               codex-ide-path nil
-               codex-ide-line nil
-               codex-ide-column nil
-               codex-ide-table-link nil
-               codex-ide-markdown-table-original nil
-               codex-ide-markdown-code-content nil
-               codex-ide-markdown nil))
+			  help-echo nil
+			  keymap nil
+			  category nil
+			  button nil
+			  action nil
+			  follow-link nil
+			  display nil
+			  codex-ide-path nil
+			  codex-ide-line nil
+			  codex-ide-column nil
+			  codex-ide-table-link nil
+			  codex-ide-markdown-table-original nil
+			  codex-ide-markdown-code-content nil
+			  codex-ide-markdown nil))
             (goto-char next))
            ((get-text-property pos 'codex-ide-markdown)
             (remove-text-properties
              pos next
              '(font-lock-face nil
-               face nil
-               mouse-face nil
-               help-echo nil
-               keymap nil
-               category nil
-               button nil
-               action nil
-               follow-link nil
-               display nil
-               codex-ide-path nil
-               codex-ide-line nil
-               codex-ide-column nil
-               codex-ide-table-link nil
-               codex-ide-markdown-table-original nil
-               codex-ide-markdown-code-content nil
-               codex-ide-markdown-code-fontified nil
-               codex-ide-markdown nil))
+			      face nil
+			      mouse-face nil
+			      help-echo nil
+			      keymap nil
+			      category nil
+			      button nil
+			      action nil
+			      follow-link nil
+			      display nil
+			      codex-ide-path nil
+			      codex-ide-line nil
+			      codex-ide-column nil
+			      codex-ide-table-link nil
+			      codex-ide-markdown-table-original nil
+			      codex-ide-markdown-code-content nil
+			      codex-ide-markdown-code-fontified nil
+			      codex-ide-markdown nil))
             (goto-char next))
            (t
             (goto-char next))))))
@@ -1169,11 +1169,11 @@ Return a plist containing inserted markers and updated writable ranges."
           (add-text-properties
            fence-start code-start
            '(display ""
-             codex-ide-markdown t))
+		     codex-ide-markdown t))
           (add-text-properties
            code-start closing-start
            '(codex-ide-markdown t
-             codex-ide-markdown-code-content t))
+				codex-ide-markdown-code-content t))
           (add-face-text-property code-start closing-start 'fixed-pitch 'append)
           (when (and (< code-start closing-start)
                      (not (get-text-property
@@ -1186,7 +1186,7 @@ Return a plist containing inserted markers and updated writable ranges."
           (add-text-properties
            closing-start closing-end
            '(display ""
-             codex-ide-markdown t))
+		     codex-ide-markdown t))
           (goto-char closing-end))))))
 
 (defun codex-ide-renderer--markdown-table-row-line-p (line)
@@ -1570,7 +1570,7 @@ Return a plist containing inserted markers and updated writable ranges."
                    block-start
                    (point)
                    `(codex-ide-markdown t
-                     codex-ide-markdown-table-original ,original))
+					codex-ide-markdown-table-original ,original))
                   (codex-ide-renderer--buttonize-markdown-table-links block-start (point))
                   (goto-char (point)))
               (goto-char block-end)))
@@ -1580,91 +1580,91 @@ Return a plist containing inserted markers and updated writable ranges."
 (cl-defun codex-ide-renderer-render-markdown-region (start end &optional allow-trailing-tables)
   "Apply lightweight markdown rendering between START and END."
   (codex-ide-renderer--without-undo-recording
-    (save-excursion
-      (let ((inhibit-read-only t)
-            (end-marker (copy-marker end t)))
-        (codex-ide-renderer--clear-markdown-properties start (marker-position end-marker))
-        (goto-char start)
-        (codex-ide-renderer--render-fenced-code-blocks
-         start
-         (marker-position end-marker))
-        (goto-char start)
-        (codex-ide-renderer--render-markdown-tables
-         start
-         (marker-position end-marker)
-         allow-trailing-tables)
-        (goto-char start)
-        (while (re-search-forward
-                codex-ide-renderer--markdown-link-pattern
-                (marker-position end-marker)
-                t)
-          (unless (or (get-text-property (match-beginning 1) 'codex-ide-markdown)
-                      (get-text-property (1- (match-end 1)) 'codex-ide-markdown))
-            (let* ((match-start (match-beginning 1))
-                   (match-end (match-end 1))
-                   (label (match-string-no-properties 2))
-                   (display-label (codex-ide-renderer--normalize-markdown-link-label label))
-                   (target (match-string-no-properties 3))
-                   (parsed (codex-ide-renderer-parse-file-link-target target)))
-              (when parsed
-                (make-text-button
-                 match-start match-end
-                 'action #'codex-ide-renderer-open-file-link
-                 'follow-link t
-                 'keymap codex-ide-renderer-link-keymap
-                 'help-echo target
-                 'face 'link
-                 'codex-ide-markdown t
-                 'codex-ide-path (nth 0 parsed)
-                 'codex-ide-line (nth 1 parsed)
-                 'codex-ide-column (nth 2 parsed))
-                (add-text-properties
-                 match-start match-end
-                 `(display ,display-label))))))
-        (goto-char start)
-        (while (re-search-forward
-                codex-ide-renderer--markdown-inline-code-pattern
-                (marker-position end-marker)
-                t)
-          (unless (or (get-text-property (match-beginning 0) 'codex-ide-markdown)
-                      (get-text-property (1- (match-end 0)) 'codex-ide-markdown))
-            (let ((code-start (match-beginning 1))
-                  (code-end (match-end 1)))
-              (add-text-properties
-               code-start code-end
-               '(face font-lock-keyword-face
-                 codex-ide-markdown t))
-              (add-text-properties
-               (match-beginning 0) code-start
-               '(display ""
-                 codex-ide-markdown t))
-              (add-text-properties
-               code-end (match-end 0)
-               '(display ""
-                 codex-ide-markdown t)))))
-        (codex-ide-renderer--render-markdown-emphasis
-         start
-         (marker-position end-marker)
-         codex-ide-renderer--markdown-bold-asterisk-pattern
-         'bold)
-        (codex-ide-renderer--render-markdown-emphasis
-         start
-         (marker-position end-marker)
-         codex-ide-renderer--markdown-bold-underscore-pattern
-         'bold
-         t)
-        (codex-ide-renderer--render-markdown-emphasis
-         start
-         (marker-position end-marker)
-         codex-ide-renderer--markdown-italic-asterisk-pattern
-         'italic)
-        (codex-ide-renderer--render-markdown-emphasis
-         start
-         (marker-position end-marker)
-         codex-ide-renderer--markdown-italic-underscore-pattern
-         'italic
-         t)
-        (set-marker end-marker nil)))))
+   (save-excursion
+     (let ((inhibit-read-only t)
+           (end-marker (copy-marker end t)))
+       (codex-ide-renderer--clear-markdown-properties start (marker-position end-marker))
+       (goto-char start)
+       (codex-ide-renderer--render-fenced-code-blocks
+        start
+        (marker-position end-marker))
+       (goto-char start)
+       (codex-ide-renderer--render-markdown-tables
+        start
+        (marker-position end-marker)
+        allow-trailing-tables)
+       (goto-char start)
+       (while (re-search-forward
+               codex-ide-renderer--markdown-link-pattern
+               (marker-position end-marker)
+               t)
+         (unless (or (get-text-property (match-beginning 1) 'codex-ide-markdown)
+                     (get-text-property (1- (match-end 1)) 'codex-ide-markdown))
+           (let* ((match-start (match-beginning 1))
+                  (match-end (match-end 1))
+                  (label (match-string-no-properties 2))
+                  (display-label (codex-ide-renderer--normalize-markdown-link-label label))
+                  (target (match-string-no-properties 3))
+                  (parsed (codex-ide-renderer-parse-file-link-target target)))
+             (when parsed
+               (make-text-button
+                match-start match-end
+                'action #'codex-ide-renderer-open-file-link
+                'follow-link t
+                'keymap codex-ide-renderer-link-keymap
+                'help-echo target
+                'face 'link
+                'codex-ide-markdown t
+                'codex-ide-path (nth 0 parsed)
+                'codex-ide-line (nth 1 parsed)
+                'codex-ide-column (nth 2 parsed))
+               (add-text-properties
+                match-start match-end
+                `(display ,display-label))))))
+       (goto-char start)
+       (while (re-search-forward
+               codex-ide-renderer--markdown-inline-code-pattern
+               (marker-position end-marker)
+               t)
+         (unless (or (get-text-property (match-beginning 0) 'codex-ide-markdown)
+                     (get-text-property (1- (match-end 0)) 'codex-ide-markdown))
+           (let ((code-start (match-beginning 1))
+                 (code-end (match-end 1)))
+             (add-text-properties
+              code-start code-end
+              '(face font-lock-keyword-face
+                     codex-ide-markdown t))
+             (add-text-properties
+              (match-beginning 0) code-start
+              '(display ""
+			codex-ide-markdown t))
+             (add-text-properties
+              code-end (match-end 0)
+              '(display ""
+			codex-ide-markdown t)))))
+       (codex-ide-renderer--render-markdown-emphasis
+        start
+        (marker-position end-marker)
+        codex-ide-renderer--markdown-bold-asterisk-pattern
+        'bold)
+       (codex-ide-renderer--render-markdown-emphasis
+        start
+        (marker-position end-marker)
+        codex-ide-renderer--markdown-bold-underscore-pattern
+        'bold
+        t)
+       (codex-ide-renderer--render-markdown-emphasis
+        start
+        (marker-position end-marker)
+        codex-ide-renderer--markdown-italic-asterisk-pattern
+        'italic)
+       (codex-ide-renderer--render-markdown-emphasis
+        start
+        (marker-position end-marker)
+        codex-ide-renderer--markdown-italic-underscore-pattern
+        'italic
+        t)
+       (set-marker end-marker nil)))))
 
 (defun codex-ide-renderer--markdown-region-over-size-limit-p (start end)
   "Return non-nil when START to END should stay plain for performance."
@@ -1677,9 +1677,9 @@ Return a plist containing inserted markers and updated writable ranges."
   (if (codex-ide-renderer--markdown-region-over-size-limit-p start end)
       (progn
         (codex-ide-renderer--without-undo-recording
-          (save-excursion
-            (let ((inhibit-read-only t))
-              (codex-ide-renderer--clear-markdown-properties start end))))
+         (save-excursion
+           (let ((inhibit-read-only t))
+             (codex-ide-renderer--clear-markdown-properties start end))))
         nil)
     (codex-ide-renderer-render-markdown-region start end allow-trailing-tables)
     t))

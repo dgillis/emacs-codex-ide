@@ -129,21 +129,21 @@
   (let ((project-dir (codex-ide-test--make-temp-project))
         (codex-ide-sandbox-mode "workspace-write"))
     (codex-ide-test-with-fixture project-dir
-      (codex-ide-test-with-fake-processes
-        (let ((session (codex-ide--create-process-session)))
-          (with-current-buffer (codex-ide-session-buffer session)
-            (cl-letf (((symbol-function 'completing-read)
-                       (lambda (prompt collection &rest _)
-                         (cond
-                          ((equal prompt "Apply to: ") "This session")
-                          ((equal prompt "Sandbox mode: ") "read-only")
-                          (t (car collection)))))
-                      ((symbol-function 'message)
-                       (lambda (&rest _) nil)))
-              (call-interactively #'codex-ide--set-sandbox-mode)))
-          (should (equal codex-ide-sandbox-mode "workspace-write"))
-          (should (equal (codex-ide-config-effective-value 'sandbox-mode session)
-                         "read-only")))))))
+				 (codex-ide-test-with-fake-processes
+				  (let ((session (codex-ide--create-process-session)))
+				    (with-current-buffer (codex-ide-session-buffer session)
+				      (cl-letf (((symbol-function 'completing-read)
+						 (lambda (prompt collection &rest _)
+						   (cond
+						    ((equal prompt "Apply to: ") "This session")
+						    ((equal prompt "Sandbox mode: ") "read-only")
+						    (t (car collection)))))
+						((symbol-function 'message)
+						 (lambda (&rest _) nil)))
+					(call-interactively #'codex-ide--set-sandbox-mode)))
+				    (should (equal codex-ide-sandbox-mode "workspace-write"))
+				    (should (equal (codex-ide-config-effective-value 'sandbox-mode session)
+						   "read-only")))))))
 
 (ert-deftest codex-ide-set-approval-policy-signals-quit-when-called-directly ()
   (let ((applied nil))

@@ -325,8 +325,8 @@ When FORCE is non-nil, repaint even if the highlighted section and line did not 
   (unless (codex-ide-section-overlay section)
     (let* ((body-start (codex-ide-section-body-start section))
            (overlay (make-overlay body-start
-                                 (codex-ide-section-end section)
-                                 nil nil nil)))
+                                  (codex-ide-section-end section)
+                                  nil nil nil)))
       (overlay-put overlay 'invisible t)
       (overlay-put overlay 'cursor-intangible t)
       (overlay-put overlay 'isearch-open-invisible #'delete-overlay)

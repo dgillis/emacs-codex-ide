@@ -196,7 +196,7 @@
                                                  (alist-get "result" (nth 3 responses) nil nil #'equal)
                                                  nil nil #'equal))
                                  nil nil #'equal))
-                      (diagnostics-text
+                     (diagnostics-text
                       (alist-get "text"
                                  (car (alist-get "content"
                                                  (alist-get "result" (nth 4 responses) nil nil #'equal)

@@ -302,7 +302,7 @@ while 1 would fully replace the background with the foreground color."
                             (window-point display-window)
                           (point)))
          (section nil)
-        (collapsed nil))
+         (collapsed nil))
     (codex-ide-status-mode--map-sections
      (lambda (candidate)
        (push (cons (codex-ide-status-mode--section-path candidate)

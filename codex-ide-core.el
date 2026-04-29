@@ -76,7 +76,7 @@ Add this variable to `savehist-additional-variables' to persist it.")
     :initform nil
     :accessor codex-ide-session-directory)
    (name-suffix
-   :initarg :name-suffix
+    :initarg :name-suffix
     :initform nil
     :accessor codex-ide-session-name-suffix)
    (process

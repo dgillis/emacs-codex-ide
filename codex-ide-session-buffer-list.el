@@ -165,7 +165,7 @@ Keys are cons cells of the form `(DIRECTORY . THREAD-ID)'."
   (interactive)
   (let ((buffer
          (codex-ide-session-list--setup
-         "*Codex Session Buffers*"
+          "*Codex Session Buffers*"
           #'codex-ide-session-buffer-list-mode
           [("Buffer" 28 t)
            ("Status" 14 t)

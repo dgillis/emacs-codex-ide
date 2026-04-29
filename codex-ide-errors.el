@@ -129,29 +129,29 @@
            ((or (string-match-p "unauthorized\\|authentication\\|api key" detail)
                 (string-match-p "403\\|forbidden" detail))
             '(:kind auth
-              :summary "Codex authentication failed."
-              :guidance "Run `codex login` and retry."))
+		    :summary "Codex authentication failed."
+		    :guidance "Run `codex login` and retry."))
            ((or (string-match-p "429\\|rate limit" detail)
                 (string-match-p "quota" detail))
             '(:kind rate-limit
-              :summary "Codex is rate limited."
-              :guidance "Wait for quota to recover, then retry."))
+		    :summary "Codex is rate limited."
+		    :guidance "Wait for quota to recover, then retry."))
            ((or (string-match-p "timed out\\|timeout" detail)
                 (string-match-p "econnreset\\|broken pipe" detail))
             '(:kind network
-              :summary "Connection interrupted"
-              :guidance "Retry after the Codex process or network stabilizes."))
+		    :summary "Connection interrupted"
+		    :guidance "Retry after the Codex process or network stabilizes."))
            ((or (string-match-p "exec: .* not found" detail)
                 (string-match-p "searching for program" detail)
                 (string-match-p "no such file or directory" detail)
                 (string-match-p "codex_home does not exist" detail))
             '(:kind startup
-              :summary "Codex startup failed."
-              :guidance "Check the configured Codex CLI path and environment."))
+		    :summary "Codex startup failed."
+		    :guidance "Check the configured Codex CLI path and environment."))
            (t
             '(:kind generic
-              :summary "Codex request failed"
-              :guidance nil)))))
+		    :summary "Codex request failed"
+		    :guidance nil)))))
     classification))
 
 (defun codex-ide--format-session-error-summary (classification &optional prefix)

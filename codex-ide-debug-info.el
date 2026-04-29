@@ -43,7 +43,7 @@
   (let* ((sessions (codex-ide--sessions-for-directory directory t))
          (active-session (codex-ide--last-active-session-for-directory directory))
          (active-session-buffer (when-let ((buffer (and active-session
-                                                       (codex-ide-session-buffer active-session))))
+							(codex-ide-session-buffer active-session))))
                                   (when (buffer-live-p buffer)
                                     (buffer-name buffer))))
          (active-buffer (codex-ide-debug-info--active-buffer-name directory))

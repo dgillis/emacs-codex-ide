@@ -35,7 +35,7 @@
 
 (defconst codex-ide-config--completion-extra-properties
   '(:display-sort-function identity
-    :cycle-sort-function identity)
+			   :cycle-sort-function identity)
   "Completion metadata used to preserve descriptor order in config prompts.")
 
 (defconst codex-ide-config--scope-choices-in-session
@@ -278,10 +278,10 @@ without prompting."
      (t
       (cdr
        (assoc
-       (completing-read "Apply to: "
-                        codex-ide-config--scope-choices-outside-session
-                        nil t nil nil
-                        (caar codex-ide-config--scope-choices-outside-session))
+	(completing-read "Apply to: "
+                         codex-ide-config--scope-choices-outside-session
+                         nil t nil nil
+                         (caar codex-ide-config--scope-choices-outside-session))
         codex-ide-config--scope-choices-outside-session))))))
 
 (defun codex-ide-config--resolve-choices (key)

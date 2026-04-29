@@ -196,7 +196,7 @@ FIELD should be one of `codex-ide-mcp-elicitation-field-specs' results."
      ((equal type "string")
       (codex-ide-mcp-elicitation--read-string prompt requiredp default))
      (t
-     (error "Unsupported elicitation field type: %s" type)))))
+      (error "Unsupported elicitation field type: %s" type)))))
 
 (defun codex-ide-mcp-elicitation--read-string (prompt requiredp default)
   "Read a string with PROMPT.
