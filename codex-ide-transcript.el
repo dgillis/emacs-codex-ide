@@ -49,6 +49,7 @@
 (require 'codex-ide-mcp-elicitation)
 (require 'codex-ide-nav)
 (require 'codex-ide-renderer)
+(require 'codex-ide-rollout)
 (require 'codex-ide-window)
 
 (declare-function codex-ide--ensure-session-for-current-project "codex-ide-session" ())
@@ -2863,7 +2864,7 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
       t)))
 
 (defun codex-ide--append-restored-agent-message (session item)
-  "Append restored agent ITEM to SESSION like live agent output."
+  "Append restored agent ITEM to SESSION through the live agent render path."
   (let* ((buffer (codex-ide-session-buffer session))
          (item-id (or (alist-get 'id item) "restored-agent-message"))
          (text (codex-ide--thread-read--message-text item)))
@@ -2871,43 +2872,128 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
                (stringp text)
                (not (string-empty-p (string-trim text))))
       (let ((codex-ide--current-agent-item-type "agentMessage"))
-        (codex-ide--ensure-output-spacing buffer)
-        (codex-ide--append-output-separator buffer)
-        (codex-ide--append-agent-text buffer "\n")
-        (setf (codex-ide-session-current-message-start-marker session)
-              (with-current-buffer buffer
-                (copy-marker (point-max))))
-        (setf (codex-ide-session-current-message-item-id session) item-id
-              (codex-ide-session-current-message-prefix-inserted session) t)
+        (codex-ide--ensure-agent-message-prefix session item-id)
         (codex-ide--append-agent-text buffer text)
-        (when-let ((start (codex-ide-session-current-message-start-marker session)))
-          (with-current-buffer buffer
-            (codex-ide--maybe-render-markdown-region
-             start (point-max) t))))
+        (codex-ide--render-item-completion session item))
+      t)))
+
+(defun codex-ide--stored-item-with-id (item fallback-id)
+  "Return stored ITEM with FALLBACK-ID when it lacks an id."
+  (let ((copy (copy-tree item)))
+    (if (alist-get 'id copy)
+        copy
+      (append copy `((id . ,fallback-id))))))
+
+(defun codex-ide--normalized-stored-render-item (item)
+  "Return ITEM normalized for replay through live rendering primitives."
+  (let ((copy (copy-tree item)))
+    (when (and (equal (alist-get 'type copy) "commandExecution")
+               (not (alist-get 'aggregatedOutput copy))
+               (alist-get 'output copy))
+      (push (cons 'aggregatedOutput (alist-get 'output copy)) copy))
+    copy))
+
+(defun codex-ide--merge-restored-turn-items (turn rollout-items)
+  "Return TURN with ROLLOUT-ITEMS merged into its item list."
+  (if (not rollout-items)
+      turn
+    (let ((copy (copy-tree turn))
+          (items (append (codex-ide--thread-read-items turn) nil))
+          (merged nil)
+          (inserted nil)
+          (rollout-has-assistant
+           (seq-some
+            (lambda (item)
+              (eq (codex-ide--thread-read--item-kind item) 'assistant))
+            rollout-items)))
+      (if rollout-has-assistant
+          (setq merged
+                (append
+                 (seq-filter
+                  (lambda (item)
+                    (eq (codex-ide--thread-read--item-kind item) 'user))
+                  items)
+                 rollout-items))
+        (dolist (item items)
+          (when (and (not inserted)
+                     (eq (codex-ide--thread-read--item-kind item) 'assistant))
+            (setq merged (append (reverse rollout-items) merged))
+            (setq inserted t))
+          (push item merged))
+        (unless inserted
+          (setq merged (append (reverse rollout-items) merged)))
+        (setq merged (nreverse merged)))
+      (setf (alist-get 'items copy) merged)
+      copy)))
+
+(defun codex-ide--thread-read-with-rollout-render-items (thread-read)
+  "Return THREAD-READ augmented with renderable rollout storage items."
+  (let* ((thread (alist-get 'thread thread-read))
+         (path (alist-get 'path thread))
+         (rollout-turns (codex-ide-rollout-turn-render-items path)))
+    (if (not rollout-turns)
+        thread-read
+      (let* ((copy (copy-tree thread-read))
+             (copy-thread (alist-get 'thread copy))
+             (turns (append (codex-ide--thread-read-turns copy) nil))
+             (rollout-turns
+              (nthcdr (max 0 (- (length rollout-turns) (length turns)))
+                      rollout-turns))
+             (merged-turns
+              (cl-loop for turn in turns
+                       for rollout-items in rollout-turns
+                       collect (codex-ide--merge-restored-turn-items
+                                turn
+                                rollout-items))))
+        (if (alist-get 'turns copy)
+            (setf (alist-get 'turns copy) merged-turns)
+          (setf (alist-get 'turns copy-thread) merged-turns))
+        copy))))
+
+(defun codex-ide--replay-stored-render-item (session item)
+  "Replay stored non-message ITEM into SESSION using live item render primitives."
+  (let* ((item (codex-ide--normalized-stored-render-item item))
+         (item-type (alist-get 'type item))
+         (item-id (alist-get 'id item)))
+    (when (codex-ide--summarize-item-start item)
+      (when (equal item-type "fileChange")
+        (codex-ide--put-current-turn-file-change session item-id item))
+      (codex-ide--render-item-start session item)
+      (codex-ide--render-item-completion session item)
       t)))
 
 (defun codex-ide--replay-thread-read-turn (session turn)
   "Replay stored TURN into SESSION.
 Return non-nil when any transcript content was restored."
   (let ((items (append (codex-ide--thread-read-items turn) nil))
+        (turn-id (or (alist-get 'id turn) "turn"))
+        (index 0)
         (restored nil))
-    (dolist (item items restored)
-      (pcase (codex-ide--thread-read--item-kind item)
-        ('user
-         (setq restored
-               (or (codex-ide--append-restored-user-message
-                    session
-                    (codex-ide--thread-read--message-text item))
-                   restored))
-         (setf (codex-ide-session-output-prefix-inserted session) t
-               (codex-ide-session-current-message-item-id session) nil
-               (codex-ide-session-current-message-prefix-inserted session) nil
-               (codex-ide-session-current-message-start-marker session) nil))
-        ('assistant
-         (setq restored
-               (or (codex-ide--append-restored-agent-message session item)
-                   restored)))
-        (_ nil)))))
+    (dolist (raw-item items restored)
+      (let* ((index (prog1 index
+                      (setq index (1+ index))))
+             (item (codex-ide--stored-item-with-id
+                    raw-item
+                    (format "restored-%s-item-%d" turn-id index))))
+        (pcase (codex-ide--thread-read--item-kind item)
+          ('user
+           (setq restored
+                 (or (codex-ide--append-restored-user-message
+                      session
+                      (codex-ide--thread-read--message-text item))
+                     restored))
+           (setf (codex-ide-session-output-prefix-inserted session) t
+                 (codex-ide-session-current-message-item-id session) nil
+                 (codex-ide-session-current-message-prefix-inserted session) nil
+                 (codex-ide-session-current-message-start-marker session) nil))
+          ('assistant
+           (setq restored
+                 (or (codex-ide--append-restored-agent-message session item)
+                     restored)))
+          (_
+           (setq restored
+                 (or (codex-ide--replay-stored-render-item session item)
+                     restored))))))))
 
 (defun codex-ide--restore-thread-read-transcript (&optional session thread-read)
   "Replay a stored transcript from THREAD-READ into SESSION.
@@ -2915,6 +3001,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
+  (setq thread-read (codex-ide--thread-read-with-rollout-render-items thread-read))
   (let* ((limit (max 0 codex-ide-resume-summary-turn-limit))
          (turns (append (codex-ide--thread-read-turns thread-read) nil))
          (recent-turns (cond

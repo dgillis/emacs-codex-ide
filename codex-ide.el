@@ -228,6 +228,7 @@ thread-list limit."
 (require 'codex-ide-protocol)
 (require 'codex-ide-diff-data)
 (require 'codex-ide-diff-view)
+(require 'codex-ide-rollout)
 (require 'codex-ide-threads)
 (require 'codex-ide-transcript)
 (require 'codex-ide-transient)

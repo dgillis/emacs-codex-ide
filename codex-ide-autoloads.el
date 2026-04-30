@@ -470,6 +470,11 @@ completed turn.
 
 (fn &optional SESSION TURN-ID)" t)
 (register-definition-prefixes "codex-ide-diff-view" '("codex-ide-diff-"))
+
+
+;;; Generated autoloads from codex-ide-rollout.el
+
+(register-definition-prefixes "codex-ide-rollout" '("codex-ide-rollout-"))
 
 ;;; End of scraped data
 
