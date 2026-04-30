@@ -3691,8 +3691,7 @@
 					 (opened-diff-buffer-name nil)
 					 (expected-diff
 					  (string-join
-					   '("diff -- foo.txt"
-					     "diff --git a/foo.txt b/foo.txt"
+					   '("diff --git a/foo.txt b/foo.txt"
 					     "--- a/foo.txt"
 					     "+++ b/foo.txt"
 					     "@@ -1 +1 @@"
@@ -3739,7 +3738,7 @@
 					  (should (string-match-p "Approve file changes: edit foo\\.txt" text))
 					  (should (string-match-p "Proposed changes:\n\n" text))
 					  (should (< (string-match-p "Proposed changes:" text)
-						     (string-match-p "diff: foo\\.txt (\\+1/-1, 7 lines) \\[fold\\] \\[open diff\\]" text)))
+						     (string-match-p "diff: foo\\.txt (\\+1/-1, 6 lines) \\[fold\\] \\[open diff\\]" text)))
 					  (should (< (string-match-p "\\[open diff\\]" text)
 						     (string-match-p "\\[accept\\]" text)))
 					  (should (string-match-p "diff --git a/foo\\.txt b/foo\\.txt" text))
@@ -3958,7 +3957,7 @@
 				      (let ((text (buffer-string)))
 					(should
 					 (string-match-p
-					  "diff: foo\\.txt (\\+1/-1, 7 lines) \\[fold\\] \\[open diff\\]"
+					  "diff: foo\\.txt (\\+1/-1, 6 lines) \\[fold\\] \\[open diff\\]"
 					  text))
 					(should (string-match-p "diff --git a/foo\\.txt b/foo\\.txt" text))
 					(should (string-match-p "\\[open diff\\]" text))
@@ -4065,8 +4064,7 @@
 					 (opened-diff-buffer-name nil)
 					 (expected-diff
 					  (string-join
-					   '("diff -- foo.txt"
-					     "diff --git a/foo.txt b/foo.txt"
+					   '("diff --git a/foo.txt b/foo.txt"
 					     "--- a/foo.txt"
 					     "+++ b/foo.txt"
 					     "@@ -1 +1 @@"
@@ -4121,8 +4119,7 @@
 					 (opened-diff-buffer-name nil)
 					 (expected-diff
 					  (string-join
-					   '("diff -- foo.txt"
-					     "diff --git a/foo.txt b/foo.txt"
+					   '("diff --git a/foo.txt b/foo.txt"
 					     "--- a/foo.txt"
 					     "+++ b/foo.txt"
 					     "@@ -1 +1 @@"
@@ -4301,8 +4298,7 @@
 					 (opened-diff-buffer-name nil)
 					 (expected-diff
 					  (string-join
-					   '("diff -- foo.txt"
-					     "diff --git a/foo.txt b/foo.txt"
+					   '("diff --git a/foo.txt b/foo.txt"
 					     "--- a/foo.txt"
 					     "+++ b/foo.txt"
 					     "@@ -1 +1 @@"
@@ -4388,7 +4384,7 @@
 							     (status . "completed"))))))))
 				    (with-current-buffer (codex-ide-session-buffer session)
 				      (goto-char (point-min))
-				      (search-forward "diff: foo.txt (+1/-1, 7 lines) [expand] [open diff]")
+				      (search-forward "diff: foo.txt (+1/-1, 6 lines) [expand] [open diff]")
 				      (let ((overlay (get-char-property
 						      (match-beginning 0)
 						      codex-ide-item-result-overlay-property)))
@@ -4897,6 +4893,51 @@
 					(should (string-match-p "diff --git a/foo\\.txt b/foo\\.txt" buffer-text))
 					(should (string-match-p "Updated `foo\\.txt`\\." buffer-text))))))))
 
+  (ert-deftest codex-ide-restore-thread-read-transcript-keeps-combined-diff-available ()
+    (let* ((project-dir (codex-ide-test--make-temp-project))
+           (session nil)
+           (diff-text (string-join
+                       '("diff --git a/foo.txt b/foo.txt"
+                         "@@ -1 +1 @@"
+                         "-old"
+                         "+new")
+                       "\n"))
+           (expected-diff diff-text)
+           (thread-read
+            `((thread . ((id . "thread-restore-combined-diff-1")
+                         (turns . (((id . "turn-1")
+                                    (items . (((type . "userMessage")
+                                               (content . (((type . "text")
+                                                            (text . "Change foo")))))
+                                              ((type . "fileChange")
+                                               (id . "item-file-change-1")
+                                               (changes . (((path . "foo.txt")
+                                                            (kind . "modified")
+                                                            (diff . ,diff-text))))
+                                               (status . "completed"))
+                                              ((type . "agentMessage")
+                                               (id . "item-agent-1")
+                                               (text . "Updated `foo.txt`."))))))))))))
+      (codex-ide-test-with-fixture project-dir
+				   (codex-ide-test-with-fake-processes
+				    (setq session (codex-ide--create-process-session))
+				    (setf (codex-ide-session-thread-id session)
+					  "thread-restore-combined-diff-1")
+				    (should (codex-ide--restore-thread-read-transcript session thread-read))
+				    (should-not (codex-ide--current-turn-diff-entry session))
+				    (cl-letf (((symbol-function 'codex-ide--read-thread)
+					       (lambda (&rest _args)
+						 (error "thread read unavailable"))))
+				      (should
+				       (equal (codex-ide-diff-data-combined-turn-diff-text
+					       session)
+					      expected-diff))
+				      (should
+				       (equal (codex-ide-diff-data-combined-turn-diff-text
+					       session
+					       "turn-1")
+					      expected-diff)))))))
+
   (ert-deftest codex-ide-restore-thread-read-transcript-augments-from-rollout-storage ()
     (let* ((project-dir (codex-ide-test--make-temp-project))
            (rollout-path (expand-file-name "rollout-thread.jsonl" project-dir))
@@ -5001,7 +5042,11 @@
 						 "\\* Called mcp__codex_ide_emacs_mcp__/emacs_get_all_buffers"
 						 buffer-text))
 					(should (string-match-p "\\* Prepared 1 file change" buffer-text))
-					(should (string-match-p "\\*\\*\\* Begin Patch" buffer-text))
+					(should (string-match-p "--- a/foo\\.txt" buffer-text))
+					(should (string-match-p "\\+\\+\\+ b/foo\\.txt" buffer-text))
+					(should-not (string-match-p "\\*\\*\\* Begin Patch" buffer-text))
+					(should-not (string-match-p "\\*\\*\\* Update File:" buffer-text))
+					(should-not (string-match-p "\\*\\*\\* End Patch" buffer-text))
 					(should-not (string-match-p "future_unrecognized_call" buffer-text))
 					(should-not (string-match-p "future_custom_tool" buffer-text))
 					(should-not (string-match-p "should not render" buffer-text))
@@ -5015,7 +5060,7 @@
 					    (string-match-p "    hello" buffer-text)
 					    (string-match-p "Second\\." buffer-text)
 					    (string-match-p "\\* Prepared 1 file change" buffer-text)
-					    (string-match-p "\\*\\*\\* Begin Patch" buffer-text)
+					    (string-match-p "--- a/foo\\.txt" buffer-text)
 					    (string-match-p "Done\\." buffer-text)))))))))
 
   (ert-deftest codex-ide-restore-thread-read-transcript-replays-item-based-turns ()

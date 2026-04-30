@@ -99,4 +99,35 @@
       (when (buffer-live-p session-buffer)
         (kill-buffer session-buffer)))))
 
+(ert-deftest codex-ide-diff-open-combined-turn-buffer-interactive-uses-point-turn ()
+  (let* ((session-buffer (generate-new-buffer "*codex[test-point]*"))
+         (session (make-instance 'codex-ide-session :buffer session-buffer))
+         (opened nil))
+    (unwind-protect
+        (with-current-buffer session-buffer
+          (insert "> first\nresult\n\n> second\nresult\n")
+          (goto-char (point-min))
+          (let ((first-marker (copy-marker (point) nil)))
+            (search-forward "> second")
+            (let ((second-marker (copy-marker (match-beginning 0) nil)))
+              (codex-ide--record-turn-start session "turn-1" first-marker)
+              (codex-ide--record-turn-start session "turn-2" second-marker)
+              (cl-letf (((symbol-function 'codex-ide--session-for-current-project)
+                         (lambda () session))
+                        ((symbol-function 'codex-ide-diff-data-combined-turn-diff-text)
+                         (lambda (&optional resolved-session turn-id)
+                           (should (eq resolved-session session))
+                           (should (equal turn-id "turn-2"))
+                           "diff --git a/foo.txt b/foo.txt\n@@ -1 +1 @@\n-old\n+new"))
+                        ((symbol-function 'codex-ide-diff-open-buffer)
+                         (lambda (diff-text buffer-name)
+                           (setq opened (list diff-text buffer-name))
+                           nil)))
+                (call-interactively #'codex-ide-diff-open-combined-turn-buffer)
+                (should (equal opened
+                               '("diff --git a/foo.txt b/foo.txt\n@@ -1 +1 @@\n-old\n+new"
+                                 "*codex[test-point]*-turn-diff")))))))
+      (when (buffer-live-p session-buffer)
+        (kill-buffer session-buffer)))))
+
 ;;; codex-ide-diff-view-tests.el ends here

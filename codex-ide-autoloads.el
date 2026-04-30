@@ -465,8 +465,9 @@ Major mode for Codex app-server session buffers.
 
 (autoload 'codex-ide-diff-open-combined-turn-buffer "codex-ide-diff-view" "\
 Open the combined diff for SESSION TURN-ID in a standalone diff buffer.
-When TURN-ID is nil, prefer the running turn and otherwise use the most recent
-completed turn.
+When called interactively with nil TURN-ID, use the last transcript turn at or
+above point.  Otherwise, when TURN-ID is nil, prefer the running turn and
+otherwise use the most recent completed turn.
 
 (fn &optional SESSION TURN-ID)" t)
 (register-definition-prefixes "codex-ide-diff-view" '("codex-ide-diff-"))

@@ -12,10 +12,119 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'seq)
 (require 'codex-ide-core)
 (require 'codex-ide-protocol)
 (require 'subr-x)
+
+(defun codex-ide--apply-patch-file-paths (text)
+  "Return file paths mentioned by an apply-patch TEXT."
+  (when (stringp text)
+    (let (paths)
+      (dolist (line (split-string text "\n"))
+        (when (string-match
+               (rx line-start
+                   "*** "
+                   (or "Add" "Update" "Delete")
+                   " File: "
+                   (group (+ nonl))
+                   line-end)
+               line)
+          (push (match-string 1 line) paths)))
+      (nreverse paths))))
+
+(defun codex-ide--apply-patch-file-diff-header (kind path move-to)
+  "Return unified diff file header for apply-patch KIND PATH MOVE-TO."
+  (pcase kind
+    ("Add" (format "--- /dev/null\n+++ b/%s" path))
+    ("Delete" (format "--- a/%s\n+++ /dev/null" path))
+    (_ (format "--- a/%s\n+++ b/%s" path (or move-to path)))))
+
+(defun codex-ide--apply-patch-diff-text (text)
+  "Convert apply-patch TEXT to a unified-diff-like string, or nil."
+  (when (and (stringp text)
+             (string-match-p (rx line-start "*** Begin Patch") text))
+    (let (sections kind path move-to body)
+      (cl-labels
+          ((flush-section
+             ()
+             (when path
+               (push
+		(string-join
+                 (cons (codex-ide--apply-patch-file-diff-header
+			kind
+			path
+			move-to)
+                       (nreverse body))
+                 "\n")
+		sections))
+             (setq kind nil
+                   path nil
+                   move-to nil
+                   body nil)))
+        (dolist (line (split-string text "\n"))
+          (cond
+           ((string-match
+             (rx line-start
+                 "*** "
+                 (group (or "Add" "Update" "Delete"))
+                 " File: "
+                 (group (+ nonl))
+                 line-end)
+             line)
+            (flush-section)
+            (setq kind (match-string 1 line)
+                  path (match-string 2 line)))
+           ((and path
+                 (string-match
+                  (rx line-start "*** Move to: " (group (+ nonl)) line-end)
+                  line))
+            (setq move-to (match-string 1 line)))
+           ((or (string-match-p
+                 (rx line-start "*** " (or "Begin Patch" "End Patch") line-end)
+                 line)
+                (string-match-p
+                 (rx line-start "*** End of File" line-end)
+                 line))
+            nil)
+           (path
+            (push line body))))
+        (flush-section)
+        (when sections
+          (string-join (nreverse sections) "\n\n"))))))
+
+(defun codex-ide--diff-text-has-file-header-p (diff path)
+  "Return non-nil when DIFF already contains a file header for PATH."
+  (or (string-match-p (rx line-start "diff --") diff)
+      (and path
+           (string-match-p
+            (regexp-quote (format "+++ %s" path))
+            diff))
+      (and path
+           (string-match-p
+            (regexp-quote (format "+++ b/%s" path))
+            diff))
+      (and path
+           (string-match-p
+            (regexp-quote (format "*** Update File: %s" path))
+            diff))
+      (and path
+           (string-match-p
+            (regexp-quote (format "*** Add File: %s" path))
+            diff))
+      (and path
+           (string-match-p
+            (regexp-quote (format "*** Delete File: %s" path))
+            diff))))
+
+(defun codex-ide--file-change-display-path (path diff)
+  "Return the best display path for a file-change PATH and DIFF."
+  (if (and (stringp path)
+           (equal path "patch"))
+      (or (car (codex-ide--apply-patch-file-paths diff))
+          path)
+    path))
 
 (defun codex-ide--file-change-diff-text (item)
   "Extract a human-readable diff string from file-change ITEM."
@@ -27,7 +136,8 @@
     (cond
      ((and (stringp item-diff)
            (not (string-empty-p item-diff)))
-      item-diff)
+      (or (codex-ide--apply-patch-diff-text item-diff)
+          item-diff))
      (t
       (string-join
        (delq nil
@@ -40,12 +150,17 @@
                                 (alist-get 'text change))))
                   (when (and (stringp diff)
                              (not (string-empty-p diff)))
-                    (if (and path
-                             (not (string-match-p
-                                   (regexp-quote (format "+++ %s" path))
-                                   diff)))
-                        (format "diff -- %s\n%s" path diff)
-                      diff))))
+                    (let ((display-path
+                           (codex-ide--file-change-display-path path diff))
+                          (normalized-diff
+                           (or (codex-ide--apply-patch-diff-text diff)
+                               diff)))
+                      (if (and display-path
+                               (not (codex-ide--diff-text-has-file-header-p
+                                     normalized-diff
+                                     display-path)))
+                          (format "diff -- %s\n%s" display-path normalized-diff)
+                        normalized-diff)))))
               (or (alist-get 'changes item) '())))
        "\n")))))
 
@@ -68,6 +183,59 @@
 (defun codex-ide--set-current-turn-diff-entry (session entry)
   "Store combined-diff ENTRY for SESSION's latest submitted turn."
   (codex-ide--session-metadata-put session :current-turn-diff-entry entry))
+
+(defun codex-ide--turn-start-index (session)
+  "Return SESSION's transcript turn-start index."
+  (codex-ide--session-metadata-get session :turn-start-index))
+
+(defun codex-ide--set-pending-turn-start-marker (session marker)
+  "Store MARKER as SESSION's pending transcript turn-start marker."
+  (codex-ide--session-metadata-put session :pending-turn-start-marker marker))
+
+(defun codex-ide--pending-turn-start-marker (session)
+  "Return SESSION's pending transcript turn-start marker."
+  (codex-ide--session-metadata-get session :pending-turn-start-marker))
+
+(defun codex-ide--record-turn-start (session turn-id marker)
+  "Record TURN-ID as starting at MARKER in SESSION's transcript."
+  (when (and session
+             (stringp turn-id)
+             (not (string-empty-p turn-id))
+             (markerp marker)
+             (marker-buffer marker))
+    (let* ((index (copy-tree (codex-ide--turn-start-index session)))
+           (entry (list :turn-id turn-id
+                        :marker (copy-marker marker nil))))
+      (setq index
+            (cons entry
+                  (seq-remove
+                   (lambda (candidate)
+                     (equal (plist-get candidate :turn-id) turn-id))
+                   index)))
+      (codex-ide--session-metadata-put session :turn-start-index index))))
+
+(defun codex-ide--record-pending-turn-start (session turn-id)
+  "Bind SESSION's pending transcript turn-start marker to TURN-ID."
+  (when-let ((marker (codex-ide--pending-turn-start-marker session)))
+    (codex-ide--record-turn-start session turn-id marker)
+    (codex-ide--set-pending-turn-start-marker session nil)))
+
+(defun codex-ide-diff-data-turn-id-at-point (session &optional point buffer)
+  "Return the last SESSION turn id at or before POINT in BUFFER.
+When POINT or BUFFER is nil, use the current point and buffer."
+  (let ((point (or point (point)))
+        (buffer (or buffer (current-buffer)))
+        best)
+    (dolist (entry (codex-ide--turn-start-index session))
+      (let ((marker (plist-get entry :marker)))
+        (when (and (markerp marker)
+                   (eq (marker-buffer marker) buffer)
+                   (<= (marker-position marker) point)
+                   (or (not best)
+                       (> (marker-position marker)
+                          (marker-position (plist-get best :marker)))))
+          (setq best entry))))
+    (plist-get best :turn-id)))
 
 (defun codex-ide--register-submitted-turn-prompt (session prompt)
   "Track PROMPT as SESSION's latest submitted prompt."
@@ -157,6 +325,14 @@
   (codex-ide--combine-diff-texts
    (codex-ide--current-turn-diff-texts session)))
 
+(defun codex-ide--restored-thread-read (session)
+  "Return SESSION's last restored thread-read payload, if any."
+  (codex-ide--session-metadata-get session :restored-thread-read))
+
+(defun codex-ide--set-restored-thread-read (session thread-read)
+  "Store THREAD-READ as SESSION's last restored thread-read payload."
+  (codex-ide--session-metadata-put session :restored-thread-read thread-read))
+
 (defun codex-ide--turn-file-change-diff-texts (turn)
   "Return file-change diff texts from TURN."
   (delq nil
@@ -165,13 +341,10 @@
                     (codex-ide--file-change-diff-text item)))
                 (append (codex-ide--thread-read-items turn) nil))))
 
-(defun codex-ide--read-turn-combined-diff-text (session &optional turn-id)
-  "Return combined diff text for TURN-ID in SESSION's thread history.
+(defun codex-ide--thread-read-combined-diff-text (thread-read &optional turn-id)
+  "Return combined diff text for TURN-ID in THREAD-READ.
 When TURN-ID is nil, use the most recent stored turn."
-  (let* ((thread-id (codex-ide-session-thread-id session))
-         (thread-read (and thread-id
-                           (codex-ide--read-thread session thread-id t)))
-         (turns (and thread-read
+  (let* ((turns (and thread-read
                      (append (codex-ide--thread-read-turns thread-read) nil)))
          (turn (if turn-id
                    (seq-find (lambda (candidate)
@@ -180,6 +353,37 @@ When TURN-ID is nil, use the most recent stored turn."
                  (car (last turns)))))
     (codex-ide--combine-diff-texts
      (and turn (codex-ide--turn-file-change-diff-texts turn)))))
+
+(defun codex-ide--thread-read-thread-id (thread-read)
+  "Return the thread id from THREAD-READ, if present."
+  (alist-get 'id (alist-get 'thread thread-read)))
+
+(defun codex-ide--matching-restored-thread-read (session)
+  "Return SESSION's restored thread-read when it matches the current thread."
+  (let* ((thread-id (codex-ide-session-thread-id session))
+         (thread-read (codex-ide--restored-thread-read session))
+         (restored-thread-id (and thread-read
+                                  (codex-ide--thread-read-thread-id
+                                   thread-read))))
+    (when (and thread-read
+               (or (not thread-id)
+                   (not restored-thread-id)
+                   (equal thread-id restored-thread-id)))
+      thread-read)))
+
+(defun codex-ide--read-turn-combined-diff-text (session &optional turn-id)
+  "Return combined diff text for TURN-ID in SESSION's thread history.
+When TURN-ID is nil, use the most recent stored turn."
+  (let* ((thread-id (codex-ide-session-thread-id session))
+         (thread-read (and thread-id
+                           (ignore-errors
+                             (codex-ide--read-thread session thread-id t))))
+         (diff-text
+          (codex-ide--thread-read-combined-diff-text thread-read turn-id)))
+    (or diff-text
+        (codex-ide--thread-read-combined-diff-text
+         (codex-ide--matching-restored-thread-read session)
+         turn-id))))
 
 (defun codex-ide-diff-data-combined-turn-diff-text (session &optional turn-id)
   "Return combined file-change diff text for SESSION TURN-ID.

@@ -1080,6 +1080,12 @@ When QUIET is non-nil, do not refresh SESSION's header line."
                (codex-ide--freeze-region context-start (point))))
            (codex-ide--delete-input-overlay session)
            (codex-ide--sync-prompt-minor-mode session)
+           (when-let ((start (codex-ide-session-input-prompt-start-marker session)))
+             (if-let ((turn-id (codex-ide-session-current-turn-id session)))
+                 (codex-ide--record-turn-start session turn-id start)
+               (codex-ide--set-pending-turn-start-marker
+                session
+                (copy-marker start nil))))
            (goto-char (point-max))
            (setq spacing-start (point))
            (setq spacing-start
@@ -2974,6 +2980,12 @@ Return non-nil when any transcript content was restored."
         (turn-id (or (alist-get 'id turn) "turn"))
         (index 0)
         (restored nil))
+    (with-current-buffer (codex-ide-session-buffer session)
+      (let ((marker (copy-marker
+                     (codex-ide--transcript-insertion-position
+                      (current-buffer))
+                     nil)))
+        (codex-ide--record-turn-start session turn-id marker)))
     (dolist (raw-item items restored)
       (let* ((index (prog1 index
                       (setq index (1+ index))))
@@ -3007,6 +3019,8 @@ Signal an error when THREAD-READ lacks replayable transcript items."
   (unless session
     (error "No Codex session available"))
   (setq thread-read (codex-ide--thread-read-with-rollout-render-items thread-read))
+  (codex-ide--session-metadata-put session :turn-start-index nil)
+  (codex-ide--set-pending-turn-start-marker session nil)
   (let* ((limit (max 0 codex-ide-resume-summary-turn-limit))
          (turns (append (codex-ide--thread-read-turns thread-read) nil))
          (recent-turns (cond
@@ -3026,6 +3040,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
         "Stored thread transcript could not be replayed. "
         "Expected replayable userMessage/agentMessage turn items.")))
     (when restored
+      (codex-ide--set-restored-thread-read session thread-read)
       (codex-ide--append-to-buffer (codex-ide-session-buffer session) "\n")
       (codex-ide--append-restored-transcript-separator
        (codex-ide-session-buffer session)))
@@ -3035,6 +3050,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
           (codex-ide-session-current-message-start-marker session) nil
           (codex-ide-session-output-prefix-inserted session) nil
           (codex-ide-session-item-states session) (make-hash-table :test 'equal))
+    (codex-ide--set-current-turn-diff-entry session nil)
     restored))
 
 (defun codex-ide--reset-session-buffer (session)
@@ -3046,20 +3062,22 @@ Signal an error when THREAD-READ lacks replayable transcript items."
       (setq-local codex-ide--session session)
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (codex-ide-renderer-insert-session-header working-dir))))
-  (setf (codex-ide-session-current-turn-id session) nil
-        (codex-ide-session-current-message-item-id session) nil
-        (codex-ide-session-current-message-prefix-inserted session) nil
-        (codex-ide-session-current-message-start-marker session) nil
-        (codex-ide-session-output-prefix-inserted session) nil
-        (codex-ide-session-item-states session) (make-hash-table :test 'equal)
-        (codex-ide-session-input-overlay session) nil
-        (codex-ide-session-input-start-marker session) nil
-        (codex-ide-session-input-prompt-start-marker session) nil
-        (codex-ide-session-prompt-history-index session) nil
-        (codex-ide-session-prompt-history-draft session) nil
-        (codex-ide-session-interrupt-requested session) nil
-        (codex-ide-session-status session) "idle"))
+        (codex-ide-renderer-insert-session-header working-dir)))
+    (setf (codex-ide-session-current-turn-id session) nil
+          (codex-ide-session-current-message-item-id session) nil
+          (codex-ide-session-current-message-prefix-inserted session) nil
+          (codex-ide-session-current-message-start-marker session) nil
+          (codex-ide-session-output-prefix-inserted session) nil
+          (codex-ide-session-item-states session) (make-hash-table :test 'equal)
+          (codex-ide-session-input-overlay session) nil
+          (codex-ide-session-input-start-marker session) nil
+          (codex-ide-session-input-prompt-start-marker session) nil
+          (codex-ide-session-prompt-history-index session) nil
+          (codex-ide-session-prompt-history-draft session) nil
+          (codex-ide-session-interrupt-requested session) nil
+          (codex-ide-session-status session) "idle"))
+  (codex-ide--session-metadata-put session :turn-start-index nil)
+  (codex-ide--set-pending-turn-start-marker session nil))
 
 (defun codex-ide--approval-decision (prompt choices)
   "Prompt the user with PROMPT and return one of CHOICES."
@@ -3783,6 +3801,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
                (codex-ide-session-current-message-prefix-inserted session) nil
                (codex-ide-session-current-message-start-marker session) nil
                (codex-ide-session-item-states session) (make-hash-table :test 'equal))
+         (codex-ide--record-pending-turn-start session turn-id)
          (codex-ide--mark-current-turn-diff-started session turn-id))
        (codex-ide--set-session-status session "running" 'turn-started)
        (codex-ide--session-metadata-put

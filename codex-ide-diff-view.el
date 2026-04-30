@@ -25,6 +25,8 @@
 (declare-function codex-ide-session-buffer "codex-ide-core" (session))
 (declare-function codex-ide-diff-data-combined-turn-diff-text
                   "codex-ide-diff-data" (session &optional turn-id))
+(declare-function codex-ide-diff-data-turn-id-at-point
+                  "codex-ide-diff-data" (session &optional point buffer))
 
 (defvar codex-ide--display-buffer-other-window-pop-up-action)
 
@@ -97,9 +99,16 @@ Return the created buffer."
 ;;;###autoload
 (defun codex-ide-diff-open-combined-turn-buffer (&optional session turn-id)
   "Open the combined diff for SESSION TURN-ID in a standalone diff buffer.
-When TURN-ID is nil, prefer the running turn and otherwise use the most recent
-completed turn."
-  (interactive)
+When called interactively with nil TURN-ID, use the last transcript turn at or
+above point.  Otherwise, when TURN-ID is nil, prefer the running turn and
+otherwise use the most recent completed turn."
+  (interactive
+   (let ((session (codex-ide--session-for-current-project)))
+     (list session
+           (codex-ide-diff-data-turn-id-at-point
+            session
+            (point)
+            (current-buffer)))))
   (let* ((session (or session (codex-ide--session-for-current-project)))
          (buffer (and session (codex-ide-session-buffer session)))
          (diff-text (codex-ide-diff-data-combined-turn-diff-text
