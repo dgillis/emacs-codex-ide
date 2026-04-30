@@ -623,6 +623,37 @@
                   (codex-ide-session-input-prompt-start-marker session)))
       (should (equal (codex-ide-test--prompt-prefix-at-line) "> ")))))
 
+(ert-deftest codex-ide-running-input-stays-below-streamed-agent-deltas ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--replace-current-input session "steer draft")
+      (codex-ide--set-queued-prompts session '("queued prompt"))
+      (codex-ide--refresh-running-input-display session)
+      (codex-ide--handle-notification
+       session
+       '((method . "item/agentMessage/delta")
+         (params . ((itemId . "msg-1")
+                    (delta . "Assistant update.")))))
+      (let ((text (buffer-string)))
+        (should (string-match-p
+                 (rx "Assistant update."
+                     (* anything)
+                     "Queued turns:"
+                     "\n  1. queued prompt"
+                     "\n\n> steer draft" string-end)
+                 text))
+        (should-not (string-match-p
+                     (rx "Assistant update." (* anything) "> steer draft"
+                         (* anything) "Queued turns:")
+                     text))))))
+
 (ert-deftest codex-ide-running-output-spacing-preserves-input-point ()
   (with-temp-buffer
     (codex-ide-session-mode)
@@ -905,6 +936,164 @@
       (goto-char (marker-position
                   (codex-ide-session-input-prompt-start-marker session)))
       (should (equal (codex-ide-test--prompt-prefix-at-line) "> ")))))
+
+(ert-deftest codex-ide-agent-delta-separates-active-prompt-from-output ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--replace-current-input session "steer draft")
+      (codex-ide--handle-notification
+       session
+       '((method . "item/agentMessage/delta")
+         (params . ((itemId . "msg-1")
+                    (delta . "Final answer.")))))
+      (should (string-match-p
+               (rx "Final answer." "\n\n> steer draft" string-end)
+               (buffer-string)))
+      (goto-char (marker-position
+                  (codex-ide-session-input-prompt-start-marker session)))
+      (should (equal (codex-ide-test--prompt-prefix-at-line) "> ")))))
+
+(ert-deftest codex-ide-agent-deltas-do-not-accumulate-prompt-spacing ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--replace-current-input session "steer draft")
+      (dolist (delta '("First line.\n" "Second line.\n"))
+        (codex-ide--handle-notification
+         session
+         `((method . "item/agentMessage/delta")
+           (params . ((itemId . "msg-1")
+                      (delta . ,delta))))))
+      (should (string-match-p
+               (rx "First line." "\n"
+                   "Second line." "\n\n"
+                   "> steer draft" string-end)
+               (buffer-string)))
+      (should-not (string-match-p
+                   (rx "Second line." "\n\n\n" "> steer draft" string-end)
+                   (buffer-string))))))
+
+(ert-deftest codex-ide-agent-markdown-delta-separates-active-prompt-from-output ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--replace-current-input session "steer draft")
+      (codex-ide--handle-notification
+       session
+       '((method . "item/agentMessage/delta")
+         (params . ((itemId . "msg-1")
+                    (delta . "Use `code` now.\n")))))
+      (should (string-match-p
+               (rx "Use `code` now." "\n\n> steer draft" string-end)
+               (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "code")
+      (should (get-text-property (1- (point)) 'codex-ide-markdown)))))
+
+(ert-deftest codex-ide-command-output-delta-separates-active-prompt-from-output ()
+  (let ((codex-ide-renderer-command-output-fold-on-start nil))
+    (with-temp-buffer
+      (codex-ide-session-mode)
+      (let ((session (make-codex-ide-session
+                      :directory default-directory
+                      :buffer (current-buffer)
+                      :status "idle"
+                      :item-states (make-hash-table :test 'equal))))
+        (setq-local codex-ide--session session)
+        (codex-ide--insert-input-prompt session "submitted prompt")
+        (codex-ide--begin-turn-display session)
+        (codex-ide--replace-current-input session "steer draft")
+        (codex-ide--render-item-start
+         session
+         '((id . "call-1")
+           (type . "commandExecution")
+           (command . ["echo" "hello"])))
+        (codex-ide--handle-notification
+         session
+         '((method . "item/commandExecution/outputDelta")
+           (params . ((itemId . "call-1")
+                      (delta . "hello")))))
+        (should (string-match-p
+                 (rx "    hello" "\n\n> steer draft" string-end)
+                 (buffer-string)))))))
+
+(ert-deftest codex-ide-working-indicator-separates-active-prompt ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (should (string-match-p
+               (rx "Working..." "\n\n> " string-end)
+               (buffer-string)))
+      (should-not (string-match-p
+                   (rx "Working..." "\n\n\n" "> " string-end)
+                   (buffer-string))))))
+
+(ert-deftest codex-ide-reasoning-indicator-separates-active-prompt ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       '((id . "reason-1")
+         (type . "reasoning")
+         (summary . [])))
+      (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (should (string-match-p
+               (rx "Reasoning..." "\n\n> " string-end)
+               (buffer-string)))
+      (should-not (string-match-p
+                   (rx "Reasoning..." "\n\n\n" "> " string-end)
+                   (buffer-string))))))
+
+(ert-deftest codex-ide-pending-indicator-replacement-keeps-prompt-spacing ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--replace-pending-output-indicator session "Reasoning...\n")
+      (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (should (string-match-p
+               (rx "Reasoning..." "\n\n> " string-end)
+               (buffer-string)))
+      (should-not (string-match-p
+                   (rx "Reasoning..." "\n\n\n" "> " string-end)
+                   (buffer-string))))))
 
 (ert-deftest codex-ide-first-rendered-item-clears-pending-output-indicator ()
   (with-temp-buffer

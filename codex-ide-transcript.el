@@ -348,7 +348,10 @@ inserted text."
 						    (lambda (_start end inserted-at)
 						      (codex-ide--advance-append-boundary-after buffer inserted-at end)
 						      (when advance-active-boundary
-							(set-marker active-boundary end)))))))))
+							(set-marker active-boundary end)
+							(when-let ((session (codex-ide--session-for-buffer buffer)))
+							  (codex-ide--ensure-active-input-prompt-spacing
+							   session))))))))))
 
 (defun codex-ide--append-agent-text (buffer text &optional face properties)
   "Append agent-originated TEXT to BUFFER with FACE and PROPERTIES."
@@ -428,7 +431,9 @@ inserted text."
 							  (codex-ide--advance-append-boundary-after
 							   buffer inserted-at indicator-end)
 							  (when advance-active-boundary
-							    (set-marker active-boundary indicator-end))
+							    (set-marker active-boundary indicator-end)
+							    (codex-ide--ensure-active-input-prompt-spacing
+							     session))
 							  (codex-ide--session-metadata-put
 							   session
 							   :pending-output-indicator-marker
@@ -1976,7 +1981,8 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
         (codex-ide--set-item-result-header overlay)
         (codex-ide--set-item-result-body
          overlay
-         (or (overlay-get overlay :display-text) ""))))))
+         (or (overlay-get overlay :display-text) ""))
+        (codex-ide--ensure-active-input-prompt-spacing session)))))
 
 (defun codex-ide--append-command-output-text (session item-id text)
   "Append command output TEXT for ITEM-ID in SESSION."
