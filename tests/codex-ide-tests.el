@@ -647,6 +647,26 @@
       (should (string-suffix-p "> " (buffer-string)))
       (should (equal (codex-ide--current-input session) "")))))
 
+(ert-deftest codex-ide-finish-turn-refreshes-existing-prompt-placeholder ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "running"
+                    :current-turn-id "turn-1"
+                    :output-prefix-inserted t
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (codex-ide--refresh-input-placeholder session)
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Steer Codex..."))
+      (codex-ide--finish-turn session)
+      (should-not (codex-ide-session-current-turn-id session))
+      (should-not (codex-ide-session-output-prefix-inserted session))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Ask Codex...")))))
+
 (ert-deftest codex-ide-insert-input-prompt-clears-stale-undo-history ()
   (with-temp-buffer
     (codex-ide-session-mode)

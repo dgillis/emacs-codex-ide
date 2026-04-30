@@ -2971,7 +2971,9 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
       nil)
      (t
       (codex-ide--append-to-buffer buffer "\n\n")
-      (codex-ide--insert-input-prompt session)))))
+      (codex-ide--insert-input-prompt session)))
+    (when (codex-ide--input-prompt-active-p session)
+      (codex-ide--refresh-input-placeholder session))))
 
 (defun codex-ide--thread-read-display-user-text (text)
   "Normalize stored user TEXT for transcript display."
