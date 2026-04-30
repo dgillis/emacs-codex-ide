@@ -44,6 +44,25 @@
         (forward-line 1))
       count)))
 
+(defun codex-ide-test--input-placeholder-text (session)
+  "Return SESSION's visible input placeholder text, or nil."
+  (when-let* ((overlay (codex-ide--session-metadata-get
+                        session
+                        :input-placeholder-overlay))
+              (_ (overlay-buffer overlay))
+              (text (overlay-get overlay 'after-string)))
+    (substring-no-properties text)))
+
+(defun codex-ide-test--input-placeholder-overlay-live-p (session)
+  "Return non-nil when SESSION's placeholder overlay is attached."
+  (when-let ((overlay (codex-ide--session-metadata-get
+                       session
+                       :input-placeholder-overlay)))
+    (and (overlayp overlay)
+         (overlay-buffer overlay)
+         (overlay-start overlay)
+         (overlay-end overlay))))
+
 (ert-deftest codex-ide-app-server-command-includes-bridge-and-extra-flags ()
   (let ((codex-ide-cli-path "/tmp/codex")
         (codex-ide-cli-extra-flags "--model test-model --debug")
@@ -561,6 +580,72 @@
       (primitive-undo 1 (cdr buffer-undo-list))
       (should (equal (buffer-string) "> "))
       (should (equal (codex-ide-test--prompt-prefix-at-line) "> ")))))
+
+(ert-deftest codex-ide-input-prompt-shows-idle-placeholder-when-empty-and-unfocused ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (goto-char (point-min))
+      (codex-ide--refresh-input-placeholder session)
+      (should (codex-ide-test--input-placeholder-overlay-live-p session))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Ask Codex..."))
+      (should (get-text-property
+               0
+               'cursor
+               (overlay-get
+                (codex-ide--session-metadata-get
+                 session
+                 :input-placeholder-overlay)
+                'after-string)))
+      (should (equal (buffer-string) "> "))
+      (should (equal (codex-ide--current-input session) "")))))
+
+(ert-deftest codex-ide-input-prompt-keeps-placeholder-on-focus-and-hides-on-typing ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (switch-to-buffer (current-buffer))
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (goto-char (point-min))
+      (codex-ide--refresh-input-placeholder session)
+      (should (codex-ide-test--input-placeholder-overlay-live-p session))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Ask Codex..."))
+      (goto-char (marker-position (codex-ide-session-input-start-marker session)))
+      (codex-ide--refresh-input-placeholder session)
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Ask Codex..."))
+      (insert "h")
+      (goto-char (point-min))
+      (codex-ide--refresh-input-placeholder session)
+      (should-not (codex-ide-test--input-placeholder-text session))
+      (should (equal (buffer-string) "> h"))
+      (should (equal (codex-ide--current-input session) "h")))))
+
+(ert-deftest codex-ide-running-input-prompt-shows-steering-placeholder ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "running"
+                    :current-turn-id "turn-1")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (goto-char (point-min))
+      (codex-ide--refresh-input-placeholder session)
+      (should (codex-ide-test--input-placeholder-overlay-live-p session))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Steer Codex..."))
+      (should (string-suffix-p "> " (buffer-string)))
+      (should (equal (codex-ide--current-input session) "")))))
 
 (ert-deftest codex-ide-insert-input-prompt-clears-stale-undo-history ()
   (with-temp-buffer

@@ -87,6 +87,18 @@
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-prompt-placeholder-text "Ask Codex..."
+  "Placeholder text displayed in an empty idle Codex prompt."
+  :type 'string
+  :group 'codex-ide)
+
+;;;###autoload
+(defcustom codex-ide-steering-placeholder-text "Steer Codex..."
+  "Placeholder text displayed in an empty Codex prompt during a running turn."
+  :type 'string
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-session-baseline-prompt "
 - You are a Codex server running inside Emacs.
 - You can use MCP tools to inspect and interact with the running Emacs session.

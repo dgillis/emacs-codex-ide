@@ -92,6 +92,11 @@
   "Face used to distinguish submitted and active user prompts."
   :group 'codex-ide)
 
+(defface codex-ide-prompt-placeholder-face
+  '((t :inherit shadow :slant italic))
+  "Face used for active prompt placeholder text."
+  :group 'codex-ide)
+
 (defface codex-ide-output-separator-face
   '((t))
   "Face used for transcript separator rules."

@@ -70,6 +70,8 @@
 (defvar codex-ide-reasoning-effort)
 (defvar codex-ide-resume-summary-turn-limit)
 (defvar codex-ide-running-submit-action)
+(defvar codex-ide-prompt-placeholder-text)
+(defvar codex-ide-steering-placeholder-text)
 (defvar codex-ide-model)
 (defvar codex-ide-buffer-display-when-approval-required)
 (defvar codex-ide-display-buffer-pop-up-action)
@@ -485,9 +487,123 @@ inserted text."
 
 (defun codex-ide--delete-input-overlay (session)
   "Delete the active input overlay for SESSION, if any."
+  (codex-ide--delete-input-placeholder-overlay session)
   (when-let ((overlay (codex-ide-session-input-overlay session)))
     (delete-overlay overlay)
     (setf (codex-ide-session-input-overlay session) nil)))
+
+(defun codex-ide--delete-input-placeholder-overlay (session)
+  "Delete SESSION's active input placeholder overlay, if any."
+  (when-let ((overlay (codex-ide--session-metadata-get
+                       session
+                       :input-placeholder-overlay)))
+    (delete-overlay overlay)
+    (codex-ide--session-metadata-put
+     session
+     :input-placeholder-overlay
+     nil)))
+
+(defun codex-ide--input-placeholder-text (&optional session)
+  "Return the placeholder text for SESSION's current prompt state."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (if (and session
+           (or (codex-ide-session-current-turn-id session)
+               (codex-ide-session-output-prefix-inserted session)))
+      codex-ide-steering-placeholder-text
+    codex-ide-prompt-placeholder-text))
+
+(defun codex-ide--input-placeholder-display-string (&optional session)
+  "Return the propertized placeholder display string for SESSION."
+  (let ((text (propertize (codex-ide--input-placeholder-text session)
+                          'face
+                          'codex-ide-prompt-placeholder-face)))
+    (unless (string-empty-p text)
+      (add-text-properties 0 1 '(cursor t) text))
+    text))
+
+(defun codex-ide--input-placeholder-visible-p (&optional session)
+  "Return non-nil when SESSION's input placeholder should be visible."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (and (codex-ide--input-prompt-active-p session)
+       (string-empty-p (codex-ide--current-input session))))
+
+(defun codex-ide--ensure-input-placeholder-overlay (&optional session)
+  "Ensure SESSION has a display-only placeholder overlay at input start."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (unless session
+    (error "No Codex session available"))
+  (let* ((buffer (codex-ide-session-buffer session))
+         (marker (codex-ide-session-input-start-marker session))
+         (overlay (codex-ide--session-metadata-get
+                   session
+                   :input-placeholder-overlay)))
+    (unless (and (buffer-live-p buffer)
+                 (markerp marker)
+                 (eq (marker-buffer marker) buffer))
+      (codex-ide--delete-input-placeholder-overlay session)
+      (setq overlay nil))
+    (unless (and (overlayp overlay)
+                 (overlay-buffer overlay))
+      (when (overlayp overlay)
+        (delete-overlay overlay))
+      (codex-ide--session-metadata-put
+       session
+       :input-placeholder-overlay
+       nil)
+      (setq overlay nil))
+    (when (and (buffer-live-p buffer)
+               (markerp marker)
+               (eq (marker-buffer marker) buffer)
+               (not (overlayp overlay)))
+      (with-current-buffer buffer
+        (setq overlay (make-overlay
+                       (marker-position marker)
+                       (marker-position marker)
+                       buffer
+                       nil
+                       t))
+        (overlay-put overlay 'codex-ide-input-placeholder t)
+        (codex-ide--session-metadata-put
+         session
+         :input-placeholder-overlay
+         overlay)))
+    (when (and (overlayp overlay)
+               (buffer-live-p buffer)
+               (markerp marker)
+               (eq (marker-buffer marker) buffer)
+               (overlay-buffer overlay))
+      (move-overlay overlay
+                    (marker-position marker)
+                    (marker-position marker)
+                    buffer))
+    overlay))
+
+(defun codex-ide--refresh-input-placeholder (&optional session)
+  "Refresh SESSION's active prompt placeholder visibility and text."
+  (interactive)
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (when session
+    (let ((overlay (codex-ide--ensure-input-placeholder-overlay session)))
+      (when (overlayp overlay)
+        (overlay-put overlay 'before-string nil)
+        (overlay-put
+         overlay
+         'after-string
+         (and (codex-ide--input-placeholder-visible-p session)
+              (codex-ide--input-placeholder-display-string session)))))))
+
+(defun codex-ide--refresh-input-placeholder-after-change (&rest _args)
+  "Refresh the active prompt placeholder after editable buffer changes."
+  (when-let ((session (codex-ide--session-for-buffer (current-buffer))))
+    (codex-ide--refresh-input-placeholder session)))
+
+(defun codex-ide--setup-input-placeholder-hooks ()
+  "Install buffer-local hooks that keep prompt placeholder display current."
+  (add-hook 'post-command-hook #'codex-ide--refresh-input-placeholder nil t)
+  (add-hook 'after-change-functions
+            #'codex-ide--refresh-input-placeholder-after-change
+            nil
+            t))
 
 (defun codex-ide--insert-prompt-prefix ()
   "Insert a visible `> ' prompt prefix at point."
@@ -905,6 +1021,8 @@ Optionally seed it with INITIAL-TEXT."
              (overlay-put overlay 'face 'codex-ide-user-prompt-face)
              (overlay-put overlay 'field 'codex-ide-active-input)
              (setf (codex-ide-session-input-overlay session) overlay))
+           (codex-ide--setup-input-placeholder-hooks)
+           (codex-ide--refresh-input-placeholder session)
            (when moving
              (goto-char (point-max)))
            (codex-ide--sync-prompt-minor-mode session)))
@@ -984,7 +1102,8 @@ When INITIAL-TEXT is non-nil, seed a newly inserted prompt with it."
       (let ((inhibit-read-only t))
         (goto-char marker)
         (codex-ide-renderer-replace-region marker (point-max) text)
-        (goto-char (point-max))))))
+        (goto-char (point-max))
+        (codex-ide--refresh-input-placeholder session)))))
 
 (defun codex-ide--browse-prompt-history (direction)
   "Browse prompt history in DIRECTION for the current Codex session.
