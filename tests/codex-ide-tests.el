@@ -2774,6 +2774,7 @@
 						  (reasoningOutputTokens . 68)))))
 				      (with-current-buffer (find-file-noselect file-path)
 					(setq-local default-directory (file-name-as-directory project-dir))
+					(rename-buffer "focused-source-buffer" t)
 					(goto-char (point-min))
 					(forward-line 0)
 					(forward-char 1)
@@ -2783,7 +2784,7 @@
 					(should
 					 (equal
 					  (format-mode-line header-line-format)
-					  "Focus: codex-ide-transcript.el:1 | Model: gpt-5.4 | Quota: 15%/5h 3%/wk (prolite) | Context: 305.5k/258.4k | Last[in,cache,out,reason]: 42.8k,26.1k,244,68"))))))))
+					  "Focus: focused-source-buffer | Model: gpt-5.4 | Quota: 15%/5h 3%/wk (prolite) | Context: 305.5k/258.4k | Last[in,cache,out,reason]: 42.8k,26.1k,244,68"))))))))
 
   (ert-deftest codex-ide-header-line-shows-model-name ()
     (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -3691,13 +3692,13 @@
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
 				 (codex-ide-test-with-fake-processes
-					  (let ((session (codex-ide--create-process-session)))
-					    (codex-ide--register-submitted-turn-prompt session "submitted prompt")
-					    (setf (codex-ide-session-current-turn-id session) "turn-empty")
-					    (should-error
-					     (codex-ide-diff-data-combined-turn-diff-text
-                                              session)
-					     :type 'user-error))))))
+				  (let ((session (codex-ide--create-process-session)))
+				    (codex-ide--register-submitted-turn-prompt session "submitted prompt")
+				    (setf (codex-ide-session-current-turn-id session) "turn-empty")
+				    (should-error
+				     (codex-ide-diff-data-combined-turn-diff-text
+                                      session)
+				     :type 'user-error))))))
 
 (ert-deftest codex-ide-diff-data-combined-turn-diff-text-uses-tracked-completed-turn-when-idle ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
@@ -4631,12 +4632,12 @@
 				    (setq session (codex-ide--create-process-session))
 				    (should-error
 				     (codex-ide--restore-thread-read-transcript
-					      session
-					      '((thread . ((id . "thread-unsupported")
-							   (turns . (((id . "turn-1")
-								      (items . (((type . "unknownItem")
-										 (id . "item-1")))))))))))
-					     :type 'error)))))
+				      session
+				      '((thread . ((id . "thread-unsupported")
+						   (turns . (((id . "turn-1")
+							      (items . (((type . "unknownItem")
+									 (id . "item-1")))))))))))
+				     :type 'error)))))
 
   (ert-deftest codex-ide-restore-thread-read-transcript-replays-command-output ()
     (let* ((project-dir (codex-ide-test--make-temp-project))

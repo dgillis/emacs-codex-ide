@@ -763,9 +763,8 @@ When DRAFT is nil, preserve the current active prompt text."
       (let* ((context (with-current-buffer buffer
                         (codex-ide--get-active-buffer-context)))
              (focus (if context
-                        (format "Focus: %s:%s"
-                                (codex-ide--buffer-context-display-file context)
-                                (alist-get 'line context))
+                        (format "Focus: %s"
+                                (alist-get 'buffer-name context))
                       "Focus: none"))
              (token-context-summary
               (codex-ide--format-token-usage-context-summary
