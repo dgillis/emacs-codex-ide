@@ -1,4 +1,4 @@
-;;; codex-ide-diff-tests.el --- Tests for codex-ide diffs -*- lexical-binding: t; -*-
+;;; codex-ide-diff-view-tests.el --- Tests for codex-ide diff views -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 
@@ -76,22 +76,6 @@
   (should-error (codex-ide-diff-open-buffer nil) :type 'user-error)
   (should-error (codex-ide-diff-open-buffer "  \n") :type 'user-error))
 
-(ert-deftest codex-ide-combine-diff-texts-trims-and-joins-blocks ()
-  (should
-   (equal (codex-ide--combine-diff-texts
-           '("diff --git a/foo b/foo\n@@ -1 +1 @@\n-old\n+new\n"
-             nil
-             "   \n"
-             "diff --git a/bar b/bar\n@@ -1 +1 @@\n-before\n+after  "))
-          (concat
-           "diff --git a/foo b/foo\n@@ -1 +1 @@\n-old\n+new"
-           "\n\n"
-           "diff --git a/bar b/bar\n@@ -1 +1 @@\n-before\n+after"))))
-
-(ert-deftest codex-ide-combine-diff-texts-returns-nil-when-empty ()
-  (should-not (codex-ide--combine-diff-texts nil))
-  (should-not (codex-ide--combine-diff-texts '(" \n" nil))))
-
 (ert-deftest codex-ide-diff-open-combined-turn-buffer-uses-dedicated-buffer-name ()
   (let* ((session-buffer (generate-new-buffer "*codex[test]*"))
          (session (make-instance 'codex-ide-session :buffer session-buffer))
@@ -99,7 +83,7 @@
     (unwind-protect
         (cl-letf (((symbol-function 'codex-ide--session-for-current-project)
                    (lambda () session))
-                  ((symbol-function 'codex-ide-transcript-combined-turn-diff-text)
+                  ((symbol-function 'codex-ide-diff-data-combined-turn-diff-text)
                    (lambda (&optional resolved-session turn-id)
                      (should (eq resolved-session session))
                      (should-not turn-id)
@@ -115,4 +99,4 @@
       (when (buffer-live-p session-buffer)
         (kill-buffer session-buffer)))))
 
-;;; codex-ide-diff-tests.el ends here
+;;; codex-ide-diff-view-tests.el ends here

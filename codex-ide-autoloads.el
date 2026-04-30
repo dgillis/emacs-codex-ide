@@ -456,16 +456,20 @@ Major mode for Codex app-server session buffers.
 (register-definition-prefixes "codex-ide-config" '("codex-ide-config-"))
 
 
-;;; Generated autoloads from codex-ide-diff.el
+;;; Generated autoloads from codex-ide-diff-data.el
 
-(autoload 'codex-ide-diff-open-combined-turn-buffer "codex-ide-diff" "\
+(register-definition-prefixes "codex-ide-diff-data" '("codex-ide-"))
+
+
+;;; Generated autoloads from codex-ide-diff-view.el
+
+(autoload 'codex-ide-diff-open-combined-turn-buffer "codex-ide-diff-view" "\
 Open the combined diff for SESSION TURN-ID in a standalone diff buffer.
 When TURN-ID is nil, prefer the running turn and otherwise use the most recent
 completed turn.
 
 (fn &optional SESSION TURN-ID)" t)
-(register-definition-prefixes "codex-ide-diff" '("codex-ide-"))
-
+(register-definition-prefixes "codex-ide-diff-view" '("codex-ide-diff-"))
 
 ;;; End of scraped data
 

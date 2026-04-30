@@ -1,4 +1,4 @@
-;;; codex-ide-diff.el --- Diff buffers for codex-ide -*- lexical-binding: t; -*-
+;;; codex-ide-diff-view.el --- Diff buffer views for codex-ide -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
 
@@ -16,14 +16,15 @@
 ;;; Code:
 
 (require 'diff-mode)
+(require 'codex-ide-diff-data)
 (require 'subr-x)
 
 (declare-function codex-ide-display-buffer "codex-ide-window"
                   (buffer &optional action))
 (declare-function codex-ide--session-for-current-project "codex-ide-session" ())
 (declare-function codex-ide-session-buffer "codex-ide-core" (session))
-(declare-function codex-ide-transcript-combined-turn-diff-text "codex-ide-transcript"
-                  (&optional session turn-id))
+(declare-function codex-ide-diff-data-combined-turn-diff-text
+                  "codex-ide-diff-data" (session &optional turn-id))
 
 (defvar codex-ide--display-buffer-other-window-pop-up-action)
 
@@ -68,18 +69,6 @@
               (buffer-name session-buffer)
             session-buffer)))
 
-(defun codex-ide--combine-diff-texts (texts)
-  "Return TEXTS combined into one diff string, or nil when empty."
-  (let ((normalized
-         (delq nil
-               (mapcar (lambda (text)
-                         (when (and (stringp text)
-                                    (not (string-empty-p (string-trim text))))
-                           (string-trim-right text)))
-                       texts))))
-    (when normalized
-      (string-join normalized "\n\n"))))
-
 (defun codex-ide-diff-open-buffer (diff-text &optional buffer-name)
   "Display DIFF-TEXT in a dedicated `diff-mode' buffer.
 When BUFFER-NAME is non-nil, reuse that buffer.
@@ -113,7 +102,9 @@ completed turn."
   (interactive)
   (let* ((session (or session (codex-ide--session-for-current-project)))
          (buffer (and session (codex-ide-session-buffer session)))
-         (diff-text (codex-ide-transcript-combined-turn-diff-text session turn-id)))
+         (diff-text (codex-ide-diff-data-combined-turn-diff-text
+                     session
+                     turn-id)))
     (unless session
       (user-error "No Codex session available"))
     (codex-ide-diff-open-buffer
@@ -121,6 +112,6 @@ completed turn."
      (codex-ide-diff-combined-buffer-name-for-session
       (or buffer "*codex*")))))
 
-(provide 'codex-ide-diff)
+(provide 'codex-ide-diff-view)
 
-;;; codex-ide-diff.el ends here
+;;; codex-ide-diff-view.el ends here

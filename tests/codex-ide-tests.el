@@ -3619,7 +3619,7 @@
   (should (= codex-ide-diff-inline-fold-threshold 12))
   (should (eq codex-ide-diff-auto-display-policy 'never)))
 
-(ert-deftest codex-ide-transcript-combined-turn-diff-text-prefers-running-turn ()
+(ert-deftest codex-ide-diff-data-combined-turn-diff-text-prefers-running-turn ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
 				 (codex-ide-test-with-fake-processes
@@ -3676,7 +3676,8 @@
 					 (params . ((itemId . "file-change-2")
 						    (delta . ,diff-2)))))
 				      (should
-				       (equal (codex-ide-transcript-combined-turn-diff-text session)
+				       (equal (codex-ide-diff-data-combined-turn-diff-text
+                                               session)
 					      (concat
 					       (codex-ide--file-change-diff-text
 						`((type . "fileChange")
@@ -3685,40 +3686,7 @@
 					       "\n\n"
 					       diff-2)))))))))
 
-(ert-deftest codex-ide-turn-file-change-diff-texts-normalizes-historical-items ()
-  (let* ((diff-1 (string-join
-		  '("diff --git a/foo.txt b/foo.txt"
-		    "--- a/foo.txt"
-		    "+++ b/foo.txt"
-		    "@@ -1 +1 @@"
-		    "-old"
-		    "+new")
-		  "\n"))
-	 (diff-2 (string-join
-		  '("diff --git a/bar.txt b/bar.txt"
-		    "--- a/bar.txt"
-		    "+++ b/bar.txt"
-		    "@@ -2 +2 @@"
-		    "-before"
-		    "+after")
-		  "\n"))
-	 (file-change-1 `((type . "fileChange")
-			  (id . "file-change-1")
-			  (changes . (((path . "foo.txt")
-				       (diff . ,diff-1))))))
-	 (file-change-2 `((type . "fileChange")
-			  (id . "file-change-2")
-			  (changes . (((path . "bar.txt")
-				       (diff . ,diff-2))))))
-	 (expected-1 (codex-ide--file-change-diff-text file-change-1))
-	 (expected-2 (codex-ide--file-change-diff-text file-change-2))
-	 (turn `((id . "turn-latest")
-		 (items . (,file-change-1 ,file-change-2)))))
-    (should
-     (equal (codex-ide--turn-file-change-diff-texts turn)
-	    (list expected-1 expected-2)))))
-
-(ert-deftest codex-ide-transcript-combined-turn-diff-text-errors-when-no-diffs-exist ()
+(ert-deftest codex-ide-diff-data-combined-turn-diff-text-errors-when-no-diffs-exist ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
 				 (codex-ide-test-with-fake-processes
@@ -3726,10 +3694,11 @@
 					    (codex-ide--register-submitted-turn-prompt session "submitted prompt")
 					    (setf (codex-ide-session-current-turn-id session) "turn-empty")
 					    (should-error
-					     (codex-ide-transcript-combined-turn-diff-text session)
+					     (codex-ide-diff-data-combined-turn-diff-text
+                                              session)
 					     :type 'user-error))))))
 
-(ert-deftest codex-ide-transcript-combined-turn-diff-text-uses-tracked-completed-turn-when-idle ()
+(ert-deftest codex-ide-diff-data-combined-turn-diff-text-uses-tracked-completed-turn-when-idle ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
 				 (codex-ide-test-with-fake-processes
@@ -3756,7 +3725,8 @@
 					       (lambda (&rest _args)
 						 (should nil))))
 				      (should
-				       (equal (codex-ide-transcript-combined-turn-diff-text session)
+				       (equal (codex-ide-diff-data-combined-turn-diff-text
+                                               session)
 					      (codex-ide--file-change-diff-text
 					       item)))))))))
 

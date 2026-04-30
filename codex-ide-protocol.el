@@ -282,6 +282,12 @@
       (alist-get 'turns (alist-get 'thread thread-read))
       []))
 
+(defun codex-ide--thread-read-items (turn)
+  "Return ordered transcript items for TURN."
+  (or (alist-get 'items turn)
+      (alist-get 'messages turn)
+      []))
+
 (defun codex-ide--thread-read--message-text (message)
   "Extract readable text from a MESSAGE-like alist."
   (let ((text (or (alist-get 'text message)
