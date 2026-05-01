@@ -893,6 +893,41 @@
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
+(ert-deftest codex-ide-streaming-append-preserves-steering-edit-point ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-streaming-edit-point*")))
+      (unwind-protect
+          (progn
+            (switch-to-buffer buffer)
+            (erase-buffer)
+            (codex-ide-session-mode)
+            (let ((session (make-codex-ide-session
+                            :buffer buffer
+                            :status "idle"
+                            :item-states (make-hash-table :test 'equal))))
+              (setq-local codex-ide--session session)
+              (codex-ide--insert-input-prompt session "submitted prompt")
+              (codex-ide--begin-turn-display session)
+              (codex-ide--replace-current-input session "alpha beta gamma")
+              (let* ((edit-pos (+ (marker-position
+                                   (codex-ide-session-input-start-marker session))
+                                  6))
+                     (expected-point (copy-marker edit-pos)))
+                (unwind-protect
+                    (progn
+                      (goto-char edit-pos)
+                      (set-window-point (selected-window) edit-pos)
+                      (codex-ide--append-to-buffer buffer "streamed output\n")
+                      (should (= (point) (marker-position expected-point)))
+                      (should (= (window-point)
+                                 (marker-position expected-point)))
+                      (should (< (window-point)
+                                 (codex-ide--input-end-position session))))
+                  (set-marker expected-point nil)))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
 (ert-deftest codex-ide-streaming-append-preserves-scrolled-transcript-window ()
   (save-window-excursion
     (delete-other-windows)

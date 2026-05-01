@@ -255,6 +255,20 @@ at the bottom of the live session."
         (codex-ide--input-end-position session)
       (point-max))))
 
+(defun codex-ide--input-edit-point-position (point-pos)
+  "Return POINT-POS when it is an active input edit position.
+When point is at the active input end, return nil so transcript tail following
+can keep using the current tail position."
+  (let ((session (codex-ide--session-for-buffer (current-buffer))))
+    (when (and session (codex-ide--input-prompt-active-p session))
+      (let ((input-start (codex-ide-session-input-start-marker session))
+            (input-end (codex-ide--input-end-position session)))
+        (when (and (markerp input-start)
+                   (eq (marker-buffer input-start) (current-buffer))
+                   (>= point-pos (marker-position input-start))
+                   (< point-pos input-end))
+          point-pos)))))
+
 (defun codex-ide--capture-transcript-window-positions (&optional anchor)
   "Capture current-buffer window positions relative to transcript ANCHOR."
   (mapcar
@@ -280,22 +294,25 @@ at the bottom of the live session."
                      (eq (window-buffer window) (current-buffer))
                      (markerp point-marker)
                      (marker-buffer point-marker))
-            (if follow-anchor
-	        (set-window-point window tail-pos)
-	      (when (and (markerp start-marker)
-	                 (marker-buffer start-marker))
-	        (set-window-start window (marker-position start-marker) t))
-	      (let* ((point-pos (marker-position point-marker))
-	             (input-end (let ((session (codex-ide--session-for-buffer
-	                                        (current-buffer))))
-	                          (and session
-	                               (codex-ide--input-prompt-active-p session)
-	                               (codex-ide--input-end-position session)))))
-	        (set-window-point
-	         window
-	         (if (and input-end (> point-pos input-end))
-	             input-end
-	           point-pos)))))
+            (let ((point-pos (marker-position point-marker)))
+              (if follow-anchor
+	          (set-window-point
+                   window
+                   (or (codex-ide--input-edit-point-position point-pos)
+                       tail-pos))
+	        (when (and (markerp start-marker)
+	                   (marker-buffer start-marker))
+	          (set-window-start window (marker-position start-marker) t))
+	        (let ((input-end (let ((session (codex-ide--session-for-buffer
+	                                         (current-buffer))))
+	                           (and session
+	                                (codex-ide--input-prompt-active-p session)
+	                                (codex-ide--input-end-position session)))))
+	          (set-window-point
+	           window
+	           (if (and input-end (> point-pos input-end))
+	               input-end
+	             point-pos))))))
         (when (markerp start-marker)
           (set-marker start-marker nil))
         (when (markerp point-marker)
