@@ -380,6 +380,24 @@ theme switches or file reloads in a live Emacs session."
       (add-text-properties (line-beginning-position) (1+ (line-beginning-position))
                            `(,codex-ide-prompt-start-property t)))))
 
+(defun codex-ide-renderer-insert-user-prompt-top-padding ()
+  "Insert the face-bearing padding line before a user prompt.
+Return (START . END)."
+  (let ((start (point)))
+    (insert (propertize "\n"
+                        'face 'codex-ide-user-prompt-face
+                        'read-only t))
+    (cons start (point))))
+
+(defun codex-ide-renderer-insert-user-prompt-bottom-padding ()
+  "Insert the face-bearing padding after a user prompt.
+Return (START . END)."
+  (let ((start (point)))
+    (insert (propertize "\n\n"
+                        'face 'codex-ide-user-prompt-face
+                        'read-only t))
+    (cons start (point))))
+
 (defun codex-ide-renderer-insert-input-prompt (&optional initial-text separate-output-p)
   "Insert a writable prompt at point and return prompt markers.
 When INITIAL-TEXT is non-nil, seed the editable region with it.
@@ -796,16 +814,17 @@ PROPERTIES is appended to the inserted region.  Return (START . END)."
 
 (defun codex-ide-renderer-insert-restored-user-message (text)
   "Insert restored user TEXT at point and return (START . END)."
-  (let ((spacing-range (codex-ide-renderer-insert-output-spacing)))
-    (add-text-properties (car spacing-range) (cdr spacing-range)
-                         '(face codex-ide-user-prompt-face)))
-  (let ((prompt-start (point)))
+  (codex-ide-renderer-insert-output-spacing)
+  (let ((display-start (point))
+        prompt-start)
+    (codex-ide-renderer-insert-user-prompt-top-padding)
+    (setq prompt-start (point))
     (codex-ide-renderer-insert-prompt-prefix)
     (insert text)
     (codex-ide-renderer-style-user-prompt-region prompt-start (point))
-    (codex-ide-renderer-freeze-region prompt-start (point))
-    (insert (propertize "\n\n" 'face 'codex-ide-user-prompt-face))
-    (codex-ide-renderer-freeze-region prompt-start (point))
+    (codex-ide-renderer-freeze-region display-start (point))
+    (codex-ide-renderer-insert-user-prompt-bottom-padding)
+    (codex-ide-renderer-freeze-region display-start (point))
     (cons prompt-start (point))))
 
 (defun codex-ide-renderer-insert-interactive-request-shell (title render-body)

@@ -5371,8 +5371,13 @@
 					(concat
 					 (regexp-quote
 					  "If you want, I can also give this as the exact SQL-ish schema shape with field types/nullability.")
-					 "\n\n> What is MyTable's primary key\\?")
-					(buffer-string))))))))
+					 "\n\n\n> What is MyTable's primary key\\?")
+					(buffer-string)))
+				      (goto-char (point-min))
+				      (search-forward "> What is MyTable's primary key?")
+				      (should-not (get-text-property (- (match-beginning 0) 2) 'face))
+				      (should (eq (get-text-property (1- (match-beginning 0)) 'face)
+						  'codex-ide-user-prompt-face)))))))
 
   (ert-deftest codex-ide-restore-thread-read-transcript-keeps-prompt-face-after-separator ()
     (let* ((project-dir (codex-ide-test--make-temp-project))

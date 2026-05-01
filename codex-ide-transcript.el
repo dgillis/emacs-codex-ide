@@ -1047,9 +1047,7 @@ Optionally seed it with INITIAL-TEXT."
                                  (marker-position
                                   (plist-get render-state :prompt-start)))))
              (goto-char (plist-get render-state :prompt-start))
-             (insert (propertize "\n"
-                                 'face 'codex-ide-user-prompt-face
-                                 'read-only t))
+             (codex-ide-renderer-insert-user-prompt-top-padding)
              (set-marker (plist-get render-state :prompt-start) (point))
              (codex-ide--session-metadata-put
               session
@@ -1071,9 +1069,7 @@ Optionally seed it with INITIAL-TEXT."
            (setf (codex-ide-session-input-start-marker session)
                  (plist-get render-state :input-start))
            (let ((input-end-pos (point)))
-             (insert (propertize "\n\n"
-                                 'face 'codex-ide-user-prompt-face
-                                 'read-only t))
+             (codex-ide-renderer-insert-user-prompt-bottom-padding)
              (codex-ide--session-metadata-put
               session
               :input-end-marker
