@@ -59,6 +59,23 @@
     map)
   "Keymap used for markdown file links.")
 
+(defconst codex-ide-renderer--file-link-nonsticky-properties
+  '(action
+    button
+    category
+    codex-ide-column
+    codex-ide-line
+    codex-ide-markdown-link-original
+    codex-ide-markdown
+    codex-ide-path
+    display
+    face
+    follow-link
+    help-echo
+    keymap
+    mouse-face)
+  "Properties that should not stick to text inserted after file links.")
+
 (define-key codex-ide-renderer-link-keymap
             (kbd "M-<return>")
             #'codex-ide-renderer-open-file-link-other-window)
@@ -1228,6 +1245,14 @@ Return a plist containing inserted markers and updated writable ranges."
               (goto-char pos)
               (insert original)))
            ((and (get-text-property pos 'codex-ide-markdown)
+                 (get-text-property pos 'codex-ide-markdown-link-original))
+            (let ((original (get-text-property
+                             pos
+                             'codex-ide-markdown-link-original)))
+              (delete-region pos next)
+              (goto-char pos)
+              (insert original)))
+           ((and (get-text-property pos 'codex-ide-markdown)
                  (get-text-property pos 'codex-ide-markdown-code-fontified))
             (remove-text-properties
              pos next
@@ -1243,6 +1268,7 @@ Return a plist containing inserted markers and updated writable ranges."
 			  codex-ide-line nil
 			  codex-ide-column nil
 			  codex-ide-table-link nil
+			  codex-ide-markdown-link-original nil
 			  codex-ide-markdown-table-original nil
 			  codex-ide-markdown-table-render-width nil
 			  codex-ide-markdown-code-content nil
@@ -1265,6 +1291,7 @@ Return a plist containing inserted markers and updated writable ranges."
 			      codex-ide-line nil
 			      codex-ide-column nil
 			      codex-ide-table-link nil
+			      codex-ide-markdown-link-original nil
 			      codex-ide-markdown-table-original nil
 			      codex-ide-markdown-table-render-width nil
 			      codex-ide-markdown-code-content nil
@@ -1277,11 +1304,14 @@ Return a plist containing inserted markers and updated writable ranges."
 
 (defun codex-ide-renderer--clear-streaming-deferred-markdown (start end)
   "Reveal delayed streaming markdown between START and END."
-  (remove-text-properties
-   start end
-   '(invisible nil
-	       isearch-open-invisible nil
-	       codex-ide-markdown-deferred nil)))
+  (let ((bounded-start (min (max start (point-min)) (point-max)))
+        (bounded-end (min (max end (point-min)) (point-max))))
+    (when (< bounded-start bounded-end)
+      (remove-text-properties
+       bounded-start bounded-end
+       '(invisible nil
+		   isearch-open-invisible nil
+		   codex-ide-markdown-deferred nil)))))
 
 (defun codex-ide-renderer--reveal-streaming-deferred-markdown (buffer)
   "Reveal delayed streaming markdown in BUFFER."
@@ -1358,16 +1388,22 @@ intentionally ignored."
         (goto-char line-start)
         (while (re-search-forward
                 codex-ide-renderer--markdown-link-pattern
-                (marker-position line-end-marker)
+                (min (marker-position line-end-marker) (point-max))
                 t)
-          (unless (get-text-property (match-beginning 1) 'codex-ide-markdown)
-            (codex-ide-renderer-maybe-render-markdown-region
-             (match-beginning 1)
-             (match-end 1))))
+          (let ((next-marker (copy-marker (match-end 1) t)))
+            (unless (get-text-property (match-beginning 1) 'codex-ide-markdown)
+              (codex-ide-renderer-maybe-render-markdown-region
+               (match-beginning 1)
+               (match-end 1)))
+            (goto-char
+             (min (marker-position line-end-marker)
+                  (point-max)
+                  (max (point) (marker-position next-marker))))
+            (set-marker next-marker nil)))
         (goto-char line-start)
         (while (re-search-forward
                 codex-ide-renderer--markdown-inline-code-pattern
-                (marker-position line-end-marker)
+                (min (marker-position line-end-marker) (point-max))
                 t)
           (unless (get-text-property (match-beginning 0) 'codex-ide-markdown)
             (codex-ide-renderer-maybe-render-markdown-region
@@ -1474,17 +1510,21 @@ intentionally ignored."
 (defun codex-ide-renderer--defer-streaming-markdown-tail (start end)
   "Temporarily hide trailing incomplete streaming markdown."
   (codex-ide-renderer--without-undo-recording
-   (let ((inhibit-read-only t))
-     (codex-ide-renderer--clear-streaming-deferred-markdown start end)
+   (let ((inhibit-read-only t)
+         (bounded-start (min (max start (point-min)) (point-max)))
+         (bounded-end (min (max end (point-min)) (point-max))))
+     (codex-ide-renderer--clear-streaming-deferred-markdown
+      bounded-start
+      bounded-end)
      (if-let ((span (or (codex-ide-renderer--streaming-trailing-table-source-span
-                         start
-                         end)
+                         bounded-start
+                         bounded-end)
                         (codex-ide-renderer--streaming-deferred-table-row-span
-                         start
-                         end)
+                         bounded-start
+                         bounded-end)
                         (codex-ide-renderer--streaming-deferred-markdown-span
-                         start
-                         end))))
+                         bounded-start
+                         bounded-end))))
          (progn
            (add-to-invisibility-spec
             codex-ide-renderer--streaming-deferred-invisibility)
@@ -2418,25 +2458,29 @@ TABLE-MAX-WIDTH is the effective table width to use for this pass."
                      (get-text-property (1- (match-end 1)) 'codex-ide-markdown))
            (let* ((match-start (match-beginning 1))
                   (match-end (match-end 1))
+                  (original (match-string-no-properties 1))
                   (label (match-string-no-properties 2))
                   (display-label (codex-ide-renderer--normalize-markdown-link-label label))
                   (target (match-string-no-properties 3))
                   (parsed (codex-ide-renderer-parse-file-link-target target)))
              (when parsed
-               (make-text-button
-                match-start match-end
+               (delete-region match-start match-end)
+               (goto-char match-start)
+               (insert display-label)
+	       (make-text-button
+                match-start (point)
                 'action #'codex-ide-renderer-open-file-link
                 'follow-link t
                 'keymap codex-ide-renderer-link-keymap
                 'help-echo target
                 'face 'link
                 'codex-ide-markdown t
+                'codex-ide-markdown-link-original original
                 'codex-ide-path (nth 0 parsed)
                 'codex-ide-line (nth 1 parsed)
-                'codex-ide-column (nth 2 parsed))
-               (add-text-properties
-                match-start match-end
-                `(display ,display-label))))))
+                'codex-ide-column (nth 2 parsed)
+                'rear-nonsticky
+                codex-ide-renderer--file-link-nonsticky-properties)))))
        (goto-char start)
        (while (re-search-forward
                codex-ide-renderer--markdown-inline-code-pattern
@@ -2652,7 +2696,7 @@ When STATE-MARKER is non-nil, it tracks the next dirty position."
                   (set-marker state-marker (marker-position next-marker)))
                 (prog1 (marker-position next-marker)
                   (set-marker next-marker nil))))
-          (let ((current-end (marker-position end-marker)))
+          (let ((current-end (min (marker-position end-marker) (point-max))))
             (codex-ide-renderer--render-streaming-open-fenced-code-block
              start
              current-end)
