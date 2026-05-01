@@ -564,7 +564,7 @@ theme switches or file reloads in a live Emacs session."
     'field 'codex-ide-prompt-prefix
     codex-ide-prompt-start-property t
     'read-only t
-    'rear-nonsticky '(field read-only)
+    'rear-nonsticky `(field read-only ,codex-ide-prompt-start-property)
     'front-sticky '(field read-only))))
 
 (defun codex-ide-renderer-line-has-prompt-start-p (&optional pos)
@@ -573,7 +573,10 @@ theme switches or file reloads in a live Emacs session."
     (when pos
       (goto-char pos))
     (beginning-of-line)
-    (get-text-property (point) codex-ide-prompt-start-property)))
+    (and (get-text-property (point) codex-ide-prompt-start-property)
+         (or (bobp)
+             (not (get-text-property (1- (point))
+                                     codex-ide-prompt-start-property))))))
 
 (defun codex-ide-renderer-style-user-prompt-region (start end)
   "Apply user prompt styling from START to END."

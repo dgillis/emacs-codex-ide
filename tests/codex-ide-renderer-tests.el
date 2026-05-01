@@ -850,6 +850,22 @@ BODY may refer to the lexical variable `session'."
       (should (get-text-property (marker-position prompt-start)
                                  'codex-ide-prompt-start)))))
 
+(ert-deftest codex-ide-renderer-input-text-does-not-inherit-prompt-start ()
+  (with-temp-buffer
+    (let* ((result (codex-ide-renderer-insert-input-prompt "draft"))
+           (input-start (marker-position (plist-get result :input-start))))
+      (should-not (get-text-property input-start 'codex-ide-prompt-start)))))
+
+(ert-deftest codex-ide-renderer-line-prompt-start-ignores-continuation-lines ()
+  (with-temp-buffer
+    (insert "> first line\nsecond line\n")
+    (add-text-properties (point-min) (point-max)
+                         '(codex-ide-prompt-start t))
+    (goto-char (point-min))
+    (should (codex-ide-renderer-line-has-prompt-start-p))
+    (forward-line 1)
+    (should-not (codex-ide-renderer-line-has-prompt-start-p))))
+
 (ert-deftest codex-ide-renderer-input-prompt-prefix-is-read-only ()
   (with-temp-buffer
     (let* ((result (codex-ide-renderer-insert-input-prompt "draft"))
