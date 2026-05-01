@@ -99,6 +99,14 @@
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-placeholder-ellipsis-animation-interval 0.5
+  "Seconds between animated trailing ellipsis frames in busy prompt help.
+When nil or zero, busy prompt help displays its text unchanged."
+  :type '(choice (const :tag "Disabled" nil)
+                 (number :tag "Seconds"))
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-status-placeholder-text-alist
   '(("approval" . "Seeking approval...")
     ("interrupting" . "Interrupting..."))

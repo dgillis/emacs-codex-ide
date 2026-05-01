@@ -662,6 +662,39 @@
       (should (string-suffix-p "\n> \n\n" (buffer-string)))
       (should (equal (codex-ide--current-input session) "")))))
 
+(ert-deftest codex-ide-busy-input-placeholder-animates-trailing-ellipsis ()
+  (let ((codex-ide-placeholder-ellipsis-animation-interval 999))
+    (with-temp-buffer
+      (codex-ide-session-mode)
+      (switch-to-buffer (current-buffer))
+      (let ((session (make-codex-ide-session
+                      :buffer (current-buffer)
+                      :status "running"
+                      :current-turn-id "turn-1")))
+        (unwind-protect
+            (progn
+              (setq-local codex-ide--session session)
+              (codex-ide--insert-input-prompt session nil)
+              (codex-ide--refresh-input-placeholder session)
+              (should (timerp (codex-ide--session-metadata-get
+                               session
+                               :input-placeholder-animation-timer)))
+              (should (equal (codex-ide-test--input-placeholder-text session)
+                             "Running..."))
+              (codex-ide--advance-input-placeholder-animation session)
+              (should (equal (codex-ide-test--input-placeholder-text session)
+                             "Running."))
+              (codex-ide--advance-input-placeholder-animation session)
+              (should (equal (codex-ide-test--input-placeholder-text session)
+                             "Running.."))
+              (codex-ide--advance-input-placeholder-animation session)
+              (should (equal (codex-ide-test--input-placeholder-text session)
+                             "Running..."))
+              (codex-ide--advance-input-placeholder-animation session)
+              (should (equal (codex-ide-test--input-placeholder-text session)
+                             "Running")))
+          (codex-ide--stop-input-placeholder-animation session))))))
+
 (ert-deftest codex-ide-thread-status-active-shows-working-placeholder ()
   (with-temp-buffer
     (codex-ide-session-mode)

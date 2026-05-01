@@ -72,6 +72,7 @@
 (defvar codex-ide-resume-summary-turn-limit)
 (defvar codex-ide-running-submit-action)
 (defvar codex-ide-prompt-placeholder-text)
+(defvar codex-ide-placeholder-ellipsis-animation-interval)
 (defvar codex-ide-status-placeholder-text-alist)
 (defvar codex-ide-steering-placeholder-text)
 (defvar codex-ide-model)
@@ -526,6 +527,7 @@ inserted text."
 
 (defun codex-ide--delete-input-placeholder-overlay (session)
   "Delete SESSION's active input placeholder overlay, if any."
+  (codex-ide--stop-input-placeholder-animation session)
   (when-let ((overlay (codex-ide--session-metadata-get
                        session
                        :input-placeholder-overlay)))
@@ -555,11 +557,47 @@ inserted text."
             codex-ide-steering-placeholder-text)
       codex-ide-prompt-placeholder-text)))
 
+(defconst codex-ide--input-placeholder-ellipsis-frames
+  '("." ".." "..." "")
+  "Display frames for animated busy prompt help ellipses.")
+
+(defun codex-ide--input-placeholder-animation-enabled-p ()
+  "Return non-nil when busy prompt help ellipsis animation is enabled."
+  (and (numberp codex-ide-placeholder-ellipsis-animation-interval)
+       (> codex-ide-placeholder-ellipsis-animation-interval 0)))
+
+(defun codex-ide--input-placeholder-busy-p (&optional session)
+  "Return non-nil when SESSION's prompt help represents active work."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (and session
+       (or (codex-ide-session-current-turn-id session)
+           (codex-ide-session-output-prefix-inserted session)
+           (codex-ide--session-metadata-get
+            session
+            :pending-output-indicator-text))))
+
+(defun codex-ide--input-placeholder-animated-text (session text)
+  "Return TEXT with its trailing ellipsis frame applied for SESSION."
+  (if-let ((frame (and (codex-ide--input-placeholder-busy-p session)
+                       (string-suffix-p "..." text)
+                       (codex-ide--session-metadata-get
+                        session
+                        :input-placeholder-ellipsis-frame))))
+      (concat (substring text 0 -3)
+              (nth (mod frame
+                        (length codex-ide--input-placeholder-ellipsis-frames))
+                   codex-ide--input-placeholder-ellipsis-frames))
+    text))
+
 (defun codex-ide--input-placeholder-display-string (&optional session)
   "Return the propertized placeholder display string for SESSION."
-  (let ((text (propertize (codex-ide--input-placeholder-text session)
-                          'face
-                          'codex-ide-prompt-placeholder-face)))
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (let ((text (propertize
+               (codex-ide--input-placeholder-animated-text
+                session
+                (codex-ide--input-placeholder-text session))
+               'face
+               'codex-ide-prompt-placeholder-face)))
     (unless (string-empty-p text)
       (add-text-properties 0 1 '(cursor t) text))
     text))
@@ -569,6 +607,65 @@ inserted text."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (and (codex-ide--input-prompt-active-p session)
        (string-empty-p (codex-ide--current-input session))))
+
+(defun codex-ide--input-placeholder-should-animate-p (&optional session)
+  "Return non-nil when SESSION's visible prompt help should animate."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (let ((buffer (and session (codex-ide-session-buffer session))))
+    (and (buffer-live-p buffer)
+         (get-buffer-window-list buffer nil t)
+         (codex-ide--input-placeholder-animation-enabled-p)
+         (codex-ide--input-placeholder-visible-p session)
+         (codex-ide--input-placeholder-busy-p session)
+         (string-suffix-p "..." (codex-ide--input-placeholder-text session)))))
+
+(defun codex-ide--stop-input-placeholder-animation (session)
+  "Stop SESSION's prompt help animation timer, if any."
+  (when-let ((timer (codex-ide--session-metadata-get
+                     session
+                     :input-placeholder-animation-timer)))
+    (when (timerp timer)
+      (cancel-timer timer)))
+  (codex-ide--session-metadata-put
+   session
+   :input-placeholder-animation-timer
+   nil)
+  (codex-ide--session-metadata-put
+   session
+   :input-placeholder-ellipsis-frame
+   nil))
+
+(defun codex-ide--advance-input-placeholder-animation (session)
+  "Advance SESSION's busy prompt help animation by one frame."
+  (if (codex-ide--input-placeholder-should-animate-p session)
+      (progn
+        (codex-ide--session-metadata-put
+         session
+         :input-placeholder-ellipsis-frame
+         (if-let ((frame (codex-ide--session-metadata-get
+                          session
+                          :input-placeholder-ellipsis-frame)))
+             (mod (1+ frame)
+                  (length codex-ide--input-placeholder-ellipsis-frames))
+           0))
+        (codex-ide--refresh-input-placeholder session))
+    (codex-ide--stop-input-placeholder-animation session)))
+
+(defun codex-ide--ensure-input-placeholder-animation (session)
+  "Ensure SESSION has a live prompt help animation timer when needed."
+  (if (codex-ide--input-placeholder-should-animate-p session)
+      (unless (timerp (codex-ide--session-metadata-get
+                       session
+                       :input-placeholder-animation-timer))
+        (codex-ide--session-metadata-put
+         session
+         :input-placeholder-animation-timer
+         (run-at-time
+          codex-ide-placeholder-ellipsis-animation-interval
+          codex-ide-placeholder-ellipsis-animation-interval
+          #'codex-ide--advance-input-placeholder-animation
+          session)))
+    (codex-ide--stop-input-placeholder-animation session)))
 
 (defun codex-ide--ensure-input-placeholder-overlay (&optional session)
   "Ensure SESSION has a display-only placeholder overlay at input start."
@@ -626,6 +723,7 @@ inserted text."
   (interactive)
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (when session
+    (codex-ide--ensure-input-placeholder-animation session)
     (let ((overlay (codex-ide--ensure-input-placeholder-overlay session)))
       (when (overlayp overlay)
         (overlay-put overlay 'before-string nil)

@@ -36,6 +36,10 @@ Placeholder text displayed in an empty idle Codex prompt.")
 (defvar codex-ide-steering-placeholder-text "Running..." "\
 Placeholder text displayed in an empty Codex prompt during a running turn.")
 (custom-autoload 'codex-ide-steering-placeholder-text "codex-ide" t)
+(defvar codex-ide-placeholder-ellipsis-animation-interval 0.5 "\
+Seconds between animated trailing ellipsis frames in busy prompt help.
+When nil or zero, busy prompt help displays its text unchanged.")
+(custom-autoload 'codex-ide-placeholder-ellipsis-animation-interval "codex-ide" t)
 (defvar codex-ide-status-placeholder-text-alist '(("approval" . "Seeking approval...") ("interrupting" . "Interrupting...")) "\
 Alist mapping Codex session statuses to active prompt placeholder text.
 
