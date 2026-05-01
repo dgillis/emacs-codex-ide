@@ -14,6 +14,7 @@
 (require 'seq)
 (require 'server)
 (require 'subr-x)
+(require 'thingatpt)
 
 (defconst codex-ide-mcp-bridge--directory
   (file-name-directory (or load-file-name buffer-file-name))
@@ -112,6 +113,14 @@ refer to the configured Emacs MCP bridge server or one of its tools."
     "emacs_get_buffer_info"
     "emacs_get_buffer_text"
     "emacs_get_buffer_diagnostics"
+    "emacs_get_current_context"
+    "emacs_get_buffer_slice"
+    "emacs_get_region_text"
+    "emacs_search_buffers"
+    "emacs_get_symbol_at_point"
+    "emacs_describe_symbol"
+    "emacs_get_messages"
+    "emacs_get_minibuffer_state"
     "emacs_get_all_windows"
     "emacs_ensure_file_buffer_open"
     "emacs_show_file_buffer"
@@ -298,6 +307,66 @@ Errors from `server-running-p' are treated as nil."
                     (buffer-modified-p buffer)))
       (read-only . ,(codex-ide-mcp-bridge--json-bool
                      buffer-read-only)))))
+
+(defun codex-ide-mcp-bridge--buffer-from-params (params &optional default-buffer)
+  "Return buffer named by PARAMS, falling back to DEFAULT-BUFFER."
+  (let* ((buffer-name (alist-get 'buffer params))
+         (buffer (if (stringp buffer-name)
+                     (get-buffer buffer-name)
+                   (or default-buffer (current-buffer)))))
+    (unless buffer
+      (error "Unknown buffer: %s" (or buffer-name "nil")))
+    buffer))
+
+(defun codex-ide-mcp-bridge--line-text-at-point ()
+  "Return the current line text without text properties."
+  (buffer-substring-no-properties
+   (line-beginning-position)
+   (line-end-position)))
+
+(defun codex-ide-mcp-bridge--point-location ()
+  "Return an alist describing point in the current buffer."
+  `((point . ,(point))
+    (line . ,(line-number-at-pos))
+    (column . ,(1+ (current-column)))))
+
+(defun codex-ide-mcp-bridge--region-info ()
+  "Return active region bounds and text for the current buffer."
+  (if (use-region-p)
+      (let ((start (region-beginning))
+            (end (region-end)))
+        `((active . t)
+          (start . ,start)
+          (end . ,end)
+          (start-line . ,(line-number-at-pos start))
+          (start-column . ,(save-excursion
+                             (goto-char start)
+                             (1+ (current-column))))
+          (end-line . ,(line-number-at-pos end))
+          (end-column . ,(save-excursion
+                           (goto-char end)
+                           (1+ (current-column))))
+          (text . ,(buffer-substring-no-properties start end))))
+    '((active . :json-false)
+      (start . :json-null)
+      (end . :json-null)
+      (start-line . :json-null)
+      (start-column . :json-null)
+      (end-line . :json-null)
+      (end-column . :json-null)
+      (text . :json-null))))
+
+(defun codex-ide-mcp-bridge--project-root ()
+  "Return the current project root, or nil when unavailable."
+  (when (require 'project nil t)
+    (when-let ((project (ignore-errors (project-current nil))))
+      (expand-file-name (project-root project)))))
+
+(defun codex-ide-mcp-bridge--goto-line-end-inclusive (line)
+  "Move to the end of LINE, accepting LINE values past the buffer end."
+  (goto-char (point-min))
+  (forward-line (1- line))
+  (line-end-position))
 
 (defun codex-ide-mcp-bridge--diagnostic-severity (diagnostic)
   "Return a normalized severity string for DIAGNOSTIC."
@@ -580,6 +649,184 @@ Errors from `server-running-p' are treated as nil."
                          (or (codex-ide-mcp-bridge--flymake-diagnostics)
                              (codex-ide-mcp-bridge--flycheck-diagnostics)
                              '())))))))
+
+(defun codex-ide-mcp-bridge--tool-call--get_current_context (_params)
+  "Handle a `get_current_context' bridge request."
+  (let* ((window (selected-window))
+         (buffer (window-buffer window)))
+    (with-current-buffer buffer
+      `((window-id . ,(format "%s" window))
+        (buffer-info . ,(codex-ide-mcp-bridge--buffer-info buffer))
+        (point . ,(codex-ide-mcp-bridge--point-location))
+        (mark . ,(if (mark t)
+                     `((point . ,(mark t))
+                       (line . ,(line-number-at-pos (mark t)))
+                       (column . ,(save-excursion
+                                    (goto-char (mark t))
+                                    (1+ (current-column)))))
+                   :json-null))
+        (region . ,(codex-ide-mcp-bridge--region-info))
+        (visible . ((start . ,(window-start window))
+                    (end . ,(window-end window t))
+                    (start-line . ,(line-number-at-pos (window-start window)))
+                    (end-line . ,(line-number-at-pos (window-end window t)))))
+        (project-root . ,(codex-ide-mcp-bridge--json-nullable
+                          (codex-ide-mcp-bridge--project-root)))))))
+
+(defun codex-ide-mcp-bridge--tool-call--get_buffer_slice (params)
+  "Handle a `get_buffer_slice' bridge request with PARAMS."
+  (let* ((buffer (codex-ide-mcp-bridge--buffer-from-params params))
+         (around-point (alist-get 'around-point params))
+         (requested-start (alist-get 'start-line params))
+         (requested-end (alist-get 'end-line params)))
+    (with-current-buffer buffer
+      (save-excursion
+        (let* ((line-count (line-number-at-pos (point-max)))
+               (current-line (line-number-at-pos))
+               (start-line (cond
+                            ((integerp around-point)
+                             (max 1 (- current-line around-point)))
+                            ((integerp requested-start) requested-start)
+                            (t 1)))
+               (end-line (cond
+                          ((integerp around-point)
+                           (min line-count (+ current-line around-point)))
+                          ((integerp requested-end) requested-end)
+                          (t (min line-count (+ start-line 199)))))
+               (start-line (max 1 (min start-line line-count)))
+               (end-line (max start-line (min end-line line-count)))
+               (start-pos (progn
+                            (goto-char (point-min))
+                            (forward-line (1- start-line))
+                            (point)))
+               (end-pos (codex-ide-mcp-bridge--goto-line-end-inclusive end-line)))
+          `((buffer . ,(buffer-name buffer))
+            (start-line . ,start-line)
+            (end-line . ,end-line)
+            (line-count . ,line-count)
+            (text . ,(buffer-substring-no-properties start-pos end-pos))))))))
+
+(defun codex-ide-mcp-bridge--tool-call--get_region_text (params)
+  "Handle a `get_region_text' bridge request with PARAMS."
+  (let ((buffer (codex-ide-mcp-bridge--buffer-from-params params (window-buffer (selected-window)))))
+    (with-current-buffer buffer
+      (append
+       `((buffer . ,(buffer-name buffer)))
+       (codex-ide-mcp-bridge--region-info)))))
+
+(defun codex-ide-mcp-bridge--tool-call--search_buffers (params)
+  "Handle a `search_buffers' bridge request with PARAMS."
+  (let* ((pattern (alist-get 'pattern params))
+         (regexp (eq (alist-get 'regexp params) t))
+         (file-backed-only (eq (alist-get 'file-backed-only params) t))
+         (major-mode-filter (alist-get 'major-mode params))
+         (max-results (or (alist-get 'max-results params) 100))
+         (needle (and (stringp pattern)
+                      (if regexp pattern (regexp-quote pattern))))
+         (results nil))
+    (unless (and (stringp pattern) (not (string-empty-p pattern)))
+      (error "Missing search pattern"))
+    (dolist (buffer (buffer-list))
+      (when (and (< (length results) max-results)
+                 (or (not file-backed-only) (buffer-file-name buffer)))
+        (with-current-buffer buffer
+          (when (and (or (not (stringp major-mode-filter))
+                         (equal major-mode-filter (symbol-name major-mode)))
+                     needle)
+            (save-excursion
+              (goto-char (point-min))
+              (while (and (< (length results) max-results)
+                          (re-search-forward needle nil t))
+                (push `((buffer . ,(buffer-name buffer))
+                        (file . ,(codex-ide-mcp-bridge--json-nullable
+                                  (when-let ((file (buffer-file-name buffer)))
+                                    (expand-file-name file))))
+                        (line . ,(line-number-at-pos (match-beginning 0)))
+                        (column . ,(save-excursion
+                                     (goto-char (match-beginning 0))
+                                     (1+ (current-column))))
+                        (match . ,(match-string-no-properties 0))
+                        (text . ,(codex-ide-mcp-bridge--line-text-at-point)))
+                      results)))))))
+    `((pattern . ,pattern)
+      (regexp . ,(codex-ide-mcp-bridge--json-bool regexp))
+      (truncated . ,(codex-ide-mcp-bridge--json-bool
+                     (>= (length results) max-results)))
+      (results . ,(codex-ide-mcp-bridge--json-array (nreverse results))))))
+
+(defun codex-ide-mcp-bridge--tool-call--get_symbol_at_point (params)
+  "Handle a `get_symbol_at_point' bridge request with PARAMS."
+  (let ((buffer (codex-ide-mcp-bridge--buffer-from-params params (window-buffer (selected-window)))))
+    (with-current-buffer buffer
+      (let* ((bounds (bounds-of-thing-at-point 'symbol))
+             (symbol (thing-at-point 'symbol t)))
+        `((buffer . ,(buffer-name buffer))
+          (symbol . ,(codex-ide-mcp-bridge--json-nullable symbol))
+          (start . ,(if bounds (car bounds) :json-null))
+          (end . ,(if bounds (cdr bounds) :json-null))
+          (line . ,(line-number-at-pos))
+          (column . ,(1+ (current-column))))))))
+
+(defun codex-ide-mcp-bridge--tool-call--describe_symbol (params)
+  "Handle a `describe_symbol' bridge request with PARAMS."
+  (let* ((symbol-name (alist-get 'symbol params))
+         (type (or (alist-get 'type params) "any"))
+         (symbol (and (stringp symbol-name) (intern-soft symbol-name))))
+    (unless (and (stringp symbol-name) (not (string-empty-p symbol-name)))
+      (error "Missing symbol"))
+    (let* ((functionp (and symbol (fboundp symbol)))
+           (variablep (and symbol (boundp symbol)))
+           (facep (and symbol (facep symbol))))
+      `((symbol . ,symbol-name)
+        (exists . ,(codex-ide-mcp-bridge--json-bool symbol))
+        (function . ,(codex-ide-mcp-bridge--json-bool functionp))
+        (variable . ,(codex-ide-mcp-bridge--json-bool variablep))
+        (face . ,(codex-ide-mcp-bridge--json-bool facep))
+        (function-documentation . ,(codex-ide-mcp-bridge--json-nullable
+                                    (when (and functionp
+                                               (member type '("any" "function")))
+                                      (documentation symbol t))))
+        (variable-documentation . ,(codex-ide-mcp-bridge--json-nullable
+                                    (when (and variablep
+                                               (member type '("any" "variable")))
+                                      (documentation-property symbol
+                                                              'variable-documentation
+                                                              t))))
+        (function-file . ,(codex-ide-mcp-bridge--json-nullable
+                           (when functionp (symbol-file symbol 'defun))))
+        (variable-file . ,(codex-ide-mcp-bridge--json-nullable
+                           (when variablep (symbol-file symbol 'defvar))))))))
+
+(defun codex-ide-mcp-bridge--tool-call--get_messages (params)
+  "Handle a `get_messages' bridge request with PARAMS."
+  (let* ((max-lines (or (alist-get 'max-lines params) 200))
+         (buffer (get-buffer "*Messages*")))
+    (if (not buffer)
+        '((buffer . "*Messages*")
+          (available . :json-false)
+          (text . ""))
+      (with-current-buffer buffer
+        (save-excursion
+          (goto-char (point-max))
+          (forward-line (- max-lines))
+          `((buffer . ,(buffer-name buffer))
+            (available . t)
+            (text . ,(buffer-substring-no-properties (point) (point-max)))))))))
+
+(defun codex-ide-mcp-bridge--tool-call--get_minibuffer_state (_params)
+  "Handle a `get_minibuffer_state' bridge request."
+  (let* ((window (active-minibuffer-window))
+         (buffer (and window (window-buffer window))))
+    (if (not buffer)
+        '((active . :json-false)
+          (buffer . :json-null)
+          (prompt . :json-null)
+          (input . :json-null))
+      (with-current-buffer buffer
+        `((active . t)
+          (buffer . ,(buffer-name buffer))
+          (prompt . ,(minibuffer-prompt))
+          (input . ,(minibuffer-contents-no-properties)))))))
 
 (defun codex-ide-mcp-bridge--tool-call--get_all_windows (_params)
   "Handle a `get_all_windows' bridge request."

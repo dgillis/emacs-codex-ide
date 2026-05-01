@@ -454,6 +454,116 @@
 						      "emacs-lisp-mode"))
 				       (should (listp (alist-get 'edges (aref windows 0))))))))))
 
+(ert-deftest codex-ide-mcp-bridge-get-current-context-describes-selected-window ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (file-path (codex-ide-test--make-project-file project-dir "context.el" "alpha\nbeta\n")))
+    (codex-ide-test-with-fixture project-dir
+				 (save-window-excursion
+				   (let ((buffer (find-file-noselect file-path)))
+				     (set-window-buffer (selected-window) buffer)
+				     (with-current-buffer buffer
+				       (goto-char (point-min))
+				       (forward-line 1))
+				     (let* ((result (codex-ide-mcp-bridge--tool-call--get_current_context nil))
+					    (point (alist-get 'point result))
+					    (buffer-info (alist-get 'buffer-info result)))
+				       (should (equal (alist-get 'buffer buffer-info) (buffer-name buffer)))
+				       (should (= (alist-get 'line point) 2))
+				       (should (alist-get 'visible result))
+				       (should (member (alist-get 'project-root result)
+						       (list :json-null
+							     (file-name-as-directory project-dir))))))))))
+
+(ert-deftest codex-ide-mcp-bridge-get-buffer-slice-returns-line-range ()
+  (let ((buffer (generate-new-buffer " *codex-ide-slice*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (insert "one\ntwo\nthree\nfour\n")
+          (let ((result (codex-ide-mcp-bridge--tool-call--get_buffer_slice
+                         `((buffer . ,(buffer-name buffer))
+                           (start-line . 2)
+                           (end-line . 3)))))
+            (should (= (alist-get 'start-line result) 2))
+            (should (= (alist-get 'end-line result) 3))
+            (should (equal (alist-get 'text result) "two\nthree"))))
+      (kill-buffer buffer))))
+
+(ert-deftest codex-ide-mcp-bridge-get-region-text-returns-active-region ()
+  (let ((buffer (generate-new-buffer " *codex-ide-region*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (transient-mark-mode 1)
+          (insert "alpha beta gamma")
+          (goto-char 7)
+          (set-mark 11)
+          (activate-mark)
+          (let ((result (codex-ide-mcp-bridge--tool-call--get_region_text
+                         `((buffer . ,(buffer-name buffer))))))
+            (should (alist-get 'active result))
+            (should (equal (alist-get 'text result) "beta"))))
+      (kill-buffer buffer))))
+
+(ert-deftest codex-ide-mcp-bridge-search-buffers-finds-bounded-matches ()
+  (let ((buffer-a (generate-new-buffer " *codex-ide-search-a*"))
+        (buffer-b (generate-new-buffer " *codex-ide-search-b*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer-a
+            (emacs-lisp-mode)
+            (insert "needle one\nneedle two\n"))
+          (with-current-buffer buffer-b
+            (text-mode)
+            (insert "needle three\n"))
+          (let* ((result (codex-ide-mcp-bridge--tool-call--search_buffers
+                          '((pattern . "needle")
+                            (major-mode . "emacs-lisp-mode")
+                            (max-results . 1))))
+                 (matches (alist-get 'results result))
+                 (match (aref matches 0)))
+            (should (= (length matches) 1))
+            (should (alist-get 'truncated result))
+            (should (equal (alist-get 'buffer match) (buffer-name buffer-a)))
+            (should (equal (alist-get 'line match) 1))))
+      (kill-buffer buffer-a)
+      (kill-buffer buffer-b))))
+
+(ert-deftest codex-ide-mcp-bridge-get-symbol-at-point-returns-bounds ()
+  (let ((buffer (generate-new-buffer " *codex-ide-symbol*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (emacs-lisp-mode)
+          (insert "(message hello)")
+          (search-backward "hello")
+          (let ((result (codex-ide-mcp-bridge--tool-call--get_symbol_at_point
+                         `((buffer . ,(buffer-name buffer))))))
+            (should (equal (alist-get 'symbol result) "hello"))
+            (should (= (alist-get 'start result) (point)))))
+      (kill-buffer buffer))))
+
+(ert-deftest codex-ide-mcp-bridge-describe-symbol-returns-docstrings ()
+  (let ((result (codex-ide-mcp-bridge--tool-call--describe_symbol
+                 '((symbol . "car")
+                   (type . "function")))))
+    (should (alist-get 'exists result))
+    (should (alist-get 'function result))
+    (should (stringp (alist-get 'function-documentation result)))))
+
+(ert-deftest codex-ide-mcp-bridge-get-messages-returns-recent-lines ()
+  (let ((buffer (get-buffer-create "*Messages*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "one\ntwo\nthree\n")))
+    (let ((result (codex-ide-mcp-bridge--tool-call--get_messages
+                   '((max-lines . 2)))))
+      (should (alist-get 'available result))
+      (should (equal (alist-get 'text result) "two\nthree\n")))))
+
+(ert-deftest codex-ide-mcp-bridge-get-minibuffer-state-reports-inactive ()
+  (let ((result (codex-ide-mcp-bridge--tool-call--get_minibuffer_state nil)))
+    (should (eq (alist-get 'active result) :json-false))
+    (should (eq (alist-get 'buffer result) :json-null))))
+
 (provide 'codex-ide-mcp-bridge-tests)
 
 ;;; codex-ide-mcp-bridge-tests.el ends here

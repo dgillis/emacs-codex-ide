@@ -261,7 +261,7 @@
               (let ((tools (alist-get "tools"
                                       (alist-get "result" (nth 1 responses) nil nil #'equal)
                                       nil nil #'equal)))
-                (should (= (length tools) 9))
+                (should (= (length tools) 17))
                 (should
                  (equal (mapcar (lambda (tool)
                                   (alist-get "name" tool nil nil #'equal))
@@ -270,6 +270,14 @@
                           "emacs_get_buffer_info"
                           "emacs_get_buffer_text"
                           "emacs_get_buffer_diagnostics"
+                          "emacs_get_current_context"
+                          "emacs_get_buffer_slice"
+                          "emacs_get_region_text"
+                          "emacs_search_buffers"
+                          "emacs_get_symbol_at_point"
+                          "emacs_describe_symbol"
+                          "emacs_get_messages"
+                          "emacs_get_minibuffer_state"
                           "emacs_get_all_windows"
                           "emacs_ensure_file_buffer_open"
                           "emacs_show_file_buffer"

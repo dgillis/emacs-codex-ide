@@ -69,6 +69,95 @@ COMMANDS = [
         },
     ),
     EmacsBridgeCommand(
+        name="emacs_get_current_context",
+        description="Retrieve selected window, selected buffer, point, region, visible range, and project context.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
+        name="emacs_get_buffer_slice",
+        description="Retrieve a bounded text slice from a named buffer by line range or around point.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "buffer": {"type": "string"},
+                "start-line": {"type": "integer", "minimum": 1},
+                "end-line": {"type": "integer", "minimum": 1},
+                "around-point": {"type": "integer", "minimum": 0},
+            },
+            "required": ["buffer"],
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
+        name="emacs_get_region_text",
+        description="Retrieve the active region text and bounds from a buffer, defaulting to the selected buffer.",
+        inputSchema={
+            "type": "object",
+            "properties": {"buffer": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
+        name="emacs_search_buffers",
+        description="Search open buffers for a string or regexp and return bounded line-oriented matches.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string"},
+                "regexp": {"type": "boolean"},
+                "file-backed-only": {"type": "boolean"},
+                "major-mode": {"type": "string"},
+                "max-results": {"type": "integer", "minimum": 1},
+            },
+            "required": ["pattern"],
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
+        name="emacs_get_symbol_at_point",
+        description="Retrieve the symbol at point and its bounds from a buffer, defaulting to the selected buffer.",
+        inputSchema={
+            "type": "object",
+            "properties": {"buffer": {"type": "string"}},
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
+        name="emacs_describe_symbol",
+        description="Describe an Emacs Lisp symbol, including docstrings and defining files when known.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "type": {"type": "string", "enum": ["any", "function", "variable", "face"]},
+            },
+            "required": ["symbol"],
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
+        name="emacs_get_messages",
+        description="Retrieve recent text from the Emacs *Messages* buffer.",
+        inputSchema={
+            "type": "object",
+            "properties": {"max-lines": {"type": "integer", "minimum": 1}},
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
+        name="emacs_get_minibuffer_state",
+        description="Retrieve whether the minibuffer is active and basic prompt/input state.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    ),
+    EmacsBridgeCommand(
         name="emacs_get_all_windows",
         description="Retrieve all visible windows in the selected frame and their buffers.",
         inputSchema={
