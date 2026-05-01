@@ -107,6 +107,136 @@
 				      (codex-ide-session-mode-nav-backward)
 				      (should (= (point) first-button-position))))))))
 
+(ert-deftest codex-ide-session-mode-nav-includes-submitted-prompts ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+				 (codex-ide-test-with-fake-processes
+				  (let ((session (codex-ide--create-process-session))
+					first-prompt-position
+					first-prompt-input-position
+					button-position
+					second-prompt-position
+					second-prompt-input-position
+					active-prompt-position)
+				    (with-current-buffer (codex-ide-session-buffer session)
+				      (let ((inhibit-read-only t))
+					(erase-buffer)
+					(insert "Codex session\n\n")
+					(setq first-prompt-position (point))
+					(insert "> first prompt\n")
+					(setq first-prompt-input-position
+					      (+ first-prompt-position 2))
+					(codex-ide-renderer-style-user-prompt-region
+					 first-prompt-position
+					 (1- (point)))
+					(insert "Agent response\n")
+					(setq button-position (point))
+					(insert "Open file")
+					(make-text-button button-position (point)
+							  'follow-link t
+							  'keymap (codex-ide-nav-button-keymap))
+					(insert "\n")
+					(setq second-prompt-position (point))
+					(insert "> second prompt\n")
+					(setq second-prompt-input-position
+					      (+ second-prompt-position 2))
+					(codex-ide-renderer-style-user-prompt-region
+					 second-prompt-position
+					 (1- (point)))
+					(insert "\n"))
+				      (codex-ide--insert-input-prompt session "draft")
+				      (setq active-prompt-position
+					    (marker-position
+					     (codex-ide-session-input-start-marker session)))
+				      (goto-char (point-min))
+				      (codex-ide-session-mode-nav-forward)
+				      (should (= (point) first-prompt-input-position))
+				      (codex-ide-session-mode-nav-forward)
+				      (should (= (point) button-position))
+				      (codex-ide-session-mode-nav-forward)
+				      (should (= (point) second-prompt-input-position))
+				      (codex-ide-session-mode-nav-forward)
+				      (should (= (point) active-prompt-position))
+				      (codex-ide-session-mode-nav-backward)
+				      (should (= (point) second-prompt-input-position))))))))
+
+(ert-deftest codex-ide-session-mode-link-tab-does-not-use-button-wrap ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((inhibit-read-only t)
+	  first-link-position
+	  second-link-position
+	  command)
+      (insert "Intro\n")
+      (setq first-link-position (point))
+      (insert "First link")
+      (make-text-button first-link-position (point)
+			'follow-link t
+			'keymap codex-ide-renderer-link-keymap)
+      (insert "\n")
+      (setq second-link-position (point))
+      (insert "Second link")
+      (make-text-button second-link-position (point)
+			'follow-link t
+			'keymap codex-ide-renderer-link-keymap)
+      (goto-char second-link-position)
+      (setq command (key-binding (kbd "TAB")))
+      (should (eq command #'codex-ide-renderer-button-nav-forward))
+      (should-error (call-interactively command) :type 'user-error)
+      (should (= (point) second-link-position))
+      (goto-char first-link-position)
+      (setq command (key-binding (kbd "<backtab>")))
+      (should (eq command #'codex-ide-renderer-button-nav-backward))
+      (should-error (call-interactively command) :type 'user-error)
+      (should (= (point) first-link-position)))))
+
+(ert-deftest codex-ide-session-mode-action-button-tab-visits-prompts-and-stops-at-edges ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((inhibit-read-only t)
+	  first-button-position
+	  prompt-position
+	  prompt-input-position
+	  second-button-position
+	  command)
+      (insert "Intro\n")
+      (setq first-button-position (point))
+      (codex-ide-renderer-insert-action-button
+       "first"
+       (lambda () nil)
+       nil
+       codex-ide-item-result-map)
+      (insert "\n")
+      (setq prompt-position (point))
+      (insert "> submitted prompt\n")
+      (setq prompt-input-position (+ prompt-position 2))
+      (codex-ide-renderer-style-user-prompt-region
+       prompt-position
+       (1- (point)))
+      (setq second-button-position (point))
+      (codex-ide-renderer-insert-action-button
+       "second"
+       (lambda () nil)
+       nil
+       codex-ide-item-result-map)
+      (goto-char first-button-position)
+      (setq command (key-binding (kbd "TAB")))
+      (should (eq command #'codex-ide-renderer-button-nav-forward))
+      (call-interactively command)
+      (should (= (point) prompt-input-position))
+      (call-interactively command)
+      (should (= (point) second-button-position))
+      (should-error (call-interactively command) :type 'user-error)
+      (should (= (point) second-button-position))
+      (setq command (key-binding (kbd "<backtab>")))
+      (should (eq command #'codex-ide-renderer-button-nav-backward))
+      (call-interactively command)
+      (should (= (point) prompt-input-position))
+      (call-interactively command)
+      (should (= (point) first-button-position))
+      (should-error (call-interactively command) :type 'user-error)
+      (should (= (point) first-button-position)))))
+
 (provide 'codex-ide-nav-tests)
 
 ;;; codex-ide-nav-tests.el ends here

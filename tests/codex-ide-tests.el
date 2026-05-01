@@ -6115,6 +6115,62 @@
 					    (should (= (point) second-input))
 					    (should (looking-at-p "second prompt")))))))))
 
+    (ert-deftest codex-ide-goto-prompt-line-errors-at-multiline-prompt-edges ()
+      (let ((project-dir (codex-ide-test--make-temp-project)))
+	(codex-ide-test-with-fixture project-dir
+				     (codex-ide-test-with-fake-processes
+				      (let ((session (codex-ide--create-process-session)))
+					(with-current-buffer (codex-ide-session-buffer session)
+					  (let ((inhibit-read-only t)
+						first-start
+						first-input
+						first-end
+						second-start
+						second-end
+						original-point
+						error-data)
+					    (erase-buffer)
+					    (insert "> first prompt\ncontinuation\nassistant reply\n> second prompt\nmore detail\n")
+					    (goto-char (point-min))
+					    (setq first-start (point)
+						  first-input (+ (point) 2))
+					    (forward-line 2)
+					    (setq first-end (point))
+					    (forward-line 1)
+					    (setq second-start (point))
+					    (goto-char (point-max))
+					    (setq second-end (point))
+					    (add-text-properties
+					     first-start first-end
+					     `(,codex-ide-prompt-start-property t
+										face codex-ide-user-prompt-face))
+					    (add-text-properties
+					     second-start second-end
+						     `(,codex-ide-prompt-start-property t
+										face codex-ide-user-prompt-face))
+					    (goto-char first-start)
+					    (forward-line 1)
+					    (forward-char 2)
+					    (codex-ide--goto-prompt-line -1)
+					    (should (= (point) first-input))
+					    (setq original-point (point))
+					    (setq error-data
+						  (should-error
+						   (codex-ide--goto-prompt-line -1)
+						   :type 'user-error))
+					    (should (equal (cadr error-data) "First prompt"))
+					    (should (= (point) original-point))
+					    (goto-char second-start)
+					    (forward-line 1)
+					    (forward-char 2)
+					    (setq original-point (point))
+					    (setq error-data
+						  (should-error
+						   (codex-ide--goto-prompt-line 1)
+						   :type 'user-error))
+					    (should (equal (cadr error-data) "Last prompt"))
+					    (should (= (point) original-point)))))))))
+
     (ert-deftest codex-ide-goto-prompt-line-lands-at-editable-input-start ()
       (let ((project-dir (codex-ide-test--make-temp-project)))
 	(codex-ide-test-with-fixture project-dir

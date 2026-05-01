@@ -145,6 +145,16 @@ BODY may refer to the lexical variable `session'."
   (should (eq (lookup-key codex-ide-renderer-link-keymap (kbd "C-M-j"))
               #'codex-ide-renderer-open-file-link-other-window)))
 
+(ert-deftest codex-ide-renderer-button-keymaps-bind-codex-navigation ()
+  (should (eq (lookup-key codex-ide-renderer-link-keymap (kbd "TAB"))
+              #'codex-ide-renderer-button-nav-forward))
+  (should (eq (lookup-key codex-ide-renderer-link-keymap (kbd "<backtab>"))
+              #'codex-ide-renderer-button-nav-backward))
+  (should (eq (lookup-key codex-ide-renderer-action-button-keymap (kbd "TAB"))
+              #'codex-ide-renderer-button-nav-forward))
+  (should (eq (lookup-key codex-ide-renderer-action-button-keymap (kbd "<backtab>"))
+              #'codex-ide-renderer-button-nav-backward)))
+
 (ert-deftest codex-ide-renderer-theme-face-specs-follow-default-colors ()
   (cl-letf (((symbol-function 'face-background)
              (lambda (face &optional _frame _inherit)

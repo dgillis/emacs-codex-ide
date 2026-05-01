@@ -105,9 +105,45 @@
 (defun codex-ide-session-mode--focal-points ()
   "Return focal points for the current session buffer."
   (let ((session (and (boundp 'codex-ide--session) codex-ide--session)))
-    (append (codex-ide-nav-collect-buttons)
+    (append (codex-ide-session-mode--collect-prompt-starts session)
+            (codex-ide-nav-collect-buttons)
             (and session
                  (codex-ide-nav-collect-session-input session)))))
+
+(defun codex-ide-session-mode--collect-prompt-starts (&optional session)
+  "Return submitted prompt starts for the current session buffer.
+
+SESSION's active editable prompt is excluded because input navigation should
+land at the editable input start rather than on the read-only prompt prefix."
+  (let ((active-prompt-start
+         (when-let ((marker (and session
+                                 (codex-ide-session-input-prompt-start-marker
+                                  session))))
+           (when (and (markerp marker)
+                      (eq (marker-buffer marker) (current-buffer)))
+             (marker-position marker))))
+        points)
+    (save-excursion
+      (goto-char (point-min))
+      (while (< (point) (point-max))
+        (when (codex-ide-renderer-line-has-prompt-start-p)
+          (let ((start (line-beginning-position))
+                (end (line-end-position))
+                (input-start
+                 (save-excursion
+                   (goto-char (line-beginning-position))
+                   (if (looking-at-p "> ")
+                       (+ (line-beginning-position) 2)
+                     (line-beginning-position)))))
+            (unless (and active-prompt-start
+                         (= start active-prompt-start))
+              (push (list :pos input-start
+                          :start start
+                          :end (max (1+ start) end)
+                          :kind 'prompt-start)
+                    points))))
+        (forward-line 1)))
+    (nreverse points)))
 
 (defun codex-ide-session-mode--prompt-end-position (start)
   "Return the best known end position for the prompt beginning at START."

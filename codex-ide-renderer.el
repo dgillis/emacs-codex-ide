@@ -59,6 +59,14 @@
     map)
   "Keymap used for markdown file links.")
 
+(defvar codex-ide-renderer-action-button-keymap
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map button-map)
+    (define-key map (kbd "TAB") #'codex-ide-renderer-button-nav-forward)
+    (define-key map (kbd "<backtab>") #'codex-ide-renderer-button-nav-backward)
+    map)
+  "Base keymap used for Codex-owned action buttons.")
+
 (defconst codex-ide-renderer--file-link-nonsticky-properties
   '(action
     button
@@ -82,6 +90,36 @@
 (define-key codex-ide-renderer-link-keymap
             (kbd "C-M-j")
             #'codex-ide-renderer-open-file-link-other-window)
+(define-key codex-ide-renderer-link-keymap
+            (kbd "TAB")
+            #'codex-ide-renderer-button-nav-forward)
+(define-key codex-ide-renderer-link-keymap
+            (kbd "<backtab>")
+            #'codex-ide-renderer-button-nav-backward)
+
+(defun codex-ide-renderer-button-nav-forward ()
+  "Move to the next Codex focal point from a rendered button or link."
+  (interactive)
+  (if (fboundp 'codex-ide-nav-forward)
+      (codex-ide-nav-forward)
+    (user-error "No Codex navigation available in this buffer")))
+
+(defun codex-ide-renderer-button-nav-backward ()
+  "Move to the previous Codex focal point from a rendered button or link."
+  (interactive)
+  (if (fboundp 'codex-ide-nav-backward)
+      (codex-ide-nav-backward)
+    (user-error "No Codex navigation available in this buffer")))
+
+(define-obsolete-function-alias
+  'codex-ide-renderer-link-nav-forward
+  #'codex-ide-renderer-button-nav-forward
+  "2026-05-01")
+
+(define-obsolete-function-alias
+  'codex-ide-renderer-link-nav-backward
+  #'codex-ide-renderer-button-nav-backward
+  "2026-05-01")
 
 (defcustom codex-ide-renderer-render-markdown-during-streaming t
   "Whether to apply incremental markdown rendering while text streams."
@@ -760,8 +798,10 @@ Return a plist containing `:delete-start', `:boundary', and `:end' markers."
   "Insert a button labeled LABEL that invokes CALLBACK.
 HELP-ECHO, KEYMAP, and PROPERTIES are applied to the created button."
   (let ((button-keymap (if keymap
-                           (make-composed-keymap keymap button-map)
-                         button-map)))
+                           (make-composed-keymap
+                            keymap
+                            codex-ide-renderer-action-button-keymap)
+                         codex-ide-renderer-action-button-keymap)))
     (apply
      #'make-text-button
      (point)

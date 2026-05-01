@@ -1360,31 +1360,102 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
   (let ((session (codex-ide--session-for-current-project)))
     (unless (eq (current-buffer) (codex-ide-session-buffer session))
       (user-error "Prompt-line navigation is only available in the Codex session buffer"))
-    (beginning-of-line)
-    (when (codex-ide--line-has-prompt-start-p)
-      (forward-line direction))
-    (let ((found nil))
-      (while (and (not found)
-                  (not (if (< direction 0) (bobp) (eobp))))
-        (setq found (codex-ide--line-has-prompt-start-p))
-        (unless found
-          (forward-line direction)))
-      (unless found
-        (user-error (if (< direction 0)
-                        "No earlier prompt line"
-                      "No later prompt line")))
-      (beginning-of-line)
-      (cond
-       ((when-let ((session (codex-ide--session-for-current-project))
-                   (prompt-start (codex-ide-session-input-prompt-start-marker session))
-                   (input-start (codex-ide-session-input-start-marker session)))
-          (when (and (markerp prompt-start)
-                     (markerp input-start)
-                     (= (marker-position prompt-start) (point)))
-            (goto-char input-start)
-            t)))
-       ((looking-at-p "> ")
-        (forward-char 2))))))
+    (unless (memq direction '(-1 1))
+      (error "Unsupported prompt-line direction: %s" direction))
+    (let* ((starts (codex-ide--prompt-line-start-positions))
+           (current-index (codex-ide--prompt-line-current-index starts session))
+           (target-index
+            (if (and current-index
+                     (< direction 0)
+                     (> (point)
+                        (codex-ide--prompt-line-landing-position
+                         (nth current-index starts)
+                         session)))
+                current-index
+              (if current-index
+                  (+ current-index direction)
+                (codex-ide--prompt-line-neighbor-index starts direction)))))
+      (unless (and target-index
+                   (>= target-index 0)
+                   (< target-index (length starts)))
+        (user-error (if (< direction 0) "First prompt" "Last prompt")))
+      (codex-ide--goto-prompt-line-start (nth target-index starts) session))))
+
+(defun codex-ide--prompt-line-start-positions ()
+  "Return prompt-start line positions in the current buffer."
+  (let (starts)
+    (save-excursion
+      (goto-char (point-min))
+      (while (< (point) (point-max))
+        (when (codex-ide--line-has-prompt-start-p)
+          (push (line-beginning-position) starts))
+        (forward-line 1)))
+    (nreverse starts)))
+
+(defun codex-ide--prompt-line-current-index (starts session)
+  "Return the current prompt index in STARTS, or nil when between prompts."
+  (let ((line-start (line-beginning-position))
+        (pos (point)))
+    (or (cl-position line-start starts :test #'=)
+        (when (codex-ide--point-in-prompt-region-p session pos)
+          (let ((index nil)
+                (i 0))
+            (dolist (start starts)
+              (when (<= start pos)
+                (setq index i))
+              (setq i (1+ i)))
+            index)))))
+
+(defun codex-ide--point-in-prompt-region-p (session pos)
+  "Return non-nil when POS is within a rendered or active prompt for SESSION."
+  (or (when-let ((overlay (and session
+                               (codex-ide-session-input-overlay session))))
+        (let ((start (overlay-start overlay))
+              (end (overlay-end overlay)))
+          (and start end (<= start pos) (<= pos end))))
+      (let* ((probe (max (point-min)
+                         (min (1- (point-max)) pos)))
+             (faces (ensure-list (get-text-property probe 'face))))
+        (memq 'codex-ide-user-prompt-face faces))))
+
+(defun codex-ide--prompt-line-neighbor-index (starts direction)
+  "Return the neighboring prompt index in STARTS from point in DIRECTION."
+  (let ((pos (point))
+        (index nil)
+        (i 0))
+    (if (< direction 0)
+        (progn
+          (dolist (start starts)
+            (when (< start pos)
+              (setq index i))
+            (setq i (1+ i)))
+          index)
+      (catch 'found
+        (dolist (start starts)
+          (when (> start pos)
+            (throw 'found i))
+          (setq i (1+ i)))
+        nil))))
+
+(defun codex-ide--goto-prompt-line-start (start session)
+  "Move to prompt line START, landing after the prompt prefix when present."
+  (goto-char (codex-ide--prompt-line-landing-position start session)))
+
+(defun codex-ide--prompt-line-landing-position (start session)
+  "Return the prompt navigation landing position for prompt line START."
+  (save-excursion
+    (goto-char start)
+    (cond
+     ((when-let ((prompt-start (codex-ide-session-input-prompt-start-marker session))
+                 (input-start (codex-ide-session-input-start-marker session)))
+        (when (and (markerp prompt-start)
+                   (markerp input-start)
+                   (= (marker-position prompt-start) start))
+          (marker-position input-start))))
+     ((looking-at-p "> ")
+      (+ start 2))
+     (t
+      start))))
 
 (defun codex-ide--begin-turn-display (&optional session context-summary quiet)
   "Freeze the current prompt and show immediate pending output for SESSION.
