@@ -27,6 +27,7 @@
 (require 'codex-ide-core)
 (require 'codex-ide-nav)
 (require 'codex-ide-renderer)
+(require 'imenu)
 
 (defvar codex-ide-session-enable-visual-line-mode)
 
@@ -107,6 +108,71 @@
     (append (codex-ide-nav-collect-buttons)
             (and session
                  (codex-ide-nav-collect-session-input session)))))
+
+(defun codex-ide-session-mode--prompt-end-position (start)
+  "Return the best known end position for the prompt beginning at START."
+  (let* ((session (and (boundp 'codex-ide--session) codex-ide--session))
+         (input-start (and session
+                           (codex-ide-session-input-prompt-start-marker
+                            session)))
+         (active-p (and (markerp input-start)
+                        (eq (marker-buffer input-start) (current-buffer))
+                        (= (marker-position input-start) start)))
+         (face-end (next-single-char-property-change
+                    start 'face nil (point-max))))
+    (cond
+     ((and active-p
+           (codex-ide-session-mode--input-end-position session)))
+     ((> face-end (+ start 2))
+      face-end)
+     (t
+      (save-excursion
+        (goto-char start)
+        (line-end-position))))))
+
+(defun codex-ide-session-mode--imenu-label (text)
+  "Return TEXT normalized for `imenu' display."
+  (replace-regexp-in-string
+   "[ \t]+"
+   " "
+   (replace-regexp-in-string "[[:space:]]*[\n\r]+[[:space:]]*" "↵"
+                             (string-trim text))))
+
+(defun codex-ide-session-mode--prompt-preview (start end fallback-number)
+  "Return an `imenu' preview for prompt START..END.
+Use FALLBACK-NUMBER when the prompt body is empty."
+  (let* ((text (buffer-substring-no-properties start end))
+         (body (codex-ide-session-mode--imenu-label
+                (string-remove-prefix "> " text))))
+    (if (string-empty-p body)
+        (format "Prompt %d" fallback-number)
+      body)))
+
+(defun codex-ide-session-mode--imenu-create-index ()
+  "Return a prompt-only `imenu' index for the current session buffer."
+  (save-excursion
+    (let ((count 0)
+          entries)
+      (goto-char (point-min))
+      (while (< (point) (point-max))
+        (when (codex-ide-renderer-line-has-prompt-start-p)
+          (let* ((start (line-beginning-position))
+                 (input-start
+                  (save-excursion
+                    (goto-char start)
+                    (if (looking-at-p "> ")
+                        (+ start 2)
+                      start)))
+                 (end (codex-ide-session-mode--prompt-end-position start)))
+            (setq count (1+ count))
+            (push (cons (codex-ide-session-mode--prompt-preview
+                         start
+                         end
+                         count)
+                        (copy-marker input-start))
+                  entries)))
+        (forward-line 1))
+      (nreverse entries))))
 
 ;;;###autoload
 (defun codex-ide-session-mode-nav-forward ()
@@ -237,6 +303,8 @@ so users can navigate within those controls without opting out of follow mode."
               '((:eval (codex-ide-renderer-mode-line-status codex-ide--session))))
   (setq-local codex-ide-nav-focal-point-functions
               '(codex-ide-session-mode--focal-points))
+  (setq-local imenu-create-index-function
+              #'codex-ide-session-mode--imenu-create-index)
   (setq-local codex-ide-session-mode--last-point (point))
   (setq-local codex-ide-session-mode--last-window-start nil)
   (codex-ide-session-mode--teardown-theme-refresh)
