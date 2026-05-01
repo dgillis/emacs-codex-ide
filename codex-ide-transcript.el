@@ -495,6 +495,27 @@ inserted text."
   (codex-ide--clear-pending-output-indicator session)
   (codex-ide--insert-pending-output-indicator session text))
 
+(defun codex-ide--status-pending-output-indicator-p (status)
+  "Return non-nil when STATUS should show pending output help."
+  (member (downcase (or status ""))
+          '("running" "submitted" "starting")))
+
+(defun codex-ide--sync-pending-output-indicator-for-status (session status)
+  "Refresh SESSION's pending-output prompt help for STATUS."
+  (cond
+   ((codex-ide--status-pending-output-indicator-p status)
+    (unless (or (codex-ide-session-current-turn-id session)
+                (codex-ide-session-output-prefix-inserted session)
+                (codex-ide--session-metadata-get
+                 session
+                 :pending-output-indicator-text))
+      (codex-ide--insert-pending-output-indicator session)))
+   ((member (downcase (or status ""))
+            '("idle" "error" "finished" "killed" "disconnected"))
+    (codex-ide--clear-pending-output-indicator session))
+   (t
+    (codex-ide--refresh-input-placeholder session))))
+
 (defun codex-ide--delete-input-overlay (session)
   "Delete the active input overlay for SESSION, if any."
   (codex-ide--delete-input-placeholder-overlay session)
@@ -3956,7 +3977,10 @@ Signal an error when THREAD-READ lacks replayable transcript items."
            (codex-ide--set-session-status
             session
             normalized-status
-            'thread-status-changed)))
+            'thread-status-changed)
+           (codex-ide--sync-pending-output-indicator-for-status
+            session
+            normalized-status)))
        (codex-ide-log-message
         session
         "Thread status changed to %s"

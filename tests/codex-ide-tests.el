@@ -647,6 +647,23 @@
       (should (string-suffix-p "\n> \n\n" (buffer-string)))
       (should (equal (codex-ide--current-input session) "")))))
 
+(ert-deftest codex-ide-thread-status-active-shows-working-placeholder ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (codex-ide--handle-notification
+       session
+       '((method . "thread/status/changed")
+         (params . ((status . ((type . "active")))))))
+      (should (equal (codex-ide-session-status session) "running"))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Working...")))))
+
 (ert-deftest codex-ide-busy-input-prompt-uses-status-placeholder ()
   (with-temp-buffer
     (codex-ide-session-mode)
