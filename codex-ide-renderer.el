@@ -1169,14 +1169,98 @@ intentionally ignored."
         (when candidates
           (cons (+ line-start (apply #'min candidates)) end))))))
 
+(defun codex-ide-renderer--streaming-table-context-before-p (start line-start)
+  "Return non-nil when LINE-START follows markdown table content."
+  (save-excursion
+    (goto-char line-start)
+    (and (> line-start start)
+         (= 0 (forward-line -1))
+         (or (get-text-property (line-beginning-position)
+                                'codex-ide-markdown-table-original)
+             (codex-ide-renderer--markdown-table-row-line-p
+              (buffer-substring-no-properties
+               (line-beginning-position)
+               (line-end-position)))
+             (codex-ide-renderer--markdown-table-separator-line-p
+              (buffer-substring-no-properties
+               (line-beginning-position)
+               (line-end-position)))))))
+
+(defun codex-ide-renderer--streaming-trailing-table-source-span (start end)
+  "Return a trailing raw table source span between START and END, or nil."
+  (catch 'span
+    (save-excursion
+      (goto-char start)
+      (while (< (point) end)
+        (let* ((line-start (point))
+               (line-end (line-end-position))
+               (line (buffer-substring-no-properties line-start line-end)))
+          (cond
+           ((get-text-property line-start 'codex-ide-markdown-table-original)
+            (forward-line 1))
+           ((codex-ide-renderer--markdown-table-potential-header-line-p line)
+            (let ((candidate-start line-start))
+              (save-excursion
+                (forward-line 1)
+                (cond
+                 ((>= (point) end)
+                  (throw 'span (cons candidate-start end)))
+                 ((codex-ide-renderer--markdown-table-separator-line-p
+                   (buffer-substring-no-properties
+                    (point)
+                    (line-end-position)))
+                  (forward-line 1)
+                  (let ((table-tail t))
+                    (while (and table-tail
+                                (< (point) end))
+                      (let ((row (buffer-substring-no-properties
+                                  (point)
+                                  (line-end-position))))
+                        (cond
+                         ((codex-ide-renderer--markdown-table-row-line-p row)
+                          (forward-line 1))
+                         ((string-match-p "\\`[ \t]*|" row)
+                          (goto-char end))
+                         (t
+                          (setq table-tail nil)))))
+                    (when (and table-tail
+                               (>= (point) end))
+                      (throw 'span (cons candidate-start end)))))))
+              (forward-line 1)))
+           (t
+            (forward-line 1))))))
+    nil))
+
+(defun codex-ide-renderer--streaming-deferred-table-row-span (start end)
+  "Return a trailing in-progress table row span between START and END."
+  (when (and codex-ide-renderer-markdown-streaming-defer-delay
+             (> codex-ide-renderer-markdown-streaming-defer-delay 0)
+             (< start end))
+    (save-excursion
+      (goto-char end)
+      (unless (bolp)
+        (let* ((line-start (max start (line-beginning-position)))
+               (line (buffer-substring-no-properties line-start end)))
+          (when (and (string-match-p "\\`[ \t]*|" line)
+                     (codex-ide-renderer--streaming-table-context-before-p
+                      start
+                      line-start))
+            (cons line-start end)))))))
+
 (defun codex-ide-renderer--defer-streaming-markdown-tail (start end)
-  "Temporarily hide a trailing incomplete inline markdown span."
+  "Temporarily hide trailing incomplete streaming markdown."
   (codex-ide-renderer--without-undo-recording
    (let ((inhibit-read-only t))
      (codex-ide-renderer--clear-streaming-deferred-markdown start end)
-     (if-let ((span (codex-ide-renderer--streaming-deferred-markdown-span
-                     start
-                     end)))
+     (if-let ((span (or (codex-ide-renderer--streaming-trailing-table-source-span
+                         start
+                         end)
+                        (codex-ide-renderer--streaming-deferred-table-row-span
+                         start
+                         end)
+                        (codex-ide-renderer--streaming-deferred-markdown-span
+                         start
+                         end))))
          (progn
            (add-to-invisibility-spec
             codex-ide-renderer--streaming-deferred-invisibility)
@@ -1449,6 +1533,11 @@ intentionally ignored."
              (string-remove-prefix "|"
                                    (string-remove-suffix "|" trimmed))
              "|"))))
+
+(defun codex-ide-renderer--markdown-table-potential-header-line-p (line)
+  "Return non-nil when LINE could be a markdown table header."
+  (and (codex-ide-renderer--markdown-table-row-line-p line)
+       (>= (length (codex-ide-renderer--markdown-table-parse-row line)) 2)))
 
 (defun codex-ide-renderer--markdown-line-region-end (&optional limit)
   "Return the current line end position, including a trailing newline when present."
@@ -2207,10 +2296,6 @@ Use LEFT, INTERSECTION, and RIGHT as the border junction characters."
                                     (copy-marker line-start)
                                     nil)
                               segments))
-                      (push (list (copy-marker line-start)
-                                  (copy-marker table-end)
-                                  t)
-                            segments)
                       (setq next-position line-start
                             stop t))
                   (goto-char table-end))
@@ -2241,33 +2326,41 @@ When STATE-MARKER is non-nil, it tracks the next dirty position."
                                 (marker-buffer state-marker))
                            (marker-position state-marker)
                          start))
+         (end-marker (copy-marker end t))
          (limit (codex-ide-renderer--streaming-markdown-complete-line-limit end)))
-    (prog1
-        (when (< render-start limit)
-          (pcase-let ((`(,segments ,next-marker)
-                       (codex-ide-renderer--streaming-markdown-segments
-                        render-start
-                        limit)))
-            (dolist (segment segments)
-              (let ((segment-start (marker-position (nth 0 segment)))
-                    (segment-end (marker-position (nth 1 segment)))
-                    (allow-trailing-tables (nth 2 segment)))
-                (when (< segment-start segment-end)
-                  (codex-ide-renderer-maybe-render-markdown-region
-                   segment-start
-                   segment-end
-                   allow-trailing-tables)))
-              (set-marker (nth 0 segment) nil)
-              (set-marker (nth 1 segment) nil))
-            (when (markerp state-marker)
-              (set-marker state-marker (marker-position next-marker)))
-            (prog1 (marker-position next-marker)
-              (set-marker next-marker nil))))
-      (codex-ide-renderer--render-streaming-open-fenced-code-block start end)
-      (codex-ide-renderer--render-streaming-current-line-inline-markdown
-       start
-       end)
-      (codex-ide-renderer--defer-streaming-markdown-tail start end))))
+    (unwind-protect
+        (prog1
+            (when (< render-start limit)
+              (pcase-let ((`(,segments ,next-marker)
+                           (codex-ide-renderer--streaming-markdown-segments
+                            render-start
+                            limit)))
+                (dolist (segment segments)
+                  (let ((segment-start (marker-position (nth 0 segment)))
+                        (segment-end (marker-position (nth 1 segment)))
+                        (allow-trailing-tables (nth 2 segment)))
+                    (when (< segment-start segment-end)
+                      (codex-ide-renderer-maybe-render-markdown-region
+                       segment-start
+                       segment-end
+                       allow-trailing-tables)))
+                  (set-marker (nth 0 segment) nil)
+                  (set-marker (nth 1 segment) nil))
+                (when (markerp state-marker)
+                  (set-marker state-marker (marker-position next-marker)))
+                (prog1 (marker-position next-marker)
+                  (set-marker next-marker nil))))
+          (let ((current-end (marker-position end-marker)))
+            (codex-ide-renderer--render-streaming-open-fenced-code-block
+             start
+             current-end)
+            (codex-ide-renderer--render-streaming-current-line-inline-markdown
+             start
+             current-end)
+            (codex-ide-renderer--defer-streaming-markdown-tail
+             start
+             current-end)))
+      (set-marker end-marker nil))))
 
 (provide 'codex-ide-renderer)
 
