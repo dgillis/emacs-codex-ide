@@ -286,6 +286,11 @@ window size change."
   "Face used for active prompt placeholder text."
   :group 'codex-ide)
 
+(defface codex-ide-prompt-prefix-face
+  '((t :inherit (codex-ide-prompt-placeholder-face codex-ide-user-prompt-face)))
+  "Face used for the visible prompt prefix."
+  :group 'codex-ide)
+
 (defface codex-ide-output-separator-face
   '((t))
   "Face used for transcript separator rules."
@@ -545,7 +550,7 @@ theme switches or file reloads in a live Emacs session."
   (insert
    (propertize
     "> "
-    'face 'codex-ide-user-prompt-face
+    'face 'codex-ide-prompt-prefix-face
     'field 'codex-ide-prompt-prefix
     codex-ide-prompt-start-property t
     'read-only t

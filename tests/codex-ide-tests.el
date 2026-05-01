@@ -1601,6 +1601,11 @@
   (should (eq (face-attribute 'codex-ide-user-prompt-face :extend nil t)
               t)))
 
+(ert-deftest codex-ide-prompt-prefix-face-inherits-prompt-help-face ()
+  (should (memq 'codex-ide-prompt-placeholder-face
+                (ensure-list
+                 (face-attribute 'codex-ide-prompt-prefix-face :inherit nil)))))
+
 (ert-deftest codex-ide-input-prompt-has-tail-newline-for-extended-background ()
   (with-temp-buffer
     (codex-ide-session-mode)
@@ -1613,6 +1618,19 @@
       (should (eq (get-text-property (1- (point-max)) 'face)
                   'codex-ide-user-prompt-face))
       (should (equal (codex-ide--current-input session) "")))))
+
+(ert-deftest codex-ide-input-prompt-prefix-uses-prompt-prefix-face ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (goto-char (marker-position
+                  (codex-ide-session-input-prompt-start-marker session)))
+      (should (eq (get-text-property (point) 'face)
+                  'codex-ide-prompt-prefix-face)))))
 
 (ert-deftest codex-ide-input-prompt-move-end-of-line-stays-at-text-end ()
   (with-temp-buffer
@@ -5430,7 +5448,7 @@
 					(goto-char (marker-position
 						    (codex-ide-session-input-prompt-start-marker session)))
 					(should (eq (get-text-property (point) 'face)
-						    'codex-ide-user-prompt-face)))
+						    'codex-ide-prompt-prefix-face)))
 				      (goto-char (point-min))
 				      (search-forward "> Show the last prompt")
 				      (should (eq (get-text-property (1- (match-beginning 0)) 'face)
