@@ -1985,6 +1985,8 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
 							     (or (overlay-get overlay :body-insert-function)
 								 #'codex-ide-renderer-insert-item-result-body))
 							    start)
+							(codex-ide-renderer-clear-result-rail-overlays
+							 overlay)
 							(delete-region (marker-position body-start)
 								       (marker-position body-end))
 							(goto-char (marker-position body-start))
@@ -2478,6 +2480,8 @@ non-nil, render query detail lines even when only a single query is present."
               'help-echo "RET toggles this diff"
               overlay-property overlay)
         properties)))
+    (codex-ide-renderer-add-result-rail-overlays
+     start (point) overlay)
     (cons start (point))))
 
 (defun codex-ide--open-file-change-diff-overlay (overlay)

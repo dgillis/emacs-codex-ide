@@ -160,9 +160,9 @@ BODY may refer to the lexical variable `session'."
     (should (equal (plist-get (cdr (car (codex-ide-renderer--output-separator-face-spec)))
                               :foreground)
                    "#595959"))
-    (should (equal (plist-get (cdr (car (codex-ide-renderer--command-output-face-spec)))
-                              :background)
-                   "#1f1f1f"))))
+    (should-not (plist-member
+                 (cdr (car (codex-ide-renderer--command-output-face-spec)))
+                 :background))))
 
 (ert-deftest codex-ide-renderer-refresh-theme-faces-reapplies-session-face-specs ()
   (let (seen)
@@ -180,9 +180,10 @@ BODY may refer to the lexical variable `session'."
       (codex-ide-renderer-refresh-theme-faces))
     (should (equal seen
                    (list
+                    (cons 'codex-ide-result-rail-face
+                          '((t :inherit (shadow fringe))))
                     (cons 'codex-ide-command-output-face
                           '((t :inherit fixed-pitch
-                               :background "#e8e8e8"
                                :extend t)))
                     (cons 'codex-ide-output-separator-face
                           '((t :foreground "#c7c7c7")))
@@ -925,7 +926,26 @@ BODY may refer to the lexical variable `session'."
       (should (eq (get-text-property (car range)
                                      'codex-ide-command-output-overlay)
                   overlay))
+      (let* ((rails (overlay-get overlay :result-rail-overlays))
+             (rail-string (overlay-get (car rails) 'before-string)))
+        (should (= (length rails) 2))
+        (should (equal (get-text-property 0 'display rail-string)
+                       '(left-fringe codex-ide-result-rail
+                                     codex-ide-result-rail-face))))
       (should (get-text-property (car range) 'read-only)))))
+
+(ert-deftest codex-ide-renderer-clears-result-rail-overlays ()
+  (with-temp-buffer
+    (let ((overlay (make-overlay (point-min) (point-min))))
+      (insert "line 1\nline 2\n")
+      (codex-ide-renderer-add-result-rail-overlays
+       (point-min) (point-max) overlay)
+      (let ((rails (overlay-get overlay :result-rail-overlays)))
+        (should (= (length rails) 2))
+        (codex-ide-renderer-clear-result-rail-overlays overlay)
+        (should-not (overlay-get overlay :result-rail-overlays))
+        (dolist (rail rails)
+          (should-not (overlay-buffer rail)))))))
 
 (ert-deftest codex-ide-renderer-inserts-elicitation-text-field ()
   (with-temp-buffer

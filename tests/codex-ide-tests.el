@@ -1593,9 +1593,32 @@
           (should-not (string-match-p "    hello\n    world"
                                       (buffer-string))))))))
 
-(ert-deftest codex-ide-command-output-face-extends-line-background ()
+(ert-deftest codex-ide-command-output-face-extends-lines ()
   (should (eq (face-attribute 'codex-ide-command-output-face :extend nil t)
               t)))
+
+(ert-deftest codex-ide-file-change-diff-body-uses-diff-fringe-rail ()
+  (with-temp-buffer
+    (let ((overlay (make-overlay (point-min) (point-min))))
+      (codex-ide--insert-file-change-diff-body
+       (string-join
+        '("diff --git a/foo b/foo"
+          "@@ -1 +1 @@"
+          "-old"
+          "+new")
+        "\n")
+       :overlay overlay
+       :overlay-property codex-ide-item-result-overlay-property)
+      (goto-char (point-min))
+      (search-forward "-old")
+      (should (eq (get-text-property (match-beginning 0) 'face)
+                  'codex-ide-file-diff-removed-face))
+      (let* ((rails (overlay-get overlay :result-rail-overlays))
+             (rail-string (overlay-get (car rails) 'before-string)))
+        (should (= (length rails) 4))
+        (should (equal (get-text-property 0 'display rail-string)
+                       '(left-fringe codex-ide-result-rail
+                                     codex-ide-result-rail-face)))))))
 
 (ert-deftest codex-ide-user-prompt-face-extends-line-background ()
   (should (eq (face-attribute 'codex-ide-user-prompt-face :extend nil t)

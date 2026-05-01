@@ -314,6 +314,11 @@ window size change."
   "Face used for command output blocks."
   :group 'codex-ide)
 
+(defface codex-ide-result-rail-face
+  '((t :inherit (shadow fringe)))
+  "Face used for expanded transcript result extent markers in the fringe."
+  :group 'codex-ide)
+
 (defface codex-ide-approval-header-face
   '((t :inherit font-lock-warning-face :weight bold))
   "Face used for inline approval request headers."
@@ -388,6 +393,16 @@ window size change."
   codex-ide-item-result-overlay-property
   "Compatibility alias for `codex-ide-item-result-overlay-property'.")
 
+(define-fringe-bitmap 'codex-ide-result-rail
+  [#b01000000
+   #b00100000
+   #b00010000
+   #b00001000
+   #b00010000
+   #b00100000
+   #b01000000
+   #b00000000])
+
 (defconst codex-ide-renderer--user-prompt-background-mix-light 0.05
   "Foreground mix fraction for prompt backgrounds on light themes.")
 
@@ -399,12 +414,6 @@ window size change."
 
 (defconst codex-ide-renderer--output-separator-foreground-mix-dark 0.35
   "Foreground mix fraction for separators on dark themes.")
-
-(defconst codex-ide-renderer--command-output-background-mix-light 0.09
-  "Foreground mix fraction for command output backgrounds on light themes.")
-
-(defconst codex-ide-renderer--command-output-background-mix-dark 0.12
-  "Foreground mix fraction for command output backgrounds on dark themes.")
 
 (defun codex-ide-renderer--color-defined-p (color)
   "Return non-nil when COLOR names a usable Emacs color."
@@ -464,12 +473,11 @@ window size change."
 (defun codex-ide-renderer--command-output-face-spec ()
   "Return the current face spec for `codex-ide-command-output-face'."
   `((t :inherit fixed-pitch
-       :background
-       ,(codex-ide-renderer--blend-default-colors
-         (if (codex-ide-renderer--theme-dark-p)
-             codex-ide-renderer--command-output-background-mix-dark
-           codex-ide-renderer--command-output-background-mix-light))
        :extend t)))
+
+(defun codex-ide-renderer--result-rail-face-spec ()
+  "Return the current face spec for `codex-ide-result-rail-face'."
+  '((t :inherit (shadow fringe))))
 
 (defun codex-ide-renderer-refresh-theme-faces ()
   "Reapply theme-sensitive renderer face specs.
@@ -481,7 +489,9 @@ theme switches or file reloads in a live Emacs session."
   (face-spec-set 'codex-ide-output-separator-face
                  (codex-ide-renderer--output-separator-face-spec))
   (face-spec-set 'codex-ide-command-output-face
-                 (codex-ide-renderer--command-output-face-spec)))
+                 (codex-ide-renderer--command-output-face-spec))
+  (face-spec-set 'codex-ide-result-rail-face
+                 (codex-ide-renderer--result-rail-face-spec)))
 
 (codex-ide-renderer-refresh-theme-faces)
 
@@ -954,19 +964,62 @@ Return (START . END) for the inserted text."
     (set-marker end-marker (cdr range))
     range))
 
+(defun codex-ide-renderer-clear-result-rail-overlays (overlay)
+  "Delete fringe rail overlays previously attached to OVERLAY."
+  (when (overlayp overlay)
+    (mapc #'delete-overlay (overlay-get overlay :result-rail-overlays))
+    (overlay-put overlay :result-rail-overlays nil)))
+
+(defun codex-ide-renderer--result-rail-string ()
+  "Return a fringe rail display string."
+  (propertize " "
+              'display
+              '(left-fringe codex-ide-result-rail codex-ide-result-rail-face)))
+
+(defun codex-ide-renderer-add-result-rail-overlays
+    (start end &optional parent-overlay)
+  "Add fringe rail overlays from START to END.
+When PARENT-OVERLAY is non-nil, remember the rail overlays on it so callers can
+clear them before replacing or folding the body."
+  (when (< start end)
+    (let ((rail-overlays nil))
+      (save-excursion
+        (goto-char start)
+        (while (< (point) end)
+          (let ((rail (make-overlay (point)
+                                    (min (1+ (point)) end)
+                                    nil t t)))
+            (overlay-put rail
+                         'before-string
+                         (codex-ide-renderer--result-rail-string))
+            (overlay-put rail 'evaporate t)
+            (push rail rail-overlays))
+          (forward-line 1)))
+      (setq rail-overlays (nreverse rail-overlays))
+      (when (overlayp parent-overlay)
+        (overlay-put parent-overlay
+                     :result-rail-overlays
+                     (append (overlay-get parent-overlay :result-rail-overlays)
+                             rail-overlays)))
+      rail-overlays)))
+
 (cl-defun codex-ide-renderer-insert-item-result-body
     (display-text &key keymap overlay overlay-property properties face help-echo)
   "Insert DISPLAY-TEXT as a frozen expandable body.
 KEYMAP is applied to the body text.  OVERLAY is attached via OVERLAY-PROPERTY.
 PROPERTIES is appended to the inserted region.  Return (START . END)."
-  (codex-ide-renderer-insert-read-only
-   display-text
-   (or face 'codex-ide-command-output-face)
-   (append
-    (list 'keymap keymap
-          'help-echo (or help-echo "RET toggles this section")
-          overlay-property overlay)
-    properties)))
+  (let ((range
+         (codex-ide-renderer-insert-read-only
+          display-text
+          (or face 'codex-ide-command-output-face)
+          (append
+           (list 'keymap keymap
+                 'help-echo (or help-echo "RET toggles this section")
+                 overlay-property overlay)
+           properties))))
+    (codex-ide-renderer-add-result-rail-overlays
+     (car range) (cdr range) overlay)
+    range))
 
 (cl-defun codex-ide-renderer-insert-command-output-body
     (display-text &key keymap overlay overlay-property properties)
