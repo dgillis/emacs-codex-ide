@@ -555,6 +555,11 @@ theme switches or file reloads in a live Emacs session."
 					       rear-nonsticky (read-only)
 					       front-sticky (read-only)))))
 
+(defun codex-ide-renderer--fully-read-only-region-p (start end)
+  "Return non-nil when every character from START to END is read-only."
+  (and (< start end)
+       (not (text-property-not-all start end 'read-only t))))
+
 (defun codex-ide-renderer-insert-prompt-prefix ()
   "Insert the user prompt prefix."
   (insert
@@ -2309,7 +2314,11 @@ Use LEFT, INTERSECTION, and RIGHT as the border junction characters."
             (if-let ((rendered (codex-ide-renderer--markdown-table-display-string lines)))
                 (let ((original (buffer-substring-no-properties
                                  block-start
-                                 block-end)))
+                                 block-end))
+                      (read-only-table
+                       (codex-ide-renderer--fully-read-only-region-p
+                        block-start
+                        block-end)))
                   (goto-char block-start)
                   (delete-region block-start block-end)
                   (insert rendered)
@@ -2321,6 +2330,8 @@ Use LEFT, INTERSECTION, and RIGHT as the border junction characters."
 					codex-ide-markdown-table-render-width
 					,(or codex-ide-renderer--markdown-table-max-width-override
                                              codex-ide-renderer-markdown-table-max-width)))
+                  (when read-only-table
+                    (codex-ide-renderer-freeze-region block-start (point)))
                   (codex-ide-renderer--buttonize-markdown-table-links block-start (point))
                   (goto-char (point)))
               (goto-char block-end)))
@@ -2356,7 +2367,10 @@ TABLE-MAX-WIDTH is the effective table width to use for this pass."
                   (not (equal render-width table-max-width)))
              (if-let ((rendered (codex-ide-renderer--markdown-table-display-string
                                  (split-string original "\n" t))))
-                 (progn
+                 (let ((read-only-table
+                        (codex-ide-renderer--fully-read-only-region-p
+                         pos
+                         next)))
                    (delete-region pos next)
                    (goto-char pos)
                    (insert rendered)
@@ -2367,6 +2381,8 @@ TABLE-MAX-WIDTH is the effective table width to use for this pass."
                                          codex-ide-markdown-table-original ,original
                                          codex-ide-markdown-table-render-width
                                          ,table-max-width))
+                   (when read-only-table
+                     (codex-ide-renderer-freeze-region pos (point)))
                    (codex-ide-renderer--buttonize-markdown-table-links
                     pos
                     (point)))
@@ -2379,7 +2395,9 @@ TABLE-MAX-WIDTH is the effective table width to use for this pass."
   "Apply lightweight markdown rendering between START and END."
   (codex-ide-renderer--without-undo-recording
    (save-excursion
-     (let ((inhibit-read-only t)
+     (let ((region-read-only
+            (codex-ide-renderer--fully-read-only-region-p start end))
+           (inhibit-read-only t)
            (end-marker (copy-marker end t)))
        (codex-ide-renderer--clear-markdown-properties start (marker-position end-marker))
        (goto-char start)
@@ -2462,6 +2480,8 @@ TABLE-MAX-WIDTH is the effective table width to use for this pass."
         codex-ide-renderer--markdown-italic-underscore-pattern
         'italic
         t)
+       (when region-read-only
+         (codex-ide-renderer-freeze-region start (marker-position end-marker)))
        (set-marker end-marker nil)))))
 
 (defun codex-ide-renderer--markdown-region-over-size-limit-p (start end)

@@ -6381,6 +6381,28 @@
       (should-not (get-text-property (point-min) 'display))
       (should (get-text-property (point-min) 'codex-ide-markdown-table-original))))
 
+  (ert-deftest codex-ide-render-markdown-region-preserves-read-only-pipe-tables ()
+    (with-temp-buffer
+      (insert "| Name | Age |\n| --- | ---: |\n| Bob | 3 |\n")
+      (codex-ide-renderer-freeze-region (point-min) (point-max))
+      (codex-ide-renderer-render-markdown-region (point-min) (point-max))
+      (should (not (text-property-not-all (point-min) (point-max) 'read-only t)))
+      (goto-char (point-min))
+      (search-forward "Bob")
+      (should-error (delete-char -1) :type 'text-read-only)))
+
+  (ert-deftest codex-ide-renderer-rerender-markdown-tables-preserves-read-only ()
+    (with-temp-buffer
+      (insert "| Description | Count |\n| --- | ---: |\n| This is a long table cell that should wrap | 3 |\n")
+      (codex-ide-renderer-freeze-region (point-min) (point-max))
+      (let ((codex-ide-renderer-markdown-table-max-width nil))
+	(codex-ide-renderer-render-markdown-region (point-min) (point-max)))
+      (codex-ide-renderer-rerender-markdown-tables (point-min) (point-max) 28)
+      (should (not (text-property-not-all (point-min) (point-max) 'read-only t)))
+      (goto-char (point-min))
+      (search-forward "Description")
+      (should-error (delete-char -1) :type 'text-read-only)))
+
   (ert-deftest codex-ide-render-markdown-region-renders-file-links-inside-pipe-tables ()
     (with-temp-buffer
       (insert "| File |\n| --- |\n| [`foo.el`](/tmp/foo.el#L3C2) |\n")
