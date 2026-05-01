@@ -71,6 +71,7 @@
 (defvar codex-ide-resume-summary-turn-limit)
 (defvar codex-ide-running-submit-action)
 (defvar codex-ide-prompt-placeholder-text)
+(defvar codex-ide-status-placeholder-text-alist)
 (defvar codex-ide-steering-placeholder-text)
 (defvar codex-ide-model)
 (defvar codex-ide-buffer-display-when-approval-required)
@@ -524,7 +525,12 @@ inserted text."
     (if (and session
              (or (codex-ide-session-current-turn-id session)
                  (codex-ide-session-output-prefix-inserted session)))
-	codex-ide-steering-placeholder-text
+        (or (alist-get (downcase (or (codex-ide-session-status session) ""))
+                       codex-ide-status-placeholder-text-alist
+                       nil
+                       nil
+                       #'string=)
+            codex-ide-steering-placeholder-text)
       codex-ide-prompt-placeholder-text)))
 
 (defun codex-ide--input-placeholder-display-string (&optional session)
@@ -3453,6 +3459,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
               (plist-get render-state :metadata))
              (codex-ide--pending-approvals session))
     (codex-ide--set-session-status session "approval" 'approval-requested)
+    (codex-ide--refresh-input-placeholder session)
     (codex-ide--update-header-line session)
     (codex-ide--run-session-event
      'approval-requested

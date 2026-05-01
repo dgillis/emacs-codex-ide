@@ -647,6 +647,34 @@
       (should (string-suffix-p "\n> \n\n" (buffer-string)))
       (should (equal (codex-ide--current-input session) "")))))
 
+(ert-deftest codex-ide-busy-input-prompt-uses-status-placeholder ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "approval"
+                    :current-turn-id "turn-1")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (codex-ide--refresh-input-placeholder session)
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Seeking approval...")))))
+
+(ert-deftest codex-ide-busy-input-prompt-status-placeholder-can-be-customized ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((codex-ide-status-placeholder-text-alist
+           '(("running" . "Still running...")))
+          (session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "running"
+                    :current-turn-id "turn-1")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (codex-ide--refresh-input-placeholder session)
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Still running...")))))
+
 (ert-deftest codex-ide-finish-turn-refreshes-existing-prompt-placeholder ()
   (with-temp-buffer
     (codex-ide-session-mode)
@@ -3594,6 +3622,10 @@
 					   (process (codex-ide-session-process session)))
 				      (setf (codex-ide-session-current-turn-id session) "turn-approval-1"
 					    (codex-ide-session-status session) "running")
+				      (codex-ide--insert-input-prompt session nil)
+				      (codex-ide--refresh-input-placeholder session)
+				      (should (equal (codex-ide-test--input-placeholder-text session)
+						     "Running..."))
 				      (codex-ide--session-metadata-put session :model-name "gpt-5.4")
 				      (cl-letf (((symbol-function 'run-at-time)
 						 (lambda (_time _repeat function)
@@ -3619,6 +3651,8 @@
 						     (format "Codex approval required in %s"
 							     (buffer-name (codex-ide-session-buffer session)))))
 				      (should (string= (codex-ide-session-status session) "approval"))
+				      (should (equal (codex-ide-test--input-placeholder-text session)
+						     "Seeking approval..."))
 				      (should (string-match-p "Codex:Approval"
 							      (codex-ide-renderer-mode-line-status session)))
 				      (should (= (hash-table-count (codex-ide--pending-approvals session)) 1))

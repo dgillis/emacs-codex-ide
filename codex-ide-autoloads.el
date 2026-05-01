@@ -36,6 +36,12 @@ Placeholder text displayed in an empty idle Codex prompt.")
 (defvar codex-ide-steering-placeholder-text "Running..." "\
 Placeholder text displayed in an empty Codex prompt during a running turn.")
 (custom-autoload 'codex-ide-steering-placeholder-text "codex-ide" t)
+(defvar codex-ide-status-placeholder-text-alist '(("approval" . "Seeking approval...") ("interrupting" . "Interrupting...")) "\
+Alist mapping Codex session statuses to active prompt placeholder text.
+
+Entries are matched against lowercase status strings.  When a busy session
+status has no entry here, `codex-ide-steering-placeholder-text' is used.")
+(custom-autoload 'codex-ide-status-placeholder-text-alist "codex-ide" t)
 (defvar codex-ide-session-baseline-prompt "\n- You are a Codex server running inside Emacs.\n- You can use MCP tools to inspect and interact with the running Emacs session.\n- Interpret Emacs terminology as relevant context to the user's request: buffers, regions, windows, point, mark, current file, etc.\n- Responses are rendered as Markdown in an Emacs buffer.\n- Markdown pipe tables are rendered as visible tables.\n- In table cells, wrap code-like identifiers, filenames, paths, symbols, and expressions in backticks.\n- Use markdown links for code references, for example [`foo.el`](/tmp/foo.el#L3C2).\n- Avoid bare underscores or asterisks for code-like text inside tables; use backticks instead.\n- Do not needlessly use Emacs commands to accomplish agent tasks." "\
 Optional baseline prompt injected into the first real prompt of a new thread.")
 (custom-autoload 'codex-ide-session-baseline-prompt "codex-ide" t)

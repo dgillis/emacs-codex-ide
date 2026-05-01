@@ -99,6 +99,17 @@
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-status-placeholder-text-alist
+  '(("approval" . "Seeking approval...")
+    ("interrupting" . "Interrupting..."))
+  "Alist mapping Codex session statuses to active prompt placeholder text.
+
+Entries are matched against lowercase status strings.  When a busy session
+status has no entry here, `codex-ide-steering-placeholder-text' is used."
+  :type '(alist :key-type string :value-type string)
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-session-baseline-prompt "
 - You are a Codex server running inside Emacs.
 - You can use MCP tools to inspect and interact with the running Emacs session.
