@@ -85,6 +85,24 @@ immediately."
                  (number :tag "Seconds"))
   :group 'codex-ide)
 
+(defcustom codex-ide-renderer-markdown-table-max-width 100
+  "Maximum width for rendered markdown tables before cells are wrapped.
+When nil, markdown tables use their natural rendered width."
+  :type '(choice (const :tag "No limit" nil)
+                 (integer :tag "Maximum columns"))
+  :group 'codex-ide)
+
+(defcustom codex-ide-renderer-markdown-table-max-cell-width 60
+  "Maximum width for a rendered markdown table cell before wrapping."
+  :type '(choice (const :tag "No per-cell limit" nil)
+                 (integer :tag "Maximum columns"))
+  :group 'codex-ide)
+
+(defcustom codex-ide-renderer-markdown-table-min-cell-width 8
+  "Minimum width used when shrinking markdown table columns."
+  :type 'integer
+  :group 'codex-ide)
+
 (defcustom codex-ide-renderer-command-output-fold-on-start t
   "When non-nil, command output blocks start folded while output streams."
   :type 'boolean
@@ -1640,6 +1658,162 @@ intentionally ignored."
     "|")
    "|\n"))
 
+(defun codex-ide-renderer--markdown-table-box-border
+    (widths left intersection right)
+  "Return a Unicode box border for WIDTHS.
+Use LEFT, INTERSECTION, and RIGHT as the border junction characters."
+  (concat
+   left
+   (mapconcat
+    (lambda (width)
+      (make-string (+ width 2) ?─))
+    widths
+    intersection)
+   right
+   "\n"))
+
+(defun codex-ide-renderer--markdown-table-display-width (widths)
+  "Return the rendered display width for a table with WIDTHS."
+  (+ (apply #'+ widths)
+     (* 3 (length widths))
+     1))
+
+(defun codex-ide-renderer--markdown-table-shrink-widths (widths max-width)
+  "Return WIDTHS reduced to fit MAX-WIDTH where possible."
+  (let* ((minimum (max 1 codex-ide-renderer-markdown-table-min-cell-width))
+         (widths (copy-sequence widths)))
+    (while (and (> (codex-ide-renderer--markdown-table-display-width widths)
+                   max-width)
+                (seq-some (lambda (width) (> width minimum)) widths))
+      (let ((widest-index nil)
+            (widest-width 0)
+            (index 0))
+        (dolist (width widths)
+          (when (and (> width minimum)
+                     (> width widest-width))
+            (setq widest-index index
+                  widest-width width))
+          (setq index (1+ index)))
+        (when widest-index
+          (setf (nth widest-index widths)
+                (1- (nth widest-index widths))))))
+    widths))
+
+(defun codex-ide-renderer--markdown-table-constrain-widths (widths)
+  "Return table WIDTHS constrained by markdown table width settings."
+  (let* ((cell-max codex-ide-renderer-markdown-table-max-cell-width)
+         (table-max codex-ide-renderer-markdown-table-max-width)
+         (widths
+          (mapcar
+           (lambda (width)
+             (if (and cell-max (> cell-max 0))
+                 (min width cell-max)
+               width))
+           widths)))
+    (if (and table-max (> table-max 0)
+             (> (codex-ide-renderer--markdown-table-display-width widths)
+                table-max))
+        (codex-ide-renderer--markdown-table-shrink-widths widths table-max)
+      widths)))
+
+(defun codex-ide-renderer--markdown-table-whitespace-char-p (char)
+  "Return non-nil when CHAR is horizontal whitespace."
+  (or (= char ?\s)
+      (= char ?\t)))
+
+(defun codex-ide-renderer--markdown-table-trim-right (text)
+  "Return TEXT without trailing horizontal whitespace."
+  (let ((end (length text)))
+    (while (and (> end 0)
+                (codex-ide-renderer--markdown-table-whitespace-char-p
+                 (aref text (1- end))))
+      (setq end (1- end)))
+    (substring text 0 end)))
+
+(defun codex-ide-renderer--markdown-table-skip-whitespace (text start)
+  "Return the next non-whitespace index in TEXT at or after START."
+  (let ((pos start))
+    (while (and (< pos (length text))
+                (codex-ide-renderer--markdown-table-whitespace-char-p
+                 (aref text pos)))
+      (setq pos (1+ pos)))
+    pos))
+
+(defun codex-ide-renderer--markdown-table-line-break (text width)
+  "Return a word-break index for TEXT within WIDTH columns."
+  (let ((pos 0)
+        (display-width 0)
+        (last-space nil)
+        (last-fit 0))
+    (while (and (< pos (length text))
+                (<= (+ display-width (char-width (aref text pos))) width))
+      (let ((char (aref text pos)))
+        (setq display-width (+ display-width (char-width char))
+              pos (1+ pos))
+        (if (codex-ide-renderer--markdown-table-whitespace-char-p char)
+            (setq last-space (1- pos))
+          (setq last-fit pos))))
+    (cond
+     ((and last-space (> last-space 0))
+      last-space)
+     ((> last-fit 0)
+      last-fit)
+     (t
+      (min 1 (length text))))))
+
+(defun codex-ide-renderer--markdown-table-wrap-cell (cell width)
+  "Return CELL split into propertized lines no wider than WIDTH."
+  (let ((pos (codex-ide-renderer--markdown-table-skip-whitespace cell 0))
+        (lines nil))
+    (while (< pos (length cell))
+      (let* ((remaining (substring cell pos))
+             (break (codex-ide-renderer--markdown-table-line-break
+                     remaining
+                     width))
+             (line (codex-ide-renderer--markdown-table-trim-right
+                    (substring remaining 0 break))))
+        (push line lines)
+        (setq pos (codex-ide-renderer--markdown-table-skip-whitespace
+                   cell
+                   (+ pos break)))))
+    (or (nreverse lines)
+        (list ""))))
+
+(defun codex-ide-renderer--markdown-table-format-box-line
+    (cells widths alignments)
+  "Return one Unicode box table line from CELLS."
+  (concat
+   "│ "
+   (mapconcat
+    (lambda (triple)
+      (pcase-let ((`(,cell ,width ,alignment) triple))
+        (codex-ide-renderer--markdown-table-pad-cell cell width alignment)))
+    (cl-mapcar #'list cells widths alignments)
+    " │ ")
+   " │\n"))
+
+(defun codex-ide-renderer--markdown-table-format-box-row
+    (cells widths alignments)
+  "Return a wrapped Unicode box table row from CELLS."
+  (let* ((wrapped-cells
+          (cl-mapcar
+           #'codex-ide-renderer--markdown-table-wrap-cell
+           cells
+           widths))
+         (height (apply #'max 1 (mapcar #'length wrapped-cells)))
+         (lines nil))
+    (dotimes (line-index height)
+      (push
+       (codex-ide-renderer--markdown-table-format-box-line
+        (mapcar
+         (lambda (cell-lines)
+           (or (nth line-index cell-lines) ""))
+         wrapped-cells)
+        widths
+        alignments)
+       lines))
+    (apply #'concat (nreverse lines))))
+
 (defun codex-ide-renderer--markdown-table-leading-indentation (line)
   "Return indentation before the opening table pipe in LINE."
   (if (string-match "\\`\\([ \t]*\\)|" line)
@@ -1684,29 +1858,58 @@ intentionally ignored."
                     (mapcar #'codex-ide-renderer--markdown-table-render-cell row)
                     (make-list (max 0 (- column-count (length row))) "")))
                  raw-rows))
-               (widths
+	       (widths
                 (cl-loop for column from 0 below column-count
                          collect (apply #'max 1
                                         (mapcar (lambda (row)
                                                   (string-width (nth column row)))
                                                 rendered-rows))))
-               (table-text
-                (concat
-                 (codex-ide-renderer--markdown-table-format-row
-                  (car rendered-rows)
-                  widths
-                  normalized-alignments)
-                 (codex-ide-renderer--markdown-table-separator-string
-                  widths
-                  normalized-alignments)
-                 (mapconcat
-                  (lambda (row)
-                    (codex-ide-renderer--markdown-table-format-row
-                     row
-                     widths
-                     normalized-alignments))
-                  (cdr rendered-rows)
-                  "")))
+               (constrained-widths
+                (codex-ide-renderer--markdown-table-constrain-widths widths))
+               (box-table-p (not (equal constrained-widths widths)))
+	       (table-text
+                (if box-table-p
+                    (concat
+                     (codex-ide-renderer--markdown-table-box-border
+                      constrained-widths "┌" "┬" "┐")
+                     (codex-ide-renderer--markdown-table-format-box-row
+                      (car rendered-rows)
+                      constrained-widths
+                      normalized-alignments)
+                     (codex-ide-renderer--markdown-table-box-border
+                      constrained-widths "├" "┼" "┤")
+                     (mapconcat
+                      #'identity
+                      (cl-loop for row in (cdr rendered-rows)
+                               for last = (eq row (car (last rendered-rows)))
+                               collect
+                               (concat
+                                (codex-ide-renderer--markdown-table-format-box-row
+                                 row
+                                 constrained-widths
+                                 normalized-alignments)
+                                (codex-ide-renderer--markdown-table-box-border
+                                 constrained-widths
+                                 (if last "└" "├")
+                                 (if last "┴" "┼")
+                                 (if last "┘" "┤"))))
+                      ""))
+                  (concat
+                   (codex-ide-renderer--markdown-table-format-row
+                    (car rendered-rows)
+                    widths
+                    normalized-alignments)
+                   (codex-ide-renderer--markdown-table-separator-string
+                    widths
+                    normalized-alignments)
+                   (mapconcat
+                    (lambda (row)
+                      (codex-ide-renderer--markdown-table-format-row
+                       row
+                       widths
+                       normalized-alignments))
+                    (cdr rendered-rows)
+                    ""))))
                (table-text (codex-ide-renderer--markdown-prefix-lines table-text indent)))
           (add-face-text-property
            0 (length table-text) 'fixed-pitch 'append table-text)
