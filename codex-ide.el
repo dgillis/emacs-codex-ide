@@ -4,7 +4,7 @@
 
 ;; Author: Duncan Gillis
 ;; URL: https://github.com/dgillis/codex-ide
-;; Version: 0.2.2
+;; Version: 0.2.3
 ;; Package-Requires: ((emacs "28.1") (transient "0.9.0"))
 ;; Keywords: ai, tools
 
