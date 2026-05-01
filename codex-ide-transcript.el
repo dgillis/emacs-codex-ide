@@ -62,6 +62,7 @@
 (defvar codex-ide-log-max-lines)
 (defvar codex-ide-renderer-render-markdown-during-streaming)
 (defvar codex-ide-renderer-markdown-render-max-chars)
+(defvar codex-ide-renderer--markdown-table-max-width-override)
 (defvar codex-ide-renderer-command-output-fold-on-start)
 (defvar codex-ide-renderer-command-output-max-rendered-lines)
 (defvar codex-ide-renderer-command-output-max-rendered-chars)
@@ -979,8 +980,13 @@ When DRAFT is nil, preserve the current active prompt text."
     (unwind-protect
         (codex-ide--maybe-save-transcript-position end
 						   (prog1
-						       (codex-ide-renderer-maybe-render-markdown-region
-							start end allow-trailing-tables)
+						       (let ((codex-ide-renderer--markdown-table-max-width-override
+							      (codex-ide-renderer-markdown-table-max-width-for-buffer
+							       (current-buffer))))
+							 (codex-ide-renderer-maybe-render-markdown-region
+							  start
+							  end
+							  allow-trailing-tables))
 						     (when render-end-marker
 						       (set-marker active-boundary (marker-position render-end-marker)))))
       (when render-end-marker
@@ -1015,10 +1021,13 @@ When DRAFT is nil, preserve the current active prompt text."
                            (= (marker-position active-boundary) message-end)
                            (copy-marker message-end t))))
                 (unwind-protect
-                    (codex-ide-renderer-render-markdown-streaming
-                     (marker-position message-start)
-                     message-end
-                     render-start-marker)
+                    (let ((codex-ide-renderer--markdown-table-max-width-override
+                           (codex-ide-renderer-markdown-table-max-width-for-buffer
+                            buffer)))
+                      (codex-ide-renderer-render-markdown-streaming
+                       (marker-position message-start)
+                       message-end
+                       render-start-marker))
                   (when render-end-marker
                     (set-marker active-boundary
                                 (marker-position render-end-marker))

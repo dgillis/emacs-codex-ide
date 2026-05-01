@@ -519,6 +519,129 @@ BODY may refer to the lexical variable `session'."
      (search-forward "foo.el")
      (should (button-at (match-beginning 0))))))
 
+(ert-deftest codex-ide-renderer-table-render-width-can-use-window-sized-override ()
+  (with-temp-buffer
+    (let ((codex-ide-renderer-markdown-table-max-width nil)
+          (codex-ide-renderer-markdown-table-max-cell-width nil)
+          (codex-ide-renderer-markdown-table-min-cell-width 6)
+          (codex-ide-renderer--markdown-table-max-width-override 38))
+      (insert "| File | Summary |\n")
+      (insert "| --- | --- |\n")
+      (insert "| [`foo.el`](/tmp/foo.el#L3C2) | This is a long table cell that should wrap after width constraining. |\n")
+      (codex-ide-renderer-render-markdown-region (point-min) (point-max) t)
+      (should (string-prefix-p "┌" (buffer-string)))
+      (should (equal (get-text-property
+                      (point-min)
+                      'codex-ide-markdown-table-render-width)
+                     38))
+      (goto-char (point-min))
+      (search-forward "foo.el")
+      (should (button-at (match-beginning 0))))))
+
+(ert-deftest codex-ide-renderer-table-width-override-supersedes-static-cap ()
+  (let ((codex-ide-renderer-markdown-table-max-width 20)
+        (codex-ide-renderer-markdown-table-max-cell-width nil)
+        (codex-ide-renderer-markdown-table-min-cell-width 6))
+    (should (equal (codex-ide-renderer--markdown-table-constrain-widths
+                    '(30)
+                    40)
+                   '(30)))))
+
+(ert-deftest codex-ide-renderer-rerenders-existing-table-for-new-width ()
+  (with-temp-buffer
+    (let ((codex-ide-renderer-markdown-table-max-width nil)
+          (codex-ide-renderer-markdown-table-max-cell-width nil)
+          (codex-ide-renderer-markdown-table-min-cell-width 6)
+          (codex-ide-renderer--markdown-table-max-width-override 120))
+      (insert "| File | Summary |\n")
+      (insert "| --- | --- |\n")
+      (insert "| [`foo.el`](/tmp/foo.el#L3C2) | This is a long table cell that should wrap after rerendering. |\n")
+      (codex-ide-renderer-render-markdown-region (point-min) (point-max) t)
+      (should (string-prefix-p "| File" (buffer-string)))
+      (codex-ide-renderer-rerender-markdown-tables (point-min) (point-max) 38)
+      (should (string-prefix-p "┌" (buffer-string)))
+      (should (equal (get-text-property
+                      (point-min)
+                      'codex-ide-markdown-table-render-width)
+                     38))
+      (goto-char (point-min))
+      (search-forward "foo.el")
+      (should (button-at (match-beginning 0))))))
+
+(ert-deftest codex-ide-renderer-table-layout-window-prefers-selected-window ()
+  (let ((buffer (get-buffer-create " *codex-ide-renderer-table-selected*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (set-window-buffer (selected-window) buffer)
+          (let ((selected (selected-window)))
+            (split-window-right)
+            (should (eq (codex-ide-renderer-markdown-table-layout-window buffer)
+                        selected))))
+      (kill-buffer buffer))))
+
+(ert-deftest codex-ide-renderer-table-window-width-leaves-margin ()
+  (let ((buffer (get-buffer-create " *codex-ide-renderer-table-margin*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (set-window-buffer (selected-window) buffer)
+          (let ((codex-ide-renderer-markdown-table-window-margin 4))
+            (cl-letf (((symbol-function 'window-body-width)
+                       (lambda (_window &optional _pixelwise) 80)))
+              (should (equal
+                       (codex-ide-renderer-markdown-table-max-width-for-buffer
+                        buffer)
+                       76)))))
+      (kill-buffer buffer))))
+
+(ert-deftest codex-ide-renderer-table-layout-window-uses-smallest-unselected-window ()
+  (let ((buffer (get-buffer-create " *codex-ide-renderer-table-smallest*"))
+        (other-buffer (get-buffer-create " *codex-ide-renderer-table-other*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (set-window-buffer (selected-window) other-buffer)
+          (let* ((wide (split-window-right))
+                 (narrow (split-window wide nil 'right)))
+            (set-window-buffer wide buffer)
+            (set-window-buffer narrow buffer)
+            (cl-letf (((symbol-function 'window-body-width)
+                       (lambda (window &optional _pixelwise)
+                         (if (eq window narrow) 40 100))))
+              (should (eq (codex-ide-renderer-markdown-table-layout-window buffer)
+                          narrow)))))
+      (kill-buffer buffer)
+      (kill-buffer other-buffer))))
+
+(ert-deftest codex-ide-renderer-table-rerender-is-debounced ()
+  (with-temp-buffer
+    (let ((buffer (current-buffer))
+          (scheduled nil)
+          (cancelled nil)
+          (timer-1 'codex-ide-renderer-test-timer-1)
+          (timer-2 'codex-ide-renderer-test-timer-2))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (seconds repeat function buffer width)
+                   (let ((timer (if scheduled timer-2 timer-1)))
+                     (push (list seconds repeat function buffer width timer)
+                           scheduled)
+                     timer)))
+                ((symbol-function 'timerp)
+                 (lambda (object)
+                   (memq object (list timer-1 timer-2))))
+                ((symbol-function 'cancel-timer)
+                 (lambda (timer)
+                   (push timer cancelled))))
+        (codex-ide-renderer--schedule-markdown-table-rerender buffer 80)
+        (codex-ide-renderer--schedule-markdown-table-rerender buffer 72)
+        (should (= (length scheduled) 2))
+        (should (equal cancelled (list timer-1)))
+        (should (equal codex-ide-renderer--markdown-table-pending-rerender-width
+                       72))
+        (should (eq codex-ide-renderer--markdown-table-rerender-timer
+                    timer-2))))))
+
 (ert-deftest codex-ide-renderer-streaming-releases-pipe-line-when-not-table ()
   (codex-ide-renderer-test-with-agent-message-buffer
    (insert "| Not a `table` row |\n")

@@ -497,6 +497,21 @@
     (should-not font-lock-mode)
     (should-not jit-lock-functions)))
 
+(ert-deftest codex-ide-session-mode-table-resize-subscribes-and-tears-down-hooks ()
+  (let ((codex-ide-renderer--markdown-table-resize-buffers nil)
+        (window-size-change-functions nil))
+    (with-temp-buffer
+      (codex-ide-session-mode)
+      (should (memq (current-buffer)
+                    codex-ide-renderer--markdown-table-resize-buffers))
+      (should (memq #'codex-ide-renderer--handle-window-size-change
+                    window-size-change-functions))
+      (codex-ide-session-mode--teardown-table-resize)
+      (should-not (memq (current-buffer)
+                        codex-ide-renderer--markdown-table-resize-buffers))
+      (should-not (memq #'codex-ide-renderer--handle-window-size-change
+                        window-size-change-functions)))))
+
 (ert-deftest codex-ide-log-mode-disables-undo ()
   (with-temp-buffer
     (buffer-enable-undo)

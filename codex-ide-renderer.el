@@ -87,7 +87,9 @@ immediately."
 
 (defcustom codex-ide-renderer-markdown-table-max-width 100
   "Maximum width for rendered markdown tables before cells are wrapped.
-When nil, markdown tables use their natural rendered width."
+When a session buffer is visible, its window width takes precedence.
+When nil, markdown tables without a visible session window use their
+natural rendered width."
   :type '(choice (const :tag "No limit" nil)
                  (integer :tag "Maximum columns"))
   :group 'codex-ide)
@@ -102,6 +104,160 @@ When nil, markdown tables use their natural rendered width."
   "Minimum width used when shrinking markdown table columns."
   :type 'integer
   :group 'codex-ide)
+
+(defcustom codex-ide-renderer-markdown-table-rerender-delay 0.15
+  "Seconds to debounce markdown table rerendering after window size changes.
+When nil, visible session tables are rerendered immediately after a
+window size change."
+  :type '(choice (const :tag "Immediate" nil)
+                 (number :tag "Seconds"))
+  :group 'codex-ide)
+
+(defcustom codex-ide-renderer-markdown-table-window-margin 4
+  "Columns to leave unused when sizing markdown tables to a window."
+  :type 'integer
+  :group 'codex-ide)
+
+(defvar codex-ide-renderer--markdown-table-max-width-override nil
+  "Dynamic table max width used while rendering markdown tables.")
+
+(defvar codex-ide-renderer--markdown-table-resize-buffers nil
+  "Live buffers subscribed to markdown table resize rerendering.")
+
+(defvar-local codex-ide-renderer--markdown-table-rerender-timer nil
+  "Pending markdown table resize rerender timer for this buffer.")
+
+(defvar-local codex-ide-renderer--markdown-table-pending-rerender-width nil
+  "Latest requested markdown table rerender width for this buffer.")
+
+(defun codex-ide-renderer-markdown-table-layout-window (buffer)
+  "Return the window whose width should drive BUFFER's table layout."
+  (let ((windows (get-buffer-window-list buffer nil t)))
+    (cond
+     ((memq (selected-window) windows)
+      (selected-window))
+     (windows
+      (car
+       (sort (copy-sequence windows)
+             (lambda (left right)
+               (< (window-body-width left) (window-body-width right)))))))))
+
+(defun codex-ide-renderer-markdown-table-max-width-for-buffer (buffer)
+  "Return the effective markdown table max width for BUFFER."
+  (when-let ((window (codex-ide-renderer-markdown-table-layout-window buffer)))
+    (max 1
+         (- (window-body-width window)
+            (max 0 codex-ide-renderer-markdown-table-window-margin)))))
+
+(defun codex-ide-renderer--capture-window-positions (buffer)
+  "Return window position state for visible windows displaying BUFFER."
+  (mapcar
+   (lambda (window)
+     (list :window window
+           :start-marker (copy-marker (window-start window))
+           :point-marker (copy-marker (window-point window))))
+   (get-buffer-window-list buffer nil t)))
+
+(defun codex-ide-renderer--restore-window-positions (states)
+  "Restore window positions from STATES."
+  (dolist (state states)
+    (let ((window (plist-get state :window))
+          (start-marker (plist-get state :start-marker))
+          (point-marker (plist-get state :point-marker)))
+      (unwind-protect
+          (when (and (window-live-p window)
+                     (markerp point-marker)
+                     (marker-buffer point-marker))
+            (when (and (markerp start-marker)
+                       (marker-buffer start-marker))
+              (set-window-start window (marker-position start-marker) t))
+            (set-window-point window (marker-position point-marker)))
+        (when (markerp start-marker)
+          (set-marker start-marker nil))
+        (when (markerp point-marker)
+          (set-marker point-marker nil))))))
+
+(defun codex-ide-renderer--perform-markdown-table-rerender
+    (buffer table-max-width)
+  "Rerender visible markdown tables in BUFFER for TABLE-MAX-WIDTH."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq codex-ide-renderer--markdown-table-rerender-timer nil
+            codex-ide-renderer--markdown-table-pending-rerender-width nil)
+      (when (and table-max-width
+                 (get-buffer-window-list buffer nil t)
+                 (text-property-not-all
+                  (point-min)
+                  (point-max)
+                  'codex-ide-markdown-table-original
+                  nil))
+        (let ((window-states
+               (codex-ide-renderer--capture-window-positions buffer)))
+          (unwind-protect
+              (codex-ide-renderer-rerender-markdown-tables
+               (point-min)
+               (point-max)
+               table-max-width)
+            (codex-ide-renderer--restore-window-positions window-states)))))))
+
+(defun codex-ide-renderer--schedule-markdown-table-rerender
+    (buffer table-max-width)
+  "Schedule a debounced markdown table rerender for BUFFER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq codex-ide-renderer--markdown-table-pending-rerender-width
+            table-max-width)
+      (when (timerp codex-ide-renderer--markdown-table-rerender-timer)
+        (cancel-timer codex-ide-renderer--markdown-table-rerender-timer))
+      (setq codex-ide-renderer--markdown-table-rerender-timer
+            (if codex-ide-renderer-markdown-table-rerender-delay
+                (run-at-time
+                 codex-ide-renderer-markdown-table-rerender-delay
+                 nil
+                 #'codex-ide-renderer--perform-markdown-table-rerender
+                 buffer
+                 table-max-width)
+              nil))
+      (unless codex-ide-renderer-markdown-table-rerender-delay
+        (codex-ide-renderer--perform-markdown-table-rerender
+         buffer
+         table-max-width)))))
+
+(defun codex-ide-renderer--handle-window-size-change (&optional _frame)
+  "Schedule table rerenders for visible session buffers after window changes."
+  (setq codex-ide-renderer--markdown-table-resize-buffers
+        (cl-remove-if-not
+         #'buffer-live-p
+         codex-ide-renderer--markdown-table-resize-buffers))
+  (dolist (buffer codex-ide-renderer--markdown-table-resize-buffers)
+    (when-let ((table-max-width
+                (codex-ide-renderer-markdown-table-max-width-for-buffer
+                 buffer)))
+      (codex-ide-renderer--schedule-markdown-table-rerender
+       buffer
+       table-max-width))))
+
+(defun codex-ide-renderer-setup-markdown-table-resize ()
+  "Enable resize-driven markdown table rerendering for the current buffer."
+  (cl-pushnew (current-buffer)
+              codex-ide-renderer--markdown-table-resize-buffers)
+  (add-hook 'window-size-change-functions
+            #'codex-ide-renderer--handle-window-size-change))
+
+(defun codex-ide-renderer-teardown-markdown-table-resize ()
+  "Disable resize-driven markdown table rerendering for the current buffer."
+  (when (timerp codex-ide-renderer--markdown-table-rerender-timer)
+    (cancel-timer codex-ide-renderer--markdown-table-rerender-timer))
+  (setq codex-ide-renderer--markdown-table-rerender-timer nil
+        codex-ide-renderer--markdown-table-pending-rerender-width nil
+        codex-ide-renderer--markdown-table-resize-buffers
+        (delq (current-buffer)
+              (cl-remove-if-not
+               #'buffer-live-p
+               codex-ide-renderer--markdown-table-resize-buffers)))
+  (unless codex-ide-renderer--markdown-table-resize-buffers
+    (remove-hook 'window-size-change-functions
+                 #'codex-ide-renderer--handle-window-size-change)))
 
 (defcustom codex-ide-renderer-command-output-fold-on-start t
   "When non-nil, command output blocks start folded while output streams."
@@ -1022,6 +1178,7 @@ Return a plist containing inserted markers and updated writable ranges."
 			  codex-ide-column nil
 			  codex-ide-table-link nil
 			  codex-ide-markdown-table-original nil
+			  codex-ide-markdown-table-render-width nil
 			  codex-ide-markdown-code-content nil
 			  codex-ide-markdown nil))
             (goto-char next))
@@ -1043,6 +1200,7 @@ Return a plist containing inserted markers and updated writable ranges."
 			      codex-ide-column nil
 			      codex-ide-table-link nil
 			      codex-ide-markdown-table-original nil
+			      codex-ide-markdown-table-render-width nil
 			      codex-ide-markdown-code-content nil
 			      codex-ide-markdown-code-fontified nil
 			      codex-ide-markdown nil))
@@ -1788,10 +1946,12 @@ Use LEFT, INTERSECTION, and RIGHT as the border junction characters."
                 (1- (nth widest-index widths))))))
     widths))
 
-(defun codex-ide-renderer--markdown-table-constrain-widths (widths)
+(defun codex-ide-renderer--markdown-table-constrain-widths
+    (widths &optional table-max)
   "Return table WIDTHS constrained by markdown table width settings."
   (let* ((cell-max codex-ide-renderer-markdown-table-max-cell-width)
-         (table-max codex-ide-renderer-markdown-table-max-width)
+         (table-max (or table-max
+                        codex-ide-renderer-markdown-table-max-width))
          (widths
           (mapcar
            (lambda (width)
@@ -1909,6 +2069,13 @@ Use LEFT, INTERSECTION, and RIGHT as the border junction characters."
       (match-string 1 line)
     ""))
 
+(defun codex-ide-renderer--markdown-table-effective-max-width (indent)
+  "Return the table max width after accounting for INDENT."
+  (when-let ((table-max (or codex-ide-renderer--markdown-table-max-width-override
+                            codex-ide-renderer-markdown-table-max-width)))
+    (when (> table-max 0)
+      (max 1 (- table-max (string-width indent))))))
+
 (defun codex-ide-renderer--markdown-prefix-lines (text prefix)
   "Return TEXT with PREFIX added to each non-empty line."
   (if (string-empty-p prefix)
@@ -1954,7 +2121,10 @@ Use LEFT, INTERSECTION, and RIGHT as the border junction characters."
                                                   (string-width (nth column row)))
                                                 rendered-rows))))
                (constrained-widths
-                (codex-ide-renderer--markdown-table-constrain-widths widths))
+                (codex-ide-renderer--markdown-table-constrain-widths
+                 widths
+                 (codex-ide-renderer--markdown-table-effective-max-width
+                  indent)))
                (box-table-p (not (equal constrained-widths widths)))
 	       (table-text
                 (if box-table-p
@@ -2086,12 +2256,63 @@ Use LEFT, INTERSECTION, and RIGHT as the border junction characters."
                    block-start
                    (point)
                    `(codex-ide-markdown t
-					codex-ide-markdown-table-original ,original))
+					codex-ide-markdown-table-original ,original
+					codex-ide-markdown-table-render-width
+					,(or codex-ide-renderer--markdown-table-max-width-override
+                                             codex-ide-renderer-markdown-table-max-width)))
                   (codex-ide-renderer--buttonize-markdown-table-links block-start (point))
                   (goto-char (point)))
               (goto-char block-end)))
         (forward-line 1)))
     (set-marker end-marker nil)))
+
+(defun codex-ide-renderer-rerender-markdown-tables (start end table-max-width)
+  "Rerender already-rendered markdown tables between START and END.
+TABLE-MAX-WIDTH is the effective table width to use for this pass."
+  (codex-ide-renderer--without-undo-recording
+   (save-excursion
+     (let ((inhibit-read-only t)
+           (end-marker (copy-marker end t))
+           (codex-ide-renderer--markdown-table-max-width-override
+            table-max-width))
+       (goto-char start)
+       (while (< (point) (marker-position end-marker))
+         (let* ((pos (point))
+                (original (get-text-property
+                           pos
+                           'codex-ide-markdown-table-original))
+                (render-width (get-text-property
+                               pos
+                               'codex-ide-markdown-table-render-width))
+                (next (or (next-single-property-change
+                           pos
+                           'codex-ide-markdown-table-original
+                           nil
+                           (marker-position end-marker))
+                          (marker-position end-marker))))
+           (cond
+            ((and original
+                  (not (equal render-width table-max-width)))
+             (if-let ((rendered (codex-ide-renderer--markdown-table-display-string
+                                 (split-string original "\n" t))))
+                 (progn
+                   (delete-region pos next)
+                   (goto-char pos)
+                   (insert rendered)
+                   (add-text-properties
+                    pos
+                    (point)
+                    `(codex-ide-markdown t
+                                         codex-ide-markdown-table-original ,original
+                                         codex-ide-markdown-table-render-width
+                                         ,table-max-width))
+                   (codex-ide-renderer--buttonize-markdown-table-links
+                    pos
+                    (point)))
+               (goto-char next)))
+            (t
+             (goto-char next)))))
+       (set-marker end-marker nil)))))
 
 (cl-defun codex-ide-renderer-render-markdown-region (start end &optional allow-trailing-tables)
   "Apply lightweight markdown rendering between START and END."

@@ -218,6 +218,14 @@ so users can navigate within those controls without opting out of follow mode."
   (remove-hook 'kill-buffer-hook #'codex-ide-session-mode--teardown-theme-refresh t)
   (remove-hook 'change-major-mode-hook #'codex-ide-session-mode--teardown-theme-refresh t))
 
+(defun codex-ide-session-mode--teardown-table-resize ()
+  "Remove table resize subscriptions for the current session buffer."
+  (codex-ide-renderer-teardown-markdown-table-resize)
+  (remove-hook 'kill-buffer-hook #'codex-ide-session-mode--teardown-table-resize t)
+  (remove-hook 'change-major-mode-hook
+               #'codex-ide-session-mode--teardown-table-resize
+               t))
+
 ;;;###autoload
 (define-derived-mode codex-ide-session-mode text-mode "Codex-IDE"
   "Major mode for Codex app-server session buffers."
@@ -233,6 +241,13 @@ so users can navigate within those controls without opting out of follow mode."
   (setq-local codex-ide-session-mode--last-window-start nil)
   (codex-ide-session-mode--teardown-theme-refresh)
   (codex-ide-session-mode--setup-theme-refresh)
+  (codex-ide-session-mode--teardown-table-resize)
+  (codex-ide-renderer-setup-markdown-table-resize)
+  (add-hook 'kill-buffer-hook #'codex-ide-session-mode--teardown-table-resize nil t)
+  (add-hook 'change-major-mode-hook
+            #'codex-ide-session-mode--teardown-table-resize
+            nil
+            t)
   (add-hook 'post-command-hook #'codex-ide--sync-prompt-minor-mode nil t)
   (add-hook 'post-command-hook
             #'codex-ide-session-mode--track-tail-follow-navigation
