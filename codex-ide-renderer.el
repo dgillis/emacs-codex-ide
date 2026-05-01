@@ -46,6 +46,13 @@
 
 (defvar codex-ide--markdown-display-mode-function-cache 'unset)
 
+(defconst codex-ide-renderer--streaming-deferred-invisibility
+  'codex-ide-renderer-markdown-deferred
+  "Invisible property value for delayed streaming markdown tails.")
+
+(defvar-local codex-ide-renderer--streaming-defer-timer nil
+  "Timer used to reveal delayed streaming markdown tails.")
+
 (defvar codex-ide-renderer-link-keymap
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map button-map)
@@ -68,6 +75,14 @@
   "Maximum markdown span size to render with rich markdown."
   :type '(choice (const :tag "No limit" nil)
                  (integer :tag "Maximum characters"))
+  :group 'codex-ide)
+
+(defcustom codex-ide-renderer-markdown-streaming-defer-delay 3.0
+  "Seconds to hide trailing incomplete inline markdown while streaming.
+When nil or zero, trailing incomplete inline markdown is displayed
+immediately."
+  :type '(choice (const :tag "Disabled" nil)
+                 (number :tag "Seconds"))
   :group 'codex-ide)
 
 (defcustom codex-ide-renderer-command-output-fold-on-start t
@@ -949,6 +964,7 @@ Return a plist containing inserted markers and updated writable ranges."
 
 (defun codex-ide-renderer--clear-markdown-properties (start end)
   "Clear Codex markdown rendering properties between START and END."
+  (codex-ide-renderer--clear-streaming-deferred-markdown start end)
   (let ((end-marker (copy-marker end t)))
     (save-excursion
       (goto-char start)
@@ -1016,6 +1032,149 @@ Return a plist containing inserted markers and updated writable ranges."
            (t
             (goto-char next))))))
     (set-marker end-marker nil)))
+
+(defun codex-ide-renderer--clear-streaming-deferred-markdown (start end)
+  "Reveal delayed streaming markdown between START and END."
+  (remove-text-properties
+   start end
+   '(invisible nil
+	       isearch-open-invisible nil
+	       codex-ide-markdown-deferred nil)))
+
+(defun codex-ide-renderer--reveal-streaming-deferred-markdown (buffer)
+  "Reveal delayed streaming markdown in BUFFER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq codex-ide-renderer--streaming-defer-timer nil)
+      (codex-ide-renderer--without-undo-recording
+       (let ((inhibit-read-only t))
+         (codex-ide-renderer--clear-streaming-deferred-markdown
+          (point-min)
+          (point-max)))))))
+
+(defun codex-ide-renderer--cancel-streaming-defer-timer ()
+  "Cancel any pending streaming markdown reveal timer."
+  (when (timerp codex-ide-renderer--streaming-defer-timer)
+    (cancel-timer codex-ide-renderer--streaming-defer-timer))
+  (setq codex-ide-renderer--streaming-defer-timer nil))
+
+(defun codex-ide-renderer--markdown-last-unmatched-single-backtick (text)
+  "Return the last unmatched single-backtick position in TEXT, or nil.
+Runs of three or more backticks are fenced-code delimiters and are
+intentionally ignored."
+  (let ((pos 0)
+        (open nil))
+    (while (string-match "`+" text pos)
+      (let ((run-start (match-beginning 0))
+            (run-end (match-end 0)))
+        (when (= (- run-end run-start) 1)
+          (setq open (if open nil run-start)))
+        (setq pos run-end)))
+    open))
+
+(defun codex-ide-renderer--markdown-incomplete-link-start (text)
+  "Return the last incomplete markdown link start in TEXT, or nil."
+  (let ((pos 0)
+        start)
+    (while (string-match "\\[[^]\n]+\\](\\([^)\n]*\\)\\'" text pos)
+      (setq start (match-beginning 0)
+            pos (1+ (match-beginning 0))))
+    start))
+
+(defun codex-ide-renderer--streaming-line-in-open-fence-p (start line-start)
+  "Return non-nil when LINE-START is inside an unclosed fence from START."
+  (let ((open nil))
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward "^[ \t]*```[^`\n]*[ \t]*$" line-start t)
+        (setq open (not open))))
+    open))
+
+(defun codex-ide-renderer--streaming-current-line-inline-region (start end)
+  "Return current-line inline markdown region between START and END, or nil."
+  (when (< start end)
+    (save-excursion
+      (goto-char end)
+      (unless (bolp)
+        (let* ((line-start (max start (line-beginning-position)))
+               (line (buffer-substring-no-properties line-start end)))
+          (unless (or (codex-ide-renderer--markdown-fence-line-p line)
+                      (codex-ide-renderer--streaming-line-in-open-fence-p
+                       start
+                       line-start))
+            (cons line-start end)))))))
+
+(defun codex-ide-renderer--render-streaming-current-line-inline-markdown
+    (start end)
+  "Render completed inline markdown spans on the current streaming line."
+  (when-let ((region (codex-ide-renderer--streaming-current-line-inline-region
+                      start
+                      end)))
+    (let ((line-start (car region))
+          (line-end-marker (copy-marker (cdr region) t)))
+      (save-excursion
+        (goto-char line-start)
+        (while (re-search-forward
+                codex-ide-renderer--markdown-link-pattern
+                (marker-position line-end-marker)
+                t)
+          (unless (get-text-property (match-beginning 1) 'codex-ide-markdown)
+            (codex-ide-renderer-maybe-render-markdown-region
+             (match-beginning 1)
+             (match-end 1))))
+        (goto-char line-start)
+        (while (re-search-forward
+                codex-ide-renderer--markdown-inline-code-pattern
+                (marker-position line-end-marker)
+                t)
+          (unless (get-text-property (match-beginning 0) 'codex-ide-markdown)
+            (codex-ide-renderer-maybe-render-markdown-region
+             (match-beginning 0)
+             (match-end 0)))))
+      (set-marker line-end-marker nil))))
+
+(defun codex-ide-renderer--streaming-deferred-markdown-span (start end)
+  "Return the trailing incomplete inline markdown span between START and END."
+  (when (and codex-ide-renderer-markdown-streaming-defer-delay
+             (> codex-ide-renderer-markdown-streaming-defer-delay 0)
+             (< start end))
+    (when-let ((region (codex-ide-renderer--streaming-current-line-inline-region
+                        start
+                        end)))
+      (let* ((line-start (car region))
+             (tail (buffer-substring-no-properties line-start end))
+             (candidates
+              (delq nil
+                    (list
+                     (codex-ide-renderer--markdown-incomplete-link-start tail)
+                     (codex-ide-renderer--markdown-last-unmatched-single-backtick tail)))))
+        (when candidates
+          (cons (+ line-start (apply #'min candidates)) end))))))
+
+(defun codex-ide-renderer--defer-streaming-markdown-tail (start end)
+  "Temporarily hide a trailing incomplete inline markdown span."
+  (codex-ide-renderer--without-undo-recording
+   (let ((inhibit-read-only t))
+     (codex-ide-renderer--clear-streaming-deferred-markdown start end)
+     (if-let ((span (codex-ide-renderer--streaming-deferred-markdown-span
+                     start
+                     end)))
+         (progn
+           (add-to-invisibility-spec
+            codex-ide-renderer--streaming-deferred-invisibility)
+           (add-text-properties
+            (car span)
+            (cdr span)
+            `(invisible ,codex-ide-renderer--streaming-deferred-invisibility
+			codex-ide-markdown-deferred t))
+           (codex-ide-renderer--cancel-streaming-defer-timer)
+           (setq codex-ide-renderer--streaming-defer-timer
+                 (run-at-time
+                  codex-ide-renderer-markdown-streaming-defer-delay
+                  nil
+                  #'codex-ide-renderer--reveal-streaming-deferred-markdown
+                  (current-buffer))))
+       (codex-ide-renderer--cancel-streaming-defer-timer)))))
 
 (defun codex-ide-renderer--normalize-markdown-link-label (label)
   "Return LABEL with markdown code delimiters stripped when present."
@@ -1215,6 +1374,44 @@ Return a plist containing inserted markers and updated writable ranges."
            '(display ""
 		     codex-ide-markdown t))
           (goto-char closing-end))))))
+
+(defun codex-ide-renderer--streaming-open-fence-tail (start end)
+  "Return provisional open fenced-code block data between START and END."
+  (let (open)
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward "^[ \t]*```\\([^`\n]*\\)[ \t]*$" end t)
+        (let* ((fence-start (match-beginning 0))
+               (fence-end (match-end 0))
+               (line-end (codex-ide-renderer--markdown-line-region-end end))
+               (language (string-trim (or (match-string-no-properties 1) ""))))
+          (if open
+              (setq open nil)
+            (setq open (list fence-start line-end language)))
+          (goto-char (max line-end fence-end)))))
+    open))
+
+(defun codex-ide-renderer--render-streaming-open-fenced-code-block (start end)
+  "Render an unclosed fenced code block between START and END."
+  (when-let ((open (codex-ide-renderer--streaming-open-fence-tail start end)))
+    (pcase-let ((`(,fence-start ,code-start ,language) open))
+      (codex-ide-renderer--without-undo-recording
+       (let ((inhibit-read-only t))
+         (codex-ide-renderer--clear-markdown-properties fence-start end)
+         (add-text-properties
+          fence-start code-start
+          '(display ""
+		    codex-ide-markdown t))
+         (when (< code-start end)
+           (add-text-properties
+            code-start end
+            '(codex-ide-markdown t
+				 codex-ide-markdown-code-content t))
+           (add-face-text-property code-start end 'fixed-pitch 'append)
+           (codex-ide-renderer--fontify-code-block-region
+            code-start
+            end
+            language)))))))
 
 (defun codex-ide-renderer--markdown-table-row-line-p (line)
   "Return non-nil when LINE looks like a markdown pipe table row."
@@ -1842,26 +2039,32 @@ When STATE-MARKER is non-nil, it tracks the next dirty position."
                            (marker-position state-marker)
                          start))
          (limit (codex-ide-renderer--streaming-markdown-complete-line-limit end)))
-    (when (< render-start limit)
-      (pcase-let ((`(,segments ,next-marker)
-                   (codex-ide-renderer--streaming-markdown-segments
-                    render-start
-                    limit)))
-        (dolist (segment segments)
-          (let ((segment-start (marker-position (nth 0 segment)))
-                (segment-end (marker-position (nth 1 segment)))
-                (allow-trailing-tables (nth 2 segment)))
-            (when (< segment-start segment-end)
-              (codex-ide-renderer-maybe-render-markdown-region
-               segment-start
-               segment-end
-               allow-trailing-tables)))
-          (set-marker (nth 0 segment) nil)
-          (set-marker (nth 1 segment) nil))
-        (when (markerp state-marker)
-          (set-marker state-marker (marker-position next-marker)))
-        (prog1 (marker-position next-marker)
-          (set-marker next-marker nil))))))
+    (prog1
+        (when (< render-start limit)
+          (pcase-let ((`(,segments ,next-marker)
+                       (codex-ide-renderer--streaming-markdown-segments
+                        render-start
+                        limit)))
+            (dolist (segment segments)
+              (let ((segment-start (marker-position (nth 0 segment)))
+                    (segment-end (marker-position (nth 1 segment)))
+                    (allow-trailing-tables (nth 2 segment)))
+                (when (< segment-start segment-end)
+                  (codex-ide-renderer-maybe-render-markdown-region
+                   segment-start
+                   segment-end
+                   allow-trailing-tables)))
+              (set-marker (nth 0 segment) nil)
+              (set-marker (nth 1 segment) nil))
+            (when (markerp state-marker)
+              (set-marker state-marker (marker-position next-marker)))
+            (prog1 (marker-position next-marker)
+              (set-marker next-marker nil))))
+      (codex-ide-renderer--render-streaming-open-fenced-code-block start end)
+      (codex-ide-renderer--render-streaming-current-line-inline-markdown
+       start
+       end)
+      (codex-ide-renderer--defer-streaming-markdown-tail start end))))
 
 (provide 'codex-ide-renderer)
 
