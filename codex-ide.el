@@ -87,13 +87,13 @@
   :group 'codex-ide)
 
 ;;;###autoload
-(defcustom codex-ide-prompt-placeholder-text "Ask Codex..."
+(defcustom codex-ide-prompt-placeholder-text "Tell Codex what to do..."
   "Placeholder text displayed in an empty idle Codex prompt."
   :type 'string
   :group 'codex-ide)
 
 ;;;###autoload
-(defcustom codex-ide-steering-placeholder-text "Steer Codex..."
+(defcustom codex-ide-steering-placeholder-text "Running..."
   "Placeholder text displayed in an empty Codex prompt during a running turn."
   :type 'string
   :group 'codex-ide)

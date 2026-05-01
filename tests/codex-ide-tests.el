@@ -593,7 +593,7 @@
       (codex-ide--refresh-input-placeholder session)
       (should (codex-ide-test--input-placeholder-overlay-live-p session))
       (should (equal (codex-ide-test--input-placeholder-text session)
-                     "Ask Codex..."))
+                     "Tell Codex what to do..."))
       (should (get-text-property
                0
                'cursor
@@ -618,11 +618,11 @@
       (codex-ide--refresh-input-placeholder session)
       (should (codex-ide-test--input-placeholder-overlay-live-p session))
       (should (equal (codex-ide-test--input-placeholder-text session)
-                     "Ask Codex..."))
+                     "Tell Codex what to do..."))
       (goto-char (marker-position (codex-ide-session-input-start-marker session)))
       (codex-ide--refresh-input-placeholder session)
       (should (equal (codex-ide-test--input-placeholder-text session)
-                     "Ask Codex..."))
+                     "Tell Codex what to do..."))
       (insert "h")
       (goto-char (point-min))
       (codex-ide--refresh-input-placeholder session)
@@ -643,7 +643,7 @@
       (codex-ide--refresh-input-placeholder session)
       (should (codex-ide-test--input-placeholder-overlay-live-p session))
       (should (equal (codex-ide-test--input-placeholder-text session)
-                     "Steer Codex..."))
+                     "Running..."))
       (should (string-suffix-p "> " (buffer-string)))
       (should (equal (codex-ide--current-input session) "")))))
 
@@ -660,12 +660,12 @@
       (codex-ide--insert-input-prompt session nil)
       (codex-ide--refresh-input-placeholder session)
       (should (equal (codex-ide-test--input-placeholder-text session)
-                     "Steer Codex..."))
+                     "Running..."))
       (codex-ide--finish-turn session)
       (should-not (codex-ide-session-current-turn-id session))
       (should-not (codex-ide-session-output-prefix-inserted session))
       (should (equal (codex-ide-test--input-placeholder-text session)
-                     "Ask Codex...")))))
+                     "Tell Codex what to do...")))))
 
 (ert-deftest codex-ide-insert-input-prompt-clears-stale-undo-history ()
   (with-temp-buffer
@@ -697,8 +697,11 @@
       (should buffer-undo-list)
       (codex-ide--begin-turn-display session)
       (should-not buffer-undo-list)
-      (should (string-match-p "submitted prompt\n\nWorking\\.\\.\\.\n"
+      (should (string-match-p "submitted prompt\n\n> "
                               (buffer-string)))
+      (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Working..."))
       (should (codex-ide--input-prompt-active-p session)))))
 
 (ert-deftest codex-ide-running-input-stays-below-streamed-items ()
@@ -1141,7 +1144,7 @@
                  (rx "    hello" "\n\n> steer draft" string-end)
                  (buffer-string)))))))
 
-(ert-deftest codex-ide-working-indicator-separates-active-prompt ()
+(ert-deftest codex-ide-working-indicator-shows-as-prompt-help ()
   (with-temp-buffer
     (codex-ide-session-mode)
     (let ((session (make-codex-ide-session
@@ -1151,14 +1154,13 @@
       (setq-local codex-ide--session session)
       (codex-ide--insert-input-prompt session "submitted prompt")
       (codex-ide--begin-turn-display session)
-      (should (string-match-p
-               (rx "Working..." "\n\n> " string-end)
-               (buffer-string)))
-      (should-not (string-match-p
-                   (rx "Working..." "\n\n\n" "> " string-end)
-                   (buffer-string))))))
+      (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Working..."))
+      (codex-ide--replace-current-input session "steer me")
+      (should-not (codex-ide-test--input-placeholder-text session)))))
 
-(ert-deftest codex-ide-reasoning-indicator-separates-active-prompt ()
+(ert-deftest codex-ide-reasoning-indicator-shows-as-prompt-help ()
   (with-temp-buffer
     (codex-ide-session-mode)
     (let ((session (make-codex-ide-session
@@ -1174,14 +1176,11 @@
          (type . "reasoning")
          (summary . [])))
       (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
-      (should (string-match-p
-               (rx "Reasoning..." "\n\n> " string-end)
-               (buffer-string)))
-      (should-not (string-match-p
-                   (rx "Reasoning..." "\n\n\n" "> " string-end)
-                   (buffer-string))))))
+      (should-not (string-match-p "Reasoning\\.\\.\\." (buffer-string)))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Reasoning...")))))
 
-(ert-deftest codex-ide-pending-indicator-replacement-keeps-prompt-spacing ()
+(ert-deftest codex-ide-pending-indicator-replacement-updates-prompt-help ()
   (with-temp-buffer
     (codex-ide-session-mode)
     (let ((session (make-codex-ide-session
@@ -1193,12 +1192,9 @@
       (codex-ide--begin-turn-display session)
       (codex-ide--replace-pending-output-indicator session "Reasoning...\n")
       (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
-      (should (string-match-p
-               (rx "Reasoning..." "\n\n> " string-end)
-               (buffer-string)))
-      (should-not (string-match-p
-                   (rx "Reasoning..." "\n\n\n" "> " string-end)
-                   (buffer-string))))))
+      (should-not (string-match-p "Reasoning\\.\\.\\." (buffer-string)))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Reasoning...")))))
 
 (ert-deftest codex-ide-first-rendered-item-clears-pending-output-indicator ()
   (with-temp-buffer
@@ -1210,7 +1206,8 @@
       (setq-local codex-ide--session session)
       (codex-ide--insert-input-prompt session "submitted prompt")
       (codex-ide--begin-turn-display session)
-      (should (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Working..."))
       (codex-ide--render-item-start
        session
        '((id . "call-1")
@@ -1218,6 +1215,8 @@
          (command . "echo hi")
          (cwd . "/tmp")))
       (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Running..."))
       (should (string-match-p "\\* Ran command" (buffer-string)))
       (should (string-match-p "  \\$ echo hi" (buffer-string))))))
 
@@ -2296,9 +2295,12 @@
            (type . "reasoning")
            (summary . [])))
 	(should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
-	(should (string-match-p "Reasoning\\.\\.\\." (buffer-string)))
+	(should-not (string-match-p "Reasoning\\.\\.\\." (buffer-string)))
+	(should (equal (codex-ide-test--input-placeholder-text session)
+                       "Reasoning..."))
 	(codex-ide--ensure-agent-message-prefix session "msg-1")
-	(should-not (string-match-p "Reasoning\\.\\.\\." (buffer-string))))))
+	(should (equal (codex-ide-test--input-placeholder-text session)
+                       "Running...")))))
 
   (ert-deftest codex-ide-reasoning-summary-deltas-accumulate-into-one-block ()
     (with-temp-buffer
@@ -2323,7 +2325,7 @@
                    (regexp-quote "* Reasoning: since reading should be allowed\n")
                    buffer-text))))))
 
-  (ert-deftest codex-ide-pending-output-indicator-starts-on-new-line ()
+  (ert-deftest codex-ide-pending-output-indicator-uses-prompt-help ()
     (with-temp-buffer
       (codex-ide-session-mode)
       (let ((session (make-codex-ide-session
@@ -2331,16 +2333,16 @@
                       :status "idle"
                       :item-states (make-hash-table :test 'equal))))
 	(setq-local codex-ide--session session)
-	(let ((inhibit-read-only t))
-          (insert "* Ran command"))
+	(codex-ide--insert-input-prompt session nil)
 	(codex-ide--insert-pending-output-indicator
 	 session
 	 "Reasoning...\n")
-	(should (string-match-p
-		 (regexp-quote "* Ran command\nReasoning...\n")
-		 (buffer-string)))
+	(should-not (string-match-p "Reasoning\\.\\.\\." (buffer-string)))
+	(should (equal (codex-ide-test--input-placeholder-text session)
+                       "Reasoning..."))
 	(codex-ide--clear-pending-output-indicator session)
-	(should (equal (buffer-string) "* Ran command")))))
+	(should (equal (codex-ide-test--input-placeholder-text session)
+                       "Tell Codex what to do...")))))
 
   (ert-deftest codex-ide-finish-turn-clears-pending-output-indicator ()
     (with-temp-buffer
@@ -2352,7 +2354,8 @@
 	(setq-local codex-ide--session session)
 	(codex-ide--insert-input-prompt session "submitted prompt")
 	(codex-ide--begin-turn-display session)
-	(should (string-match-p "Working\\.\\.\\." (buffer-string)))
+	(should (equal (codex-ide-test--input-placeholder-text session)
+                       "Working..."))
 	(codex-ide--finish-turn session)
 	(should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
 	(should (codex-ide--input-prompt-active-p session))
@@ -2957,9 +2960,11 @@
 								(alist-get 'text (aref input 0)))))
 				      (should (= (length (codex-ide--queued-prompts session)) 1))
 				      (with-current-buffer (codex-ide-session-buffer session)
-					(should (string-match-p
-						 (rx "> Do this next" (* anything) "Working..." (* anything) "\n> ")
-						 (buffer-string)))
+					(should-not (string-match-p
+						     "Working\\.\\.\\."
+						     (buffer-string)))
+					(should (equal (codex-ide-test--input-placeholder-text session)
+                                                       "Working..."))
 					(should (string-match-p
 						 (rx "Queued turns:" "\n  1. And then this")
 						 (buffer-string)))))))))

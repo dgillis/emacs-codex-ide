@@ -30,10 +30,10 @@ Optional reasoning effort for new Codex turns.")
 (defvar codex-ide-running-submit-action 'steer "\
 Action used by `codex-ide-submit' while a Codex turn is running.")
 (custom-autoload 'codex-ide-running-submit-action "codex-ide" t)
-(defvar codex-ide-prompt-placeholder-text "Ask Codex..." "\
+(defvar codex-ide-prompt-placeholder-text "Tell Codex what to do..." "\
 Placeholder text displayed in an empty idle Codex prompt.")
 (custom-autoload 'codex-ide-prompt-placeholder-text "codex-ide" t)
-(defvar codex-ide-steering-placeholder-text "Steer Codex..." "\
+(defvar codex-ide-steering-placeholder-text "Running..." "\
 Placeholder text displayed in an empty Codex prompt during a running turn.")
 (custom-autoload 'codex-ide-steering-placeholder-text "codex-ide" t)
 (defvar codex-ide-session-baseline-prompt "\n- You are a Codex server running inside Emacs.\n- You can use MCP tools to inspect and interact with the running Emacs session.\n- Interpret Emacs terminology as relevant context to the user's request: buffers, regions, windows, point, mark, current file, etc.\n- Responses are rendered as Markdown in an Emacs buffer.\n- Markdown pipe tables are rendered as visible tables.\n- In table cells, wrap code-like identifiers, filenames, paths, symbols, and expressions in backticks.\n- Use markdown links for code references, for example [`foo.el`](/tmp/foo.el#L3C2).\n- Avoid bare underscores or asterisks for code-like text inside tables; use backticks instead.\n- Do not needlessly use Emacs commands to accomplish agent tasks." "\

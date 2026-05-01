@@ -404,46 +404,12 @@ inserted text."
   (codex-ide--append-to-buffer buffer "\n"))
 
 (defun codex-ide--insert-pending-output-indicator (session &optional text)
-  "Insert a temporary pending-output indicator for SESSION."
-  (let ((buffer (codex-ide-session-buffer session))
-        (indicator-text (or text "Working...\n")))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (let* ((restore-point (codex-ide--input-point-marker session))
-               (moving (and (= (point) (point-max)) (not restore-point)))
-               (active-boundary (codex-ide--active-input-boundary-marker buffer))
-               (insertion-position (codex-ide--transcript-insertion-position buffer))
-               (advance-active-boundary
-                (and active-boundary
-                     (= insertion-position (marker-position active-boundary)))))
-          (codex-ide--maybe-save-transcript-position insertion-position
-						     (codex-ide-renderer-append-to-buffer
-						      ""
-						      :insertion-point insertion-position
-						      :restore-point restore-point
-						      :preserve-point t
-						      :move-point-to-end moving
-						      :after-insert
-						      (lambda (start end inserted-at)
-							(ignore start end)
-							(goto-char inserted-at)
-							(pcase-let ((`(,indicator-start ,indicator-end ,inserted-text)
-								     (codex-ide-renderer-insert-pending-indicator
-								      indicator-text)))
-							  (codex-ide--advance-append-boundary-after
-							   buffer inserted-at indicator-end)
-							  (when advance-active-boundary
-							    (set-marker active-boundary indicator-end)
-							    (codex-ide--ensure-active-input-prompt-spacing
-							     session))
-							  (codex-ide--session-metadata-put
-							   session
-							   :pending-output-indicator-marker
-							   (copy-marker indicator-start))
-							  (codex-ide--session-metadata-put
-							   session
-							   :pending-output-indicator-text
-							   inserted-text))))))))))
+  "Show a temporary pending-output indicator in SESSION's prompt help."
+  (codex-ide--session-metadata-put
+   session
+   :pending-output-indicator-text
+   (string-trim-right (or text "Working...\n")))
+  (codex-ide--refresh-input-placeholder session))
 
 (defun codex-ide--clear-pending-output-indicator (session)
   "Remove SESSION's pending-output indicator, if it is still present."
@@ -474,11 +440,12 @@ inserted text."
     (codex-ide--session-metadata-put
      session
      :pending-output-indicator-marker
-     nil)
-    (codex-ide--session-metadata-put
-     session
-     :pending-output-indicator-text
-     nil)))
+     nil))
+  (codex-ide--session-metadata-put
+   session
+   :pending-output-indicator-text
+   nil)
+  (codex-ide--refresh-input-placeholder session))
 
 (defun codex-ide--replace-pending-output-indicator (session text)
   "Replace SESSION's temporary pending-output indicator with TEXT."
@@ -506,11 +473,17 @@ inserted text."
 (defun codex-ide--input-placeholder-text (&optional session)
   "Return the placeholder text for SESSION's current prompt state."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
-  (if (and session
-           (or (codex-ide-session-current-turn-id session)
-               (codex-ide-session-output-prefix-inserted session)))
-      codex-ide-steering-placeholder-text
-    codex-ide-prompt-placeholder-text))
+  (if-let ((status-text
+            (and session
+                 (codex-ide--session-metadata-get
+                  session
+                  :pending-output-indicator-text))))
+      status-text
+    (if (and session
+             (or (codex-ide-session-current-turn-id session)
+                 (codex-ide-session-output-prefix-inserted session)))
+	codex-ide-steering-placeholder-text
+      codex-ide-prompt-placeholder-text)))
 
 (defun codex-ide--input-placeholder-display-string (&optional session)
   "Return the propertized placeholder display string for SESSION."
@@ -1186,8 +1159,7 @@ When QUIET is non-nil, do not refresh SESSION's header line."
       (with-current-buffer buffer
         (codex-ide--without-undo-recording
          (let ((inhibit-read-only t)
-               context-start
-               spacing-start)
+               context-start)
            (codex-ide--delete-running-input-list session)
            (when-let ((start (codex-ide-session-input-prompt-start-marker session)))
              (codex-ide--style-user-prompt-region start (point-max))
@@ -1205,13 +1177,10 @@ When QUIET is non-nil, do not refresh SESSION's header line."
                (codex-ide--set-pending-turn-start-marker
                 session
                 (copy-marker start nil))))
-           (goto-char (point-max))
-           (setq spacing-start (point))
-           (setq spacing-start
-                 (car (codex-ide-renderer-insert-read-only "\n\n")))
            (codex-ide--insert-pending-output-indicator session)
            (setf (codex-ide-session-output-prefix-inserted session) t
                  (codex-ide-session-status session) "running")
+           (goto-char (point-max))
            (codex-ide--insert-input-prompt session)
            (unless quiet
              (codex-ide--update-header-line session))))
