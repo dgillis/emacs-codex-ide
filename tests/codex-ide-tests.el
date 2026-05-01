@@ -4096,6 +4096,84 @@
 						    (codex-ide-session-input-prompt-start-marker session)))
 					(should (equal (codex-ide-test--prompt-prefix-at-line) "> ")))))))))
 
+(ert-deftest codex-ide-command-approval-resolving-one-keeps-other-buttons-active ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+				 (codex-ide-test-with-fake-processes
+				  (let* ((session (codex-ide--create-process-session))
+					 (process (codex-ide-session-process session)))
+				    (setf (codex-ide-session-current-turn-id session) "turn-approval-many"
+					  (codex-ide-session-status session) "running")
+				    (codex-ide--insert-input-prompt session nil)
+				    (cl-letf (((symbol-function 'run-at-time)
+					       (lambda (_time _repeat function)
+						 (funcall function)))
+					      ((symbol-function 'codex-ide-display-buffer)
+					       (lambda (_buffer &optional _action) (selected-window)))
+					      ((symbol-function 'message)
+					       (lambda (&rest _) nil)))
+				      (codex-ide--handle-command-approval
+				       session
+				       42
+				       '((command . "git status")))
+				      (codex-ide--handle-command-approval
+				       session
+				       43
+				       '((command . "pwd"))))
+				    (should (= (hash-table-count (codex-ide--pending-approvals session)) 2))
+				    (with-current-buffer (codex-ide-session-buffer session)
+				      (goto-char (point-min))
+				      (search-forward "git status")
+				      (search-forward "[accept]")
+				      (backward-char 1)
+				      (push-button)
+				      (goto-char (point-min))
+				      (search-forward "pwd")
+				      (search-forward "[accept]")
+				      (backward-char 1)
+				      (should (button-at (point))))
+				    (should (= (hash-table-count (codex-ide--pending-approvals session)) 1))
+				    (should (string= (codex-ide-session-status session) "approval"))
+				    (let* ((sent (codex-ide-test-process-sent-strings process))
+					   (payloads (mapcar (lambda (text)
+							       (json-parse-string
+								text
+								:object-type 'alist
+								:array-type 'list))
+							     sent))
+					   (ids (mapcar (lambda (payload)
+							  (alist-get 'id payload))
+							payloads)))
+				      (should (member 42 ids))
+				      (should-not (member 43 ids))))))))
+
+(ert-deftest codex-ide-thread-status-running-preserves-pending-approval-status ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+				 (codex-ide-test-with-fake-processes
+				  (let ((session (codex-ide--create-process-session)))
+				    (setf (codex-ide-session-current-turn-id session) "turn-approval-status"
+					  (codex-ide-session-status session) "running")
+				    (codex-ide--insert-input-prompt session nil)
+				    (cl-letf (((symbol-function 'run-at-time)
+					       (lambda (_time _repeat function)
+						 (funcall function)))
+					      ((symbol-function 'codex-ide-display-buffer)
+					       (lambda (_buffer &optional _action) (selected-window)))
+					      ((symbol-function 'message)
+					       (lambda (&rest _) nil)))
+				      (codex-ide--handle-command-approval
+				       session
+				       42
+				       '((command . "git status"))))
+				    (should (string= (codex-ide-session-status session) "approval"))
+				    (codex-ide--handle-notification
+				     session
+				     '((method . "thread/status/changed")
+				       (params . ((thread . ((status . "running")))))))
+				    (should (= (hash-table-count (codex-ide--pending-approvals session)) 1))
+				    (should (string= (codex-ide-session-status session) "approval")))))))
+
 (ert-deftest codex-ide-command-approval-does-not-display-nonvisible-buffer-when-disabled ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (message-text nil)

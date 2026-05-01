@@ -6,7 +6,7 @@
 ;; URL: https://github.com/dgillis/emacs-codex-ide
 ;; Version: 0.2.4
 ;; Package-Requires: ((emacs "28.1") (transient "0.9.0"))
-;; Keywords: ai, tools
+;; Keywords: codex, ai, agent, tools
 
 ;; This file is not part of GNU Emacs.
 

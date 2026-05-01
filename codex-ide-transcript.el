@@ -3585,6 +3585,19 @@ Signal an error when THREAD-READ lacks replayable transcript items."
        :pending-approvals
        (make-hash-table :test 'equal))))
 
+(defun codex-ide--pending-approvals-p (session)
+  "Return non-nil when SESSION has unresolved approvals."
+  (let ((approvals (codex-ide--session-metadata-get session :pending-approvals)))
+    (and (hash-table-p approvals)
+         (> (hash-table-count approvals) 0))))
+
+(defun codex-ide--status-preserving-pending-approvals (session status)
+  "Return STATUS unless SESSION still needs approval attention."
+  (if (and (codex-ide--pending-approvals-p session)
+           (not (member status '("error"))))
+      "approval"
+    status))
+
 (defun codex-ide--approval-display-value (value)
   "Return a compact display string for approval VALUE."
   (cond
@@ -3650,8 +3663,11 @@ Signal an error when THREAD-READ lacks replayable transcript items."
       (codex-ide--mark-approval-resolved approval label)
       (codex-ide--set-session-status
        session
-       (if (codex-ide-session-current-turn-id session) "running" "idle")
+       (codex-ide--status-preserving-pending-approvals
+        session
+        (if (codex-ide-session-current-turn-id session) "running" "idle"))
        'approval-resolved)
+      (codex-ide--refresh-input-placeholder session)
       (codex-ide--update-header-line session)
       (codex-ide--jsonrpc-send-response
        session
@@ -3738,7 +3754,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
                       title render-body)))
           (setq start-marker (copy-marker start)
                 status-marker (copy-marker status)
-                end-marker (copy-marker end t)
+                end-marker (copy-marker end)
                 render-state state))
         (codex-ide--freeze-region (marker-position start-marker)
                                   (marker-position end-marker))
@@ -4260,11 +4276,13 @@ Signal an error when THREAD-READ lacks replayable transcript items."
          (when normalized-status
            (codex-ide--set-session-status
             session
-            normalized-status
+            (codex-ide--status-preserving-pending-approvals
+             session
+             normalized-status)
             'thread-status-changed)
            (codex-ide--sync-pending-output-indicator-for-status
             session
-            normalized-status)))
+            (codex-ide-session-status session))))
        (codex-ide-log-message
         session
         "Thread status changed to %s"
