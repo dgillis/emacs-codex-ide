@@ -623,7 +623,19 @@ inserted text."
   "Return non-nil when SESSION's input placeholder should be visible."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (and (codex-ide--input-prompt-active-p session)
-       (string-empty-p (codex-ide--current-input session))))
+       (codex-ide--current-input-empty-p session)))
+
+(defun codex-ide--current-input-empty-p (&optional session)
+  "Return non-nil when SESSION's editable input contains no characters."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (let ((buffer (and session (codex-ide-session-buffer session)))
+        (marker (and session (codex-ide-session-input-start-marker session))))
+    (and (buffer-live-p buffer)
+         (markerp marker)
+         (eq (marker-buffer marker) buffer)
+         (with-current-buffer buffer
+           (= (marker-position marker)
+              (codex-ide--input-end-position session))))))
 
 (defun codex-ide--input-placeholder-should-animate-p (&optional session)
   "Return non-nil when SESSION's visible prompt help should animate."

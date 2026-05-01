@@ -645,6 +645,22 @@
       (should (equal (buffer-string) "\n> h\n\n"))
       (should (equal (codex-ide--current-input session) "h")))))
 
+(ert-deftest codex-ide-input-prompt-hides-placeholder-on-space ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (goto-char (marker-position (codex-ide-session-input-start-marker session)))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Tell Codex what to do..."))
+      (insert " ")
+      (should-not (codex-ide-test--input-placeholder-text session))
+      (should (equal (buffer-string) "\n>  \n\n"))
+      (should (equal (codex-ide--current-input session) "")))))
+
 (ert-deftest codex-ide-running-input-prompt-shows-steering-placeholder ()
   (with-temp-buffer
     (codex-ide-session-mode)
