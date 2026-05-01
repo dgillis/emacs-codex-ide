@@ -108,11 +108,35 @@
                        (kind . "modified")
                        (diff . ,input)))))))))
 
+(defun codex-ide-rollout--exec-command-output (output)
+  "Return normalized command OUTPUT details from rollout storage.
+The stored tool result is often an envelope containing tool metadata followed by
+an \"Output:\" line.  Return a plist with :output and, when available, :exit-code."
+  (let ((normalized-output output)
+        exit-code)
+    (when (and (stringp output)
+               (string-prefix-p "Chunk ID: " output))
+      (with-temp-buffer
+        (insert output)
+        (goto-char (point-min))
+        (when (re-search-forward
+               "^Process exited with code \\([-0-9]+\\)$" nil t)
+          (setq exit-code (string-to-number (match-string 1))))
+        (goto-char (point-min))
+        (when (re-search-forward "^Output:\n" nil t)
+          (setq normalized-output
+                (buffer-substring-no-properties (point) (point-max))))))
+    (list :output normalized-output
+          :exit-code exit-code)))
+
 (defun codex-ide-rollout--complete-call-item (item output)
   "Update rollout-derived ITEM with completion OUTPUT."
   (pcase (alist-get 'type item)
     ("commandExecution"
-     (setf (alist-get 'aggregatedOutput item) output)
+     (let ((details (codex-ide-rollout--exec-command-output output)))
+       (setf (alist-get 'aggregatedOutput item) (plist-get details :output))
+       (when-let ((exit-code (plist-get details :exit-code)))
+         (setf (alist-get 'exitCode item) exit-code)))
      (setf (alist-get 'status item) "completed"))
     ("fileChange"
      (setf (alist-get 'status item) "completed"))

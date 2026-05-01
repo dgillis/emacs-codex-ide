@@ -5240,7 +5240,13 @@
                    ((type . "response_item")
                     (payload . ((type . "function_call_output")
                                 (call_id . "call-command-1")
-                                (output . "hello\n"))))
+                                (output . ,(concat
+                                            "Chunk ID: abc123\n"
+                                            "Wall time: 0.0000 seconds\n"
+                                            "Process exited with code 0\n"
+                                            "Original token count: 1\n"
+                                            "Output:\n"
+                                            "hello\n")))))
                    ((type . "response_item")
                     (payload . ((type . "message")
                                 (role . "assistant")
@@ -5280,6 +5286,8 @@
 				      (let ((buffer-text (buffer-string)))
 					(should (string-match-p "\\* Ran command" buffer-text))
 					(should (string-match-p "    hello" buffer-text))
+					(should-not (string-match-p "Chunk ID:" buffer-text))
+					(should-not (string-match-p "Original token count:" buffer-text))
 					(should (string-match-p
 						 "\\* Called mcp__codex_ide_emacs_mcp__/emacs_get_all_buffers"
 						 buffer-text))
