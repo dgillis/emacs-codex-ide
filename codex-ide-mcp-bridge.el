@@ -274,15 +274,30 @@ Errors from `server-running-p' are treated as nil."
                          prefix
                          codex-ide-emacs-bridge-tool-timeout)))))
 
+(defun codex-ide-mcp-bridge--json-bool (value)
+  "Return VALUE as an explicit JSON boolean."
+  (if value t :json-false))
+
+(defun codex-ide-mcp-bridge--json-nullable (value)
+  "Return VALUE or an explicit JSON null."
+  (or value :json-null))
+
+(defun codex-ide-mcp-bridge--json-array (values)
+  "Return VALUES as a JSON array."
+  (vconcat values))
+
 (defun codex-ide-mcp-bridge--buffer-info (buffer)
   "Return a buffer-info alist for BUFFER."
   (with-current-buffer buffer
     `((buffer . ,(buffer-name buffer))
-      (file . ,(when-let ((file (buffer-file-name buffer)))
-                 (expand-file-name file)))
+      (file . ,(codex-ide-mcp-bridge--json-nullable
+                (when-let ((file (buffer-file-name buffer)))
+                  (expand-file-name file))))
       (major-mode . ,(symbol-name major-mode))
-      (modified . ,(buffer-modified-p buffer))
-      (read-only . ,buffer-read-only))))
+      (modified . ,(codex-ide-mcp-bridge--json-bool
+                    (buffer-modified-p buffer)))
+      (read-only . ,(codex-ide-mcp-bridge--json-bool
+                     buffer-read-only)))))
 
 (defun codex-ide-mcp-bridge--diagnostic-severity (diagnostic)
   "Return a normalized severity string for DIAGNOSTIC."
@@ -321,8 +336,9 @@ Errors from `server-running-p' are treated as nil."
      (lambda (diag)
        `((source . "flymake")
          (buffer . ,(buffer-name))
-         (file . ,(when-let ((file (buffer-file-name)))
-                    (expand-file-name file)))
+         (file . ,(codex-ide-mcp-bridge--json-nullable
+                   (when-let ((file (buffer-file-name)))
+                     (expand-file-name file))))
          (message . ,(flymake-diagnostic-text diag))
          (severity . ,(codex-ide-mcp-bridge--diagnostic-severity diag))
          (line . ,(line-number-at-pos (flymake-diagnostic-beg diag)))
@@ -345,10 +361,11 @@ Errors from `server-running-p' are treated as nil."
      (lambda (err)
        `((source . "flycheck")
          (buffer . ,(buffer-name))
-         (file . ,(when-let ((file (or (and (fboundp 'flycheck-error-filename)
-                                            (flycheck-error-filename err))
-                                       (buffer-file-name))))
-                    (expand-file-name file)))
+         (file . ,(codex-ide-mcp-bridge--json-nullable
+                   (when-let ((file (or (and (fboundp 'flycheck-error-filename)
+                                             (flycheck-error-filename err))
+                                        (buffer-file-name))))
+                     (expand-file-name file))))
          (message . ,(or (and (fboundp 'flycheck-error-message)
                               (flycheck-error-message err))
                          ""))
@@ -422,7 +439,8 @@ Errors from `server-running-p' are treated as nil."
 (defun codex-ide-mcp-bridge--file-buffer-response (buffer &optional extra)
   "Return a bridge response for BUFFER merged with EXTRA."
   (append
-   `((path . ,(buffer-file-name buffer))
+   `((path . ,(codex-ide-mcp-bridge--json-nullable
+               (buffer-file-name buffer)))
      (buffer . ,(buffer-name buffer))
      (line . ,(with-current-buffer buffer
                 (line-number-at-pos)))
@@ -442,7 +460,7 @@ Errors from `server-running-p' are treated as nil."
     (setq buffer (codex-ide-mcp-bridge--resolve-file-buffer path))
     (codex-ide-mcp-bridge--file-buffer-response
      buffer
-     `((already-open . ,already-open)))))
+     `((already-open . ,(codex-ide-mcp-bridge--json-bool already-open))))))
 
 (defun codex-ide-mcp-bridge--tool-call--show_file_buffer (params)
   "Handle a `show_file_buffer' bridge request with PARAMS."
@@ -480,10 +498,11 @@ Errors from `server-running-p' are treated as nil."
         `((path . ,expanded-path)
           (buffer . :json-null)
           (killed . :json-false))
-      (let ((killed (kill-buffer buffer)))
+      (let ((buffer-name (buffer-name buffer))
+            (killed (kill-buffer buffer)))
         `((path . ,expanded-path)
-          (buffer . ,(buffer-name buffer))
-          (killed . ,(if killed t :json-false)))))))
+          (buffer . ,(codex-ide-mcp-bridge--json-nullable buffer-name))
+          (killed . ,(codex-ide-mcp-bridge--json-bool killed)))))))
 
 (defun codex-ide-mcp-bridge--tool-call--lisp_check_parens (params)
   "Handle a `lisp_check_parens' bridge request with PARAMS."
@@ -516,13 +535,14 @@ Errors from `server-running-p' are treated as nil."
 
 (defun codex-ide-mcp-bridge--tool-call--get_all_buffers (_params)
   "Handle a `get_all_buffers' bridge request."
-  `((files . ,(seq-filter
-               #'identity
-               (mapcar
-                (lambda (buffer)
-                  (when (buffer-file-name buffer)
-                    (codex-ide-mcp-bridge--buffer-info buffer)))
-                (buffer-list))))))
+  `((files . ,(codex-ide-mcp-bridge--json-array
+               (seq-filter
+                #'identity
+                (mapcar
+                 (lambda (buffer)
+                   (when (buffer-file-name buffer)
+                     (codex-ide-mcp-bridge--buffer-info buffer)))
+                 (buffer-list)))))))
 
 (defun codex-ide-mcp-bridge--tool-call--get_buffer_info (params)
   "Handle a `get_buffer_info' bridge request with PARAMS."
@@ -553,11 +573,13 @@ Errors from `server-running-p' are treated as nil."
       (error "Unknown buffer: %s" (or buffer-name "nil")))
     (with-current-buffer buffer
       `((buffer . ,(buffer-name buffer))
-        (file . ,(when-let ((file (buffer-file-name buffer)))
-                   (expand-file-name file)))
-        (diagnostics . ,(or (codex-ide-mcp-bridge--flymake-diagnostics)
-                            (codex-ide-mcp-bridge--flycheck-diagnostics)
-                            '()))))))
+        (file . ,(codex-ide-mcp-bridge--json-nullable
+                  (when-let ((file (buffer-file-name buffer)))
+                    (expand-file-name file))))
+        (diagnostics . ,(codex-ide-mcp-bridge--json-array
+                         (or (codex-ide-mcp-bridge--flymake-diagnostics)
+                             (codex-ide-mcp-bridge--flycheck-diagnostics)
+                             '())))))))
 
 (defun codex-ide-mcp-bridge--tool-call--get_all_windows (_params)
   "Handle a `get_all_windows' bridge request."
@@ -566,14 +588,16 @@ Errors from `server-running-p' are treated as nil."
           (lambda (window)
             (let ((buffer (window-buffer window)))
               `((window-id . ,(format "%s" window))
-                (selected . ,(eq window (selected-window)))
-                (dedicated . ,(window-dedicated-p window))
+                (selected . ,(codex-ide-mcp-bridge--json-bool
+                              (eq window (selected-window))))
+                (dedicated . ,(codex-ide-mcp-bridge--json-bool
+                               (window-dedicated-p window)))
                 (point . ,(window-point window))
                 (start . ,(window-start window))
                 (edges . ,(append (window-edges window) nil))
                 (buffer-info . ,(codex-ide-mcp-bridge--buffer-info buffer)))))
           (window-list (selected-frame) 'no-minibuf (frame-first-window)))))
-    `((windows . ,windows))))
+    `((windows . ,(codex-ide-mcp-bridge--json-array windows)))))
 
 (provide 'codex-ide-mcp-bridge)
 

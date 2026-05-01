@@ -5949,7 +5949,7 @@
               (codex-ide-mcp-bridge--tool-call--get_buffer_info
                `((buffer . ,(buffer-name buffer))))
               `((buffer . ,(buffer-name buffer))
-		(file . nil)
+		(file . :json-null)
 		(major-mode . "emacs-lisp-mode")
 		(modified . t)
 		(read-only . t)))))

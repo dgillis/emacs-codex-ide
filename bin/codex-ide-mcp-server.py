@@ -125,6 +125,14 @@ COMMANDS = [
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
 
 
+class ProtocolError(Exception):
+    def __init__(self, code: int, message: str, request_id: Any = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.request_id = request_id
+
+
 def json_dumps(value: Any) -> bytes:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
 
@@ -137,6 +145,48 @@ def debug_log(*parts: object) -> None:
         pass
 
 
+def parse_json_message(body: bytes) -> dict[str, Any]:
+    try:
+        message = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ProtocolError(-32700, f"Parse error: {exc}") from exc
+    if not isinstance(message, dict):
+        raise ProtocolError(-32600, "Invalid Request: message must be a JSON object")
+    return message
+
+
+def read_header_framed_message(first_line: bytes) -> dict[str, Any]:
+    content_length: int | None = None
+    line = first_line
+    while True:
+        debug_log("stdin header bytes:", repr(line))
+        if line in (b"\r\n", b"\n"):
+            break
+        try:
+            header = line.decode("ascii").strip()
+        except UnicodeDecodeError as exc:
+            raise ProtocolError(-32700, f"Parse error: invalid header encoding: {exc}") from exc
+        if ":" not in header:
+            raise ProtocolError(-32700, f"Parse error: invalid header: {header}")
+        key, value = header.split(":", 1)
+        if key.lower() == "content-length":
+            try:
+                content_length = int(value.strip())
+            except ValueError as exc:
+                raise ProtocolError(-32700, f"Parse error: invalid Content-Length: {value.strip()}") from exc
+        line = sys.stdin.buffer.readline()
+        if not line:
+            raise ProtocolError(-32700, "Parse error: EOF while reading headers")
+
+    if content_length is None:
+        raise ProtocolError(-32700, "Parse error: missing Content-Length")
+    body = sys.stdin.buffer.read(content_length)
+    debug_log("stdin body bytes:", repr(body))
+    if len(body) != content_length:
+        raise ProtocolError(-32700, "Parse error: EOF while reading message body")
+    return parse_json_message(body)
+
+
 def read_message() -> dict[str, Any] | None:
     while True:
         line = sys.stdin.buffer.readline()
@@ -145,8 +195,10 @@ def read_message() -> dict[str, Any] | None:
             debug_log("stdin closed before message")
             return None
         if line in (b"\r\n", b"\n"):
-            break
-        return json.loads(line.decode("utf-8"))
+            continue
+        if line.lower().startswith(b"content-length:"):
+            return read_header_framed_message(line)
+        return parse_json_message(line)
 
 
 def write_message(payload: dict[str, Any]) -> None:
@@ -220,8 +272,21 @@ def schema_for_tools() -> list[dict[str, Any]]:
 def handle_tool_call(proxy: EmacsProxy, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     if name not in COMMANDS_BY_NAME:
         return text_result(f"Unknown tool: {name}", is_error=True)
+    if not isinstance(arguments, dict):
+        return text_result("Invalid tool arguments: expected object", is_error=True)
     result = proxy.call_tool(name, arguments)
     return text_result(json.dumps(result, indent=2, sort_keys=True))
+
+
+def error_response(code: int, message: str, request_id: Any = None) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": code,
+            "message": message,
+        },
+    }
 
 
 def main() -> int:
@@ -237,13 +302,22 @@ def main() -> int:
     proxy = EmacsProxy(args.emacsclient, args.server_name)
 
     while True:
-        message = read_message()
+        try:
+            message = read_message()
+        except ProtocolError as exc:
+            write_message(error_response(exc.code, exc.message, exc.request_id))
+            continue
         if message is None:
             debug_log("message loop exiting: no message")
             return 0
         method = message.get("method")
         request_id = message.get("id")
-        params = message.get("params") or {}
+        params = message.get("params")
+        if params is None:
+            params = {}
+        if not isinstance(params, dict):
+            write_message(error_response(-32600, "Invalid Request: params must be an object", request_id))
+            continue
         debug_log("received method:", method, "id:", request_id)
 
         try:
@@ -279,7 +353,7 @@ def main() -> int:
                         "result": handle_tool_call(
                             proxy,
                             params.get("name", ""),
-                            params.get("arguments") or {},
+                            {} if params.get("arguments") is None else params.get("arguments"),
                         ),
                     }
                 )

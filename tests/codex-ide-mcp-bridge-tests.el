@@ -290,7 +290,7 @@
 				       (kill-buffer buffer))
 				     (let ((result (codex-ide-mcp-bridge--tool-call--ensure_file_buffer_open
 						    `((path . ,file-path)))))
-				       (should-not (alist-get 'already-open result))
+				       (should (eq (alist-get 'already-open result) :json-false))
 				       (should (equal (alist-get 'path result) file-path))
 				       (should (find-buffer-visiting file-path))
 				       (should (eq (window-buffer (selected-window)) starting-buffer))))))))
@@ -397,7 +397,7 @@
 				   (let ((result (codex-ide-mcp-bridge--tool-call--get_buffer_diagnostics
 						  `((buffer . ,(buffer-name buffer))))))
 				     (should (equal (alist-get 'buffer result) (buffer-name buffer)))
-				     (should (equal (alist-get 'diagnostics result) '())))))))
+				     (should (= (length (alist-get 'diagnostics result)) 0)))))))
 
 (ert-deftest codex-ide-mcp-bridge-get-buffer-diagnostics-prefers-flymake ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -421,7 +421,7 @@
 				       (let* ((result (codex-ide-mcp-bridge--tool-call--get_buffer_diagnostics
 						       `((buffer . ,(buffer-name buffer)))))
 					      (diagnostics (alist-get 'diagnostics result))
-					      (diag (car diagnostics)))
+					      (diag (aref diagnostics 0)))
 					 (should (= (length diagnostics) 1))
 					 (should (equal (alist-get 'source diag) "flymake"))
 					 (should (equal (alist-get 'message diag) "Example flymake error"))
@@ -444,15 +444,15 @@
 							       (codex-ide-mcp-bridge--tool-call--get_all_windows nil))))
 				       (should (= (length windows) 2))
 				       (should (equal (alist-get 'buffer
-								 (alist-get 'buffer-info (car windows)))
+								 (alist-get 'buffer-info (aref windows 0)))
 						      (buffer-name buffer-a)))
 				       (should (equal (alist-get 'file
-								 (alist-get 'buffer-info (cadr windows)))
+								 (alist-get 'buffer-info (aref windows 1)))
 						      file-b))
 				       (should (equal (alist-get 'major-mode
-								 (alist-get 'buffer-info (car windows)))
+								 (alist-get 'buffer-info (aref windows 0)))
 						      "emacs-lisp-mode"))
-				       (should (listp (alist-get 'edges (car windows))))))))))
+				       (should (listp (alist-get 'edges (aref windows 0))))))))))
 
 (provide 'codex-ide-mcp-bridge-tests)
 

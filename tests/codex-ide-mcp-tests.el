@@ -11,6 +11,97 @@
 (require 'subr-x)
 (require 'codex-ide-test-fixtures)
 
+(defun codex-ide-mcp-test--run-script (input)
+  "Run the MCP bridge script with INPUT and return (EXIT-CODE . OUTPUT)."
+  (let ((script-path (expand-file-name "bin/codex-ide-mcp-server.py"
+                                       codex-ide-test--root-directory))
+        (input-buffer (generate-new-buffer " *codex-ide-mcp-run-input*"))
+        (output-buffer (generate-new-buffer " *codex-ide-mcp-run-output*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer input-buffer
+            (insert input))
+          (cons
+           (with-current-buffer input-buffer
+             (call-process-region
+              (point-min)
+              (point-max)
+              "python3"
+              nil
+              output-buffer
+              nil
+              script-path))
+           (with-current-buffer output-buffer
+             (buffer-string))))
+      (kill-buffer input-buffer)
+      (kill-buffer output-buffer))))
+
+(defun codex-ide-mcp-test--read-response (output)
+  "Read the first JSON response from OUTPUT."
+  (let ((json-object-type 'alist)
+        (json-array-type 'list)
+        (json-key-type 'string))
+    (json-read-from-string
+     (car (split-string output "\n" t)))))
+
+(ert-deftest codex-ide-mcp-script-skips-blank-lines-before-message ()
+  (let* ((result (codex-ide-mcp-test--run-script
+                  "\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n"))
+         (response (codex-ide-mcp-test--read-response (cdr result))))
+    (should (= (car result) 0))
+    (should (equal (alist-get "id" response nil nil #'equal) 1))
+    (should-not (alist-get "result" response nil nil #'equal))))
+
+(ert-deftest codex-ide-mcp-script-returns-parse-error-for-malformed-json ()
+  (let* ((result (codex-ide-mcp-test--run-script "{bad json}\n"))
+         (response (codex-ide-mcp-test--read-response (cdr result)))
+         (error (alist-get "error" response nil nil #'equal)))
+    (should (= (car result) 0))
+    (should (= (alist-get "code" error nil nil #'equal) -32700))
+    (should (string-match-p "Parse error"
+                            (alist-get "message" error nil nil #'equal)))))
+
+(ert-deftest codex-ide-mcp-script-rejects-non-object-json ()
+  (let* ((result (codex-ide-mcp-test--run-script "[]\n"))
+         (response (codex-ide-mcp-test--read-response (cdr result)))
+         (error (alist-get "error" response nil nil #'equal)))
+    (should (= (car result) 0))
+    (should (= (alist-get "code" error nil nil #'equal) -32600))
+    (should (string-match-p "message must be a JSON object"
+                            (alist-get "message" error nil nil #'equal)))))
+
+(ert-deftest codex-ide-mcp-script-rejects-non-object-params ()
+  (let* ((result (codex-ide-mcp-test--run-script
+                  "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":[]}\n"))
+         (response (codex-ide-mcp-test--read-response (cdr result)))
+         (error (alist-get "error" response nil nil #'equal)))
+    (should (= (car result) 0))
+    (should (= (alist-get "code" error nil nil #'equal) -32600))
+    (should (string-match-p "params must be an object"
+                            (alist-get "message" error nil nil #'equal)))))
+
+(ert-deftest codex-ide-mcp-script-rejects-non-object-tool-arguments ()
+  (let* ((result (codex-ide-mcp-test--run-script
+                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"emacs_get_buffer_info\",\"arguments\":[]}}\n"))
+         (response (codex-ide-mcp-test--read-response (cdr result)))
+         (tool-result (alist-get "result" response nil nil #'equal))
+         (content (car (alist-get "content" tool-result nil nil #'equal))))
+    (should (= (car result) 0))
+    (should (alist-get "isError" tool-result nil nil #'equal))
+    (should (string-match-p "Invalid tool arguments"
+                            (alist-get "text" content nil nil #'equal)))))
+
+(ert-deftest codex-ide-mcp-script-accepts-content-length-framed-message ()
+  (let* ((body "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}")
+         (result (codex-ide-mcp-test--run-script
+                  (format "Content-Length: %d\r\n\r\n%s"
+                          (string-bytes body)
+                          body)))
+         (response (codex-ide-mcp-test--read-response (cdr result))))
+    (should (= (car result) 0))
+    (should (equal (alist-get "id" response nil nil #'equal) 7))
+    (should-not (alist-get "result" response nil nil #'equal))))
+
 (ert-deftest codex-ide-mcp-script-starts-with-optional-server-name-flag ()
   (let ((script-path (expand-file-name "bin/codex-ide-mcp-server.py"
                                        codex-ide-test--root-directory))
