@@ -175,6 +175,25 @@ at the bottom of the live session."
                    (eq (marker-buffer marker) buffer))
           marker)))))
 
+(defun codex-ide--input-end-marker (&optional session)
+  "Return SESSION's active editable input end marker, if live."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (when-let ((marker (and session
+                          (codex-ide--session-metadata-get
+                           session
+                           :input-end-marker))))
+    (let ((buffer (codex-ide-session-buffer session)))
+      (when (and (buffer-live-p buffer)
+                 (markerp marker)
+                 (eq (marker-buffer marker) buffer))
+        marker))))
+
+(defun codex-ide--input-end-position (&optional session)
+  "Return SESSION's active editable input end position."
+  (or (and (codex-ide--input-end-marker session)
+           (marker-position (codex-ide--input-end-marker session)))
+      (point-max)))
+
 (defun codex-ide--transcript-insertion-position (buffer)
   "Return the insertion point for appended transcript text in BUFFER."
   (or (codex-ide--append-boundary-position buffer)
@@ -185,14 +204,18 @@ at the bottom of the live session."
   "Return a marker preserving point when it is inside SESSION's input."
   (let ((buffer (and session (codex-ide-session-buffer session)))
         (prompt-start (and session
-                           (codex-ide-session-input-prompt-start-marker session))))
+                           (codex-ide-session-input-prompt-start-marker session)))
+        (input-end (and session (codex-ide--input-end-position session))))
     (when (and (buffer-live-p buffer)
                (eq (current-buffer) buffer)
                (codex-ide--input-prompt-active-p session)
                (markerp prompt-start)
                (eq (marker-buffer prompt-start) buffer)
-               (>= (point) (marker-position prompt-start)))
-      (copy-marker (point)))))
+               input-end
+               (or (and (>= (point) (marker-position prompt-start))
+                        (<= (point) input-end))
+                   (= (point) (point-max))))
+      (copy-marker (min (point) input-end)))))
 
 (defun codex-ide--restore-input-point-marker (marker)
   "Restore point to MARKER and clear it."
@@ -219,8 +242,15 @@ at the bottom of the live session."
          (not tail-follow-suspended)
          (or (>= window-point-pos anchor-pos)
              (>= window-end-pos anchor-pos)
-             (and (>= window-end-pos buffer-end)
-                  (> window-point-pos window-start-pos))))))
+	     (and (>= window-end-pos buffer-end)
+	          (> window-point-pos window-start-pos))))))
+
+(defun codex-ide--transcript-tail-point-position ()
+  "Return the point position to use when following the transcript tail."
+  (let ((session (codex-ide--session-for-buffer (current-buffer))))
+    (if (and session (codex-ide--input-prompt-active-p session))
+        (codex-ide--input-end-position session)
+      (point-max))))
 
 (defun codex-ide--capture-transcript-window-positions (&optional anchor)
   "Capture current-buffer window positions relative to transcript ANCHOR."
@@ -241,18 +271,28 @@ at the bottom of the live session."
           (follow-anchor (plist-get state :follow-anchor))
           (start-marker (plist-get state :start-marker))
           (point-marker (plist-get state :point-marker))
-          (tail-pos (point-max)))
+          (tail-pos (codex-ide--transcript-tail-point-position)))
       (unwind-protect
           (when (and (window-live-p window)
                      (eq (window-buffer window) (current-buffer))
                      (markerp point-marker)
                      (marker-buffer point-marker))
             (if follow-anchor
-                (set-window-point window tail-pos)
-              (when (and (markerp start-marker)
-                         (marker-buffer start-marker))
-                (set-window-start window (marker-position start-marker) t))
-              (set-window-point window (marker-position point-marker))))
+	        (set-window-point window tail-pos)
+	      (when (and (markerp start-marker)
+	                 (marker-buffer start-marker))
+	        (set-window-start window (marker-position start-marker) t))
+	      (let* ((point-pos (marker-position point-marker))
+	             (input-end (let ((session (codex-ide--session-for-buffer
+	                                        (current-buffer))))
+	                          (and session
+	                               (codex-ide--input-prompt-active-p session)
+	                               (codex-ide--input-end-position session)))))
+	        (set-window-point
+	         window
+	         (if (and input-end (> point-pos input-end))
+	             input-end
+	           point-pos)))))
         (when (markerp start-marker)
           (set-marker start-marker nil))
         (when (markerp point-marker)
@@ -273,25 +313,27 @@ at the bottom of the live session."
         (boundary (codex-ide--session-metadata-get
                    session
                    :active-input-boundary-marker))
-        (prompt-start (codex-ide-session-input-prompt-start-marker session)))
+        (display-start (codex-ide--session-metadata-get
+                        session
+                        :input-display-start-marker)))
     (when (and (buffer-live-p buffer)
                (markerp boundary)
-               (markerp prompt-start)
+               (markerp display-start)
                (eq (marker-buffer boundary) buffer)
-               (eq (marker-buffer prompt-start) buffer)
+               (eq (marker-buffer display-start) buffer)
                (< (marker-position boundary)
-                  (marker-position prompt-start)))
+                  (marker-position display-start)))
       (with-current-buffer buffer
         (codex-ide--without-undo-recording
          (let* ((inhibit-read-only t)
-                (restore-point (codex-ide--input-point-marker session))
-                (newline-count 0)
-                (insert-start nil))
-           (save-excursion
-             (goto-char (marker-position prompt-start))
-             (while (and (> (point) (point-min))
-                         (eq (char-before) ?\n))
-               (setq newline-count (1+ newline-count))
+	        (restore-point (codex-ide--input-point-marker session))
+	        (newline-count 0)
+	        (insert-start nil))
+	   (save-excursion
+	     (goto-char (marker-position display-start))
+	     (while (and (> (point) (point-min))
+	                 (eq (char-before) ?\n))
+	       (setq newline-count (1+ newline-count))
                (backward-char)))
            (when (< newline-count 2)
              (goto-char (marker-position boundary))
@@ -599,6 +641,9 @@ inserted text."
         (start (or (codex-ide--session-metadata-get
                     session
                     :active-input-boundary-marker)
+                   (codex-ide--session-metadata-get
+                    session
+                    :input-display-start-marker)
                    (codex-ide-session-input-prompt-start-marker session))))
     (when (and (buffer-live-p buffer)
                (markerp start)
@@ -606,12 +651,15 @@ inserted text."
       (with-current-buffer buffer
         (codex-ide--without-undo-recording
          (let ((inhibit-read-only t)
-               (moving (= (point) (point-max))))
+               (moving (or (= (point) (point-max))
+                           (= (point) (codex-ide--input-end-position session)))))
            (delete-region (marker-position start) (point-max))
            (when moving
              (goto-char (point-max)))))))
     (codex-ide--delete-input-overlay session)
     (codex-ide--session-metadata-put session :active-input-boundary-marker nil)
+    (codex-ide--session-metadata-put session :input-end-marker nil)
+    (codex-ide--session-metadata-put session :input-display-start-marker nil)
     (setf (codex-ide-session-input-start-marker session) nil
           (codex-ide-session-input-prompt-start-marker session) nil)
     (codex-ide--sync-prompt-minor-mode session)))
@@ -968,9 +1016,24 @@ Optionally seed it with INITIAL-TEXT."
                   initial-text
                   (or (codex-ide-session-current-turn-id session)
                       (codex-ide-session-output-prefix-inserted session))))
+           (let ((display-start (copy-marker
+                                 (marker-position
+                                  (plist-get render-state :prompt-start)))))
+             (goto-char (plist-get render-state :prompt-start))
+             (insert (propertize "\n"
+                                 'face 'codex-ide-user-prompt-face
+                                 'read-only t))
+             (set-marker (plist-get render-state :prompt-start) (point))
+             (codex-ide--session-metadata-put
+              session
+              :input-display-start-marker
+              display-start)
+             (goto-char (point-max)))
            (codex-ide--freeze-region
             (marker-position (plist-get render-state :transcript-start))
-            (marker-position (plist-get render-state :prompt-start)))
+            (marker-position (codex-ide--session-metadata-get
+                              session
+                              :input-display-start-marker)))
            (codex-ide--delete-input-overlay session)
            (codex-ide--session-metadata-put
             session
@@ -980,26 +1043,44 @@ Optionally seed it with INITIAL-TEXT."
                  (plist-get render-state :prompt-start))
            (setf (codex-ide-session-input-start-marker session)
                  (plist-get render-state :input-start))
+           (let ((input-end-pos (point)))
+             (insert (propertize "\n\n"
+                                 'face 'codex-ide-user-prompt-face
+                                 'read-only t))
+             (codex-ide--session-metadata-put
+              session
+              :input-end-marker
+              (copy-marker input-end-pos t))
+             (goto-char input-end-pos))
            (codex-ide--reset-prompt-history-navigation session)
            (codex-ide--make-region-writable
             (marker-position (codex-ide-session-input-start-marker session))
-            (point))
+            (codex-ide--input-end-position session))
            (let ((overlay (make-overlay
                            (marker-position
                             (codex-ide-session-input-start-marker session))
                            (point-max)
                            buffer
-                           t
+                           nil
                            t)))
              (overlay-put overlay 'face 'codex-ide-user-prompt-face)
              (overlay-put overlay 'field 'codex-ide-active-input)
+             (overlay-put overlay 'read-only nil)
              (setf (codex-ide-session-input-overlay session) overlay))
            (codex-ide--setup-input-placeholder-hooks)
            (codex-ide--refresh-input-placeholder session)
            (when moving
-             (goto-char (point-max)))
+             (goto-char (codex-ide--input-end-position session)))
            (codex-ide--sync-prompt-minor-mode session)))
-        (codex-ide--discard-buffer-undo-history)))))
+	(codex-ide--discard-buffer-undo-history)))))
+
+(defun codex-ide--insert-context-summary (text)
+  "Insert context summary TEXT after the prompt."
+  (if (bolp)
+      (let ((start (point)))
+        (insert (propertize text 'face 'codex-ide-item-detail-face))
+        (cons start (point)))
+    (codex-ide-renderer-insert-context-summary text)))
 
 (defun codex-ide--freeze-active-input-prompt (&optional session context-summary)
   "Freeze SESSION's active input prompt as submitted transcript text.
@@ -1016,15 +1097,21 @@ When CONTEXT-SUMMARY is non-nil, insert it beneath the prompt."
              context-start)
          (codex-ide--delete-running-input-list session)
          (when-let ((start (codex-ide-session-input-prompt-start-marker session)))
-           (codex-ide--style-user-prompt-region start (point-max))
-           (codex-ide--freeze-region start (point-max))
+           (let ((display-start (or (codex-ide--session-metadata-get
+                                     session
+                                     :input-display-start-marker)
+                                    start)))
+             (codex-ide--style-user-prompt-region start (point-max))
+             (codex-ide--freeze-region display-start (point-max)))
            (when context-summary
              (setq context-start (point-max))
              (goto-char context-start)
-             (codex-ide-renderer-insert-context-summary context-summary)
+             (codex-ide--insert-context-summary context-summary)
              (codex-ide--freeze-region context-start (point)))))
        (codex-ide--delete-input-overlay session)
        (codex-ide--session-metadata-put session :active-input-boundary-marker nil)
+       (codex-ide--session-metadata-put session :input-display-start-marker nil)
+       (codex-ide--session-metadata-put session :input-end-marker nil)
        (codex-ide--sync-prompt-minor-mode session))
       (codex-ide--discard-buffer-undo-history))))
 
@@ -1063,7 +1150,9 @@ When INITIAL-TEXT is non-nil, seed a newly inserted prompt with it."
       "")
     (with-current-buffer buffer
       (string-trim-right
-       (buffer-substring-no-properties marker (point-max))))))
+       (buffer-substring-no-properties
+        marker
+        (codex-ide--input-end-position session))))))
 
 (defun codex-ide--replace-current-input (session text)
   "Replace SESSION's editable input region with TEXT."
@@ -1074,8 +1163,11 @@ When INITIAL-TEXT is non-nil, seed a newly inserted prompt with it."
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (goto-char marker)
-        (codex-ide-renderer-replace-region marker (point-max) text)
-        (goto-char (point-max))
+        (codex-ide-renderer-replace-region
+         marker
+         (codex-ide--input-end-position session)
+         text)
+        (goto-char (codex-ide--input-end-position session))
         (codex-ide--refresh-input-placeholder session)))))
 
 (defun codex-ide--browse-prompt-history (direction)
@@ -1167,7 +1259,7 @@ When QUIET is non-nil, do not refresh SESSION's header line."
              (when context-summary
                (setq context-start (point-max))
                (goto-char context-start)
-               (codex-ide-renderer-insert-context-summary context-summary)
+               (codex-ide--insert-context-summary context-summary)
                (codex-ide--freeze-region context-start (point))))
            (codex-ide--delete-input-overlay session)
            (codex-ide--sync-prompt-minor-mode session)

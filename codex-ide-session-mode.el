@@ -76,10 +76,27 @@
            (<= start pos)
            (<= pos end)))))
 
+(defun codex-ide-session-mode--input-end-position (&optional session)
+  "Return SESSION's editable input end position, if available."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (when-let ((marker (and session
+                          (codex-ide--session-metadata-get
+                           session
+                           :input-end-marker))))
+    (let ((buffer (and session (codex-ide-session-buffer session))))
+      (when (and (buffer-live-p buffer)
+                 (markerp marker)
+                 (eq (marker-buffer marker) buffer))
+        (marker-position marker)))))
+
 (defun codex-ide--sync-prompt-minor-mode (&optional session)
   "Enable or disable `codex-ide-session-prompt-minor-mode' for SESSION."
   (setq session (or session (and (boundp 'codex-ide--session) codex-ide--session)))
   (when (and session (derived-mode-p 'codex-ide-session-mode))
+    (when-let ((input-end (codex-ide-session-mode--input-end-position session)))
+      (when (and (codex-ide--point-in-active-prompt-p session)
+                 (> (point) input-end))
+        (goto-char input-end)))
     (let ((inside (codex-ide--point-in-active-prompt-p session)))
       (unless (eq inside codex-ide-session-prompt-minor-mode)
         (codex-ide-session-prompt-minor-mode (if inside 1 -1))))))

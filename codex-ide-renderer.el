@@ -88,7 +88,7 @@
   :group 'codex-ide)
 
 (defface codex-ide-user-prompt-face
-  '((t :inherit default))
+  '((t :inherit default :extend t))
   "Face used to distinguish submitted and active user prompts."
   :group 'codex-ide)
 
@@ -194,10 +194,10 @@
   codex-ide-item-result-overlay-property
   "Compatibility alias for `codex-ide-item-result-overlay-property'.")
 
-(defconst codex-ide-renderer--user-prompt-background-mix-light 0.07
+(defconst codex-ide-renderer--user-prompt-background-mix-light 0.05
   "Foreground mix fraction for prompt backgrounds on light themes.")
 
-(defconst codex-ide-renderer--user-prompt-background-mix-dark 0.17
+(defconst codex-ide-renderer--user-prompt-background-mix-dark 0.12
   "Foreground mix fraction for prompt backgrounds on dark themes.")
 
 (defconst codex-ide-renderer--output-separator-foreground-mix-light 0.22
@@ -256,7 +256,8 @@
        ,(codex-ide-renderer--blend-default-colors
          (if (codex-ide-renderer--theme-dark-p)
              codex-ide-renderer--user-prompt-background-mix-dark
-           codex-ide-renderer--user-prompt-background-mix-light)))))
+           codex-ide-renderer--user-prompt-background-mix-light))
+       :extend t)))
 
 (defun codex-ide-renderer--output-separator-face-spec ()
   "Return the current face spec for `codex-ide-output-separator-face'."

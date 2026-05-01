@@ -573,12 +573,12 @@
       (setq-local codex-ide--session session)
       (codex-ide--insert-input-prompt session nil)
       (should-not buffer-undo-list)
-      (goto-char (point-max))
+      (goto-char (codex-ide--input-end-position session))
       (insert "hello")
       (undo-boundary)
       (should buffer-undo-list)
       (primitive-undo 1 (cdr buffer-undo-list))
-      (should (equal (buffer-string) "> "))
+      (should (equal (buffer-string) "\n> \n\n"))
       (should (equal (codex-ide-test--prompt-prefix-at-line) "> ")))))
 
 (ert-deftest codex-ide-input-prompt-shows-idle-placeholder-when-empty-and-unfocused ()
@@ -602,7 +602,7 @@
                  session
                  :input-placeholder-overlay)
                 'after-string)))
-      (should (equal (buffer-string) "> "))
+      (should (equal (buffer-string) "\n> \n\n"))
       (should (equal (codex-ide--current-input session) "")))))
 
 (ert-deftest codex-ide-input-prompt-keeps-placeholder-on-focus-and-hides-on-typing ()
@@ -627,7 +627,7 @@
       (goto-char (point-min))
       (codex-ide--refresh-input-placeholder session)
       (should-not (codex-ide-test--input-placeholder-text session))
-      (should (equal (buffer-string) "> h"))
+      (should (equal (buffer-string) "\n> h\n\n"))
       (should (equal (codex-ide--current-input session) "h")))))
 
 (ert-deftest codex-ide-running-input-prompt-shows-steering-placeholder ()
@@ -644,7 +644,7 @@
       (should (codex-ide-test--input-placeholder-overlay-live-p session))
       (should (equal (codex-ide-test--input-placeholder-text session)
                      "Running..."))
-      (should (string-suffix-p "> " (buffer-string)))
+      (should (string-suffix-p "\n> \n\n" (buffer-string)))
       (should (equal (codex-ide--current-input session) "")))))
 
 (ert-deftest codex-ide-finish-turn-refreshes-existing-prompt-placeholder ()
@@ -697,7 +697,7 @@
       (should buffer-undo-list)
       (codex-ide--begin-turn-display session)
       (should-not buffer-undo-list)
-      (should (string-match-p "submitted prompt\n\n> "
+      (should (string-match-p "submitted prompt\n\n\n\n> "
                               (buffer-string)))
       (should-not (string-match-p "Working\\.\\.\\." (buffer-string)))
       (should (equal (codex-ide-test--input-placeholder-text session)
@@ -755,7 +755,7 @@
                      (* anything)
                      "Queued turns:"
                      "\n  1. queued prompt"
-                     "\n\n> steer draft" string-end)
+                     "\n\n\n> steer draft\n\n" string-end)
                  text))
         (should-not (string-match-p
                      (rx "Assistant update." (* anything) "> steer draft"
@@ -775,8 +775,30 @@
       (codex-ide--replace-current-input session "steer draft")
       (goto-char (point-max))
       (codex-ide--ensure-output-spacing (current-buffer))
-      (should (= (point) (point-max)))
+      (should (= (point) (codex-ide--input-end-position session)))
       (should (equal (codex-ide--current-input session) "steer draft")))))
+
+(ert-deftest codex-ide-streaming-append-keeps-following-window-point-at-input-end ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-streaming-input-point*")))
+      (unwind-protect
+          (progn
+            (switch-to-buffer buffer)
+            (erase-buffer)
+            (codex-ide-session-mode)
+            (let ((session (make-codex-ide-session
+                            :buffer buffer
+                            :status "idle")))
+              (setq-local codex-ide--session session)
+              (codex-ide--insert-input-prompt session "steer draft")
+              (goto-char (point-max))
+              (set-window-point (selected-window) (point-max))
+              (codex-ide--append-to-buffer buffer "streamed output\n")
+              (should (= (window-point)
+                         (codex-ide--input-end-position session)))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
 
 (ert-deftest codex-ide-streaming-append-preserves-scrolled-transcript-window ()
   (save-window-excursion
@@ -1039,7 +1061,7 @@
       (codex-ide--append-to-buffer (current-buffer) "Final answer.\n")
       (codex-ide--finish-turn session)
       (should (string-match-p
-               (rx "Final answer." "\n\n> steer draft" string-end)
+               (rx "Final answer." "\n\n\n> steer draft\n\n" string-end)
                (buffer-string)))
       (goto-char (marker-position
                   (codex-ide-session-input-prompt-start-marker session)))
@@ -1062,7 +1084,7 @@
          (params . ((itemId . "msg-1")
                     (delta . "Final answer.")))))
       (should (string-match-p
-               (rx "Final answer." "\n\n> steer draft" string-end)
+               (rx "Final answer." "\n\n\n> steer draft\n\n" string-end)
                (buffer-string)))
       (goto-char (marker-position
                   (codex-ide-session-input-prompt-start-marker session)))
@@ -1087,11 +1109,11 @@
                       (delta . ,delta))))))
       (should (string-match-p
                (rx "First line." "\n"
-                   "Second line." "\n\n"
-                   "> steer draft" string-end)
+                   "Second line." "\n\n\n"
+                   "> steer draft\n\n" string-end)
                (buffer-string)))
       (should-not (string-match-p
-                   (rx "Second line." "\n\n\n" "> steer draft" string-end)
+                   (rx "Second line." "\n\n\n\n\n" "> steer draft\n\n" string-end)
                    (buffer-string))))))
 
 (ert-deftest codex-ide-agent-markdown-delta-separates-active-prompt-from-output ()
@@ -1111,7 +1133,7 @@
          (params . ((itemId . "msg-1")
                     (delta . "Use `code` now.\n")))))
       (should (string-match-p
-               (rx "Use `code` now." "\n\n> steer draft" string-end)
+               (rx "Use `code` now." "\n\n\n> steer draft\n\n" string-end)
                (buffer-string)))
       (goto-char (point-min))
       (search-forward "code")
@@ -1141,7 +1163,7 @@
            (params . ((itemId . "call-1")
                       (delta . "hello")))))
         (should (string-match-p
-                 (rx "    hello" "\n\n> steer draft" string-end)
+                 (rx "    hello" "\n\n\n> steer draft\n\n" string-end)
                  (buffer-string)))))))
 
 (ert-deftest codex-ide-working-indicator-shows-as-prompt-help ()
@@ -1514,6 +1536,65 @@
 (ert-deftest codex-ide-command-output-face-extends-line-background ()
   (should (eq (face-attribute 'codex-ide-command-output-face :extend nil t)
               t)))
+
+(ert-deftest codex-ide-user-prompt-face-extends-line-background ()
+  (should (eq (face-attribute 'codex-ide-user-prompt-face :extend nil t)
+              t)))
+
+(ert-deftest codex-ide-input-prompt-has-tail-newline-for-extended-background ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (should (equal (buffer-string) "\n> \n\n"))
+      (should (eq (get-text-property (1- (point-max)) 'face)
+                  'codex-ide-user-prompt-face))
+      (should (equal (codex-ide--current-input session) "")))))
+
+(ert-deftest codex-ide-input-prompt-move-end-of-line-stays-at-text-end ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (insert "draft")
+      (goto-char (marker-position (codex-ide-session-input-start-marker session)))
+      (move-end-of-line 1)
+      (should (= (point) (codex-ide--input-end-position session)))
+      (should (string= (codex-ide--current-input session) "draft")))))
+
+(ert-deftest codex-ide-input-prompt-move-beginning-of-line-skips-prefix ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session nil)
+      (goto-char (codex-ide--input-end-position session))
+      (move-beginning-of-line 1)
+      (should (= (point)
+                 (marker-position
+                  (codex-ide-session-input-start-marker session)))))))
+
+(ert-deftest codex-ide-input-prompt-sync-clamps-point-to-text-end ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "idle")))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "draft")
+      (goto-char (point-max))
+      (codex-ide--sync-prompt-minor-mode session)
+      (should (= (point) (codex-ide--input-end-position session)))
+      (insert " more")
+      (should (string= (codex-ide--current-input session) "draft more")))))
 
 (ert-deftest codex-ide-command-output-tails-rendered-lines ()
   (let ((codex-ide-renderer-command-output-max-rendered-lines 3)
@@ -2855,7 +2936,7 @@
 					  (let ((buffer-text (buffer-string))
 						(input (alist-get 'input submitted)))
 					    (should (string-match-p
-						     "\nExplain this\nContext: example\\.el 1:3"
+						     "\n> Explain this\n\nContext: example\\.el 1:3"
 						     buffer-text))
 					    (goto-char (point-min))
 					    (re-search-forward "^> Explain this$")
@@ -2944,7 +3025,7 @@
 						   (rx "Queued turns:"
 						       "\n  1. Do this next"
 						       "\n  2. And then this"
-						       "\n\n> "
+						       "\n\n\n> \n\n"
 						       string-end)
 						   (buffer-string)))
 					  (codex-ide--handle-notification

@@ -156,7 +156,7 @@ BODY may refer to the lexical variable `session'."
                  "#f0f0f0"))))
     (should (equal (plist-get (cdr (car (codex-ide-renderer--user-prompt-face-spec)))
                               :background)
-                   "#2b2b2b"))
+                   "#1f1f1f"))
     (should (equal (plist-get (cdr (car (codex-ide-renderer--output-separator-face-spec)))
                               :foreground)
                    "#595959"))
@@ -188,7 +188,8 @@ BODY may refer to the lexical variable `session'."
                           '((t :foreground "#c7c7c7")))
                     (cons 'codex-ide-user-prompt-face
                           '((t :inherit default
-                               :background "#ededed"))))))))
+                               :background "#f2f2f2"
+                               :extend t))))))))
 
 (ert-deftest codex-ide-renderer-open-file-link-other-window-uses-other-window-opener ()
   (let ((path (make-temp-file "codex-ide-renderer-link-"))

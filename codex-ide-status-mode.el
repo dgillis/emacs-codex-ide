@@ -579,11 +579,21 @@ Only child `buffer' and `thread' sections support visit and delete actions."
    'codex-ide-status-striped-heading-face
    'append))
 
-(defun codex-ide-status-mode--user-prompt-face-p (face)
-  "Return non-nil when FACE includes `codex-ide-user-prompt-face'."
-  (if (listp face)
-      (memq 'codex-ide-user-prompt-face face)
-    (eq face 'codex-ide-user-prompt-face)))
+(defun codex-ide-status-mode--prompt-text-at (start &optional limit)
+  "Return prompt text for the prompt beginning at START before LIMIT."
+  (let* ((end (next-single-char-property-change
+               start
+               'face
+               nil
+               (or limit (point-max))))
+         (text (string-remove-prefix
+                "> "
+                (buffer-substring-no-properties start end))))
+    (string-trim text)))
+
+(defun codex-ide-status-mode--prompt-start-p (&optional pos)
+  "Return non-nil when POS is the start of a prompt line."
+  (get-text-property (or pos (point)) codex-ide-prompt-start-property))
 
 (defun codex-ide-status-mode--last-submitted-prompt-text (session)
   "Return the last submitted non-empty prompt text from SESSION."
@@ -601,28 +611,19 @@ The plist contains `:text', `:start', and `:end'."
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (save-excursion
-          (let ((pos (point-min))
-                found)
-            (while (and (< pos (point-max)) (not found))
-              (when (codex-ide-status-mode--user-prompt-face-p
-                     (get-char-property pos 'face))
-                (let* ((end (next-single-char-property-change pos 'face nil (point-max)))
-                       (start pos)
-                       text)
-                  (while (and (> start (point-min))
-                              (codex-ide-status-mode--user-prompt-face-p
-                               (get-char-property (1- start) 'face)))
-                    (setq start (1- start)))
-                  (setq text (string-remove-prefix
-                              "> "
-                              (buffer-substring-no-properties start end)))
-                  (setq text (string-trim text))
-                  (unless (string-empty-p text)
-                    (setq found (list :text text
-                                      :start start
-                                      :end end)))))
-              (unless found
-                (setq pos (next-single-char-property-change pos 'face nil (point-max)))))
+          (let (found)
+            (goto-char (point-min))
+            (while (and (not found)
+                        (re-search-forward "^> " nil t))
+              (let ((start (match-beginning 0)))
+                (when (codex-ide-status-mode--prompt-start-p start)
+                  (let ((text (codex-ide-status-mode--prompt-text-at start)))
+                    (unless (string-empty-p text)
+                      (setq found
+                            (list :text text
+                                  :start start
+                                  :end (next-single-char-property-change
+                                        start 'face nil (point-max)))))))))
             found))))))
 
 (defun codex-ide-status-mode--first-submitted-prompt-text (session)
@@ -651,12 +652,13 @@ The plist contains `:text', `:start', and `:end'."
                    (input-start (and (codex-ide-session-input-start-marker session)
                                      (marker-position
                                       (codex-ide-session-input-start-marker session)))))
-          (let ((text (string-trim
-                       (buffer-substring-no-properties input-start (point-max)))))
+          (let ((text (codex-ide--current-input session)))
             (unless (string-empty-p text)
               (list :text text
                     :start prompt-start
-                    :end (point-max)))))))))
+                    :end (or (and (fboundp 'codex-ide--input-end-position)
+                                  (codex-ide--input-end-position session))
+                             input-start)))))))))
 
 (defun codex-ide-status-mode--last-prompt-data-before (session position)
   "Return plist describing the last non-empty prompt in SESSION before POSITION.
@@ -665,31 +667,23 @@ The plist contains `:text', `:start', and `:end'."
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (save-excursion
-          (let ((pos (max (point-min)
-                          (min (point-max) position)))
+          (let ((limit (max (point-min)
+                            (min (point-max) position)))
                 candidate
                 candidate-start
                 candidate-end)
-            (while (and (> pos (point-min)) (not candidate-start))
-              (setq pos (previous-single-char-property-change pos 'face nil (point-min)))
-              (when (codex-ide-status-mode--user-prompt-face-p
-                     (get-char-property pos 'face))
-                (let* ((end (next-single-char-property-change pos 'face nil position))
-                       (start pos)
-                       text)
-                  (while (and (> start (point-min))
-                              (codex-ide-status-mode--user-prompt-face-p
-                               (get-char-property (1- start) 'face)))
-                    (setq start (1- start)))
-                  (setq text (string-remove-prefix
-                              "> "
-                              (buffer-substring-no-properties start end)))
-                  (setq text (string-trim text))
-                  (unless (string-empty-p text)
-                    (setq candidate text
-                          candidate-start start
-                          candidate-end end))
-                  (setq pos start))))
+            (goto-char limit)
+            (while (and (not candidate-start)
+                        (re-search-backward "^> " nil t))
+              (let ((start (point)))
+                (when (and (< start limit)
+                           (codex-ide-status-mode--prompt-start-p start))
+                  (let ((text (codex-ide-status-mode--prompt-text-at start limit)))
+                    (unless (string-empty-p text)
+                      (setq candidate text
+                            candidate-start start
+                            candidate-end (next-single-char-property-change
+                                           start 'face nil limit)))))))
             (when candidate-start
               (list :text candidate
                     :start candidate-start
