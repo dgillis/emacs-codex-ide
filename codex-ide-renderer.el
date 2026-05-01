@@ -796,13 +796,15 @@ PROPERTIES is appended to the inserted region.  Return (START . END)."
 
 (defun codex-ide-renderer-insert-restored-user-message (text)
   "Insert restored user TEXT at point and return (START . END)."
-  (codex-ide-renderer-insert-output-spacing)
+  (let ((spacing-range (codex-ide-renderer-insert-output-spacing)))
+    (add-text-properties (car spacing-range) (cdr spacing-range)
+                         '(face codex-ide-user-prompt-face)))
   (let ((prompt-start (point)))
     (codex-ide-renderer-insert-prompt-prefix)
     (insert text)
     (codex-ide-renderer-style-user-prompt-region prompt-start (point))
     (codex-ide-renderer-freeze-region prompt-start (point))
-    (insert "\n\n")
+    (insert (propertize "\n\n" 'face 'codex-ide-user-prompt-face))
     (codex-ide-renderer-freeze-region prompt-start (point))
     (cons prompt-start (point))))
 
