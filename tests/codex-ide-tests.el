@@ -3651,6 +3651,72 @@
 						   (regexp-quote (format "  └ %s" secondary-query))
 						   text)))))))))
 
+  (ert-deftest codex-ide-web-search-completion-details-stay-with-original-item ()
+    (with-temp-buffer
+      (codex-ide-session-mode)
+      (let ((session (make-codex-ide-session
+                      :directory default-directory
+                      :buffer (current-buffer)
+                      :status "idle"
+                      :item-states (make-hash-table :test 'equal)))
+            (first-query "first web query")
+            (second-query "second web query")
+            (third-query "third web query"))
+        (setq-local codex-ide--session session)
+        (codex-ide--insert-input-prompt session "submitted prompt")
+        (codex-ide--begin-turn-display session)
+        (codex-ide--render-item-start
+         session
+         '((id . "web-search-1")
+           (type . "webSearch")
+           (query . "")
+           (action . ((type . "other")))))
+        (codex-ide--render-item-start
+         session
+         '((id . "web-search-2")
+           (type . "webSearch")
+           (query . "")
+           (action . ((type . "other")))))
+        (codex-ide--render-item-completion
+         session
+         `((id . "web-search-1")
+           (type . "webSearch")
+           (status . "completed")
+           (query . ,first-query)
+           (action . ((type . "search")
+                      (query . ,first-query)
+                      (queries . (,first-query ,second-query)))))))
+      (codex-ide--render-item-completion
+       session
+       `((id . "web-search-2")
+         (type . "webSearch")
+         (status . "completed")
+         (query . ,third-query)
+         (action . ((type . "search")
+                    (query . ,third-query)
+                    (queries . (,third-query)))))))
+    (let* ((text (buffer-string))
+           (first-header (string-match
+                          (regexp-quote "* Searched the web")
+                          text))
+           (second-header (and first-header
+                               (string-match
+                                (regexp-quote "* Searched the web")
+                                text
+                                (match-end 0))))
+           (first-query-pos (string-match (regexp-quote first-query) text))
+           (second-query-pos (string-match (regexp-quote second-query) text))
+           (third-query-pos (string-match (regexp-quote third-query) text)))
+      (should first-header)
+      (should second-header)
+      (should first-query-pos)
+      (should second-query-pos)
+      (should third-query-pos)
+      (should (< first-header first-query-pos))
+      (should (< first-query-pos second-header))
+      (should (< second-query-pos second-header))
+      (should (< second-header third-query-pos))))
+
   (ert-deftest codex-ide-turn-started-does-not-refresh-known-session-model ()
     (let ((project-dir (codex-ide-test--make-temp-project))
           (requests nil))
@@ -6162,7 +6228,7 @@
 										face codex-ide-user-prompt-face))
 					    (add-text-properties
 					     second-start second-end
-						     `(,codex-ide-prompt-start-property t
+					     `(,codex-ide-prompt-start-property t
 										face codex-ide-user-prompt-face))
 					    (goto-char first-start)
 					    (forward-line 1)

@@ -425,6 +425,37 @@ inserted text."
    face
    (append properties (codex-ide--current-agent-text-properties))))
 
+(defun codex-ide--insert-agent-text-at-marker
+    (buffer marker text &optional face properties)
+  "Insert agent-originated TEXT in BUFFER at MARKER.
+Move MARKER after the inserted text."
+  (when (and (buffer-live-p buffer)
+             (markerp marker)
+             (eq (marker-buffer marker) buffer)
+             (stringp text)
+             (not (string-empty-p text)))
+    (with-current-buffer buffer
+      (let* ((session (codex-ide--session-for-buffer buffer))
+             (restore-point (codex-ide--input-point-marker session))
+             (moving (and (= (point) (point-max)) (not restore-point)))
+             (insertion-position (marker-position marker)))
+        (codex-ide--maybe-save-transcript-position insertion-position
+						   (codex-ide-renderer-append-to-buffer
+						    text
+						    :insertion-point insertion-position
+						    :face face
+						    :properties (append properties
+									(codex-ide--current-agent-text-properties))
+						    :restore-point restore-point
+						    :preserve-point t
+						    :move-point-to-end moving
+						    :after-insert
+						    (lambda (_start end _inserted-at)
+						      (set-marker marker end)
+						      (codex-ide--advance-active-boundary-after buffer marker)
+						      (when session
+							(codex-ide--ensure-active-input-prompt-spacing session)))))))))
+
 (defun codex-ide--ensure-output-spacing (buffer)
   "Ensure BUFFER is ready for a new rendered output block."
   (when (buffer-live-p buffer)
@@ -2515,30 +2546,52 @@ Return non-nil when a command output block was found."
            items)))
    :test #'equal))
 
-(defun codex-ide--render-web-search-details (session item &optional fallback-item force-query-lines)
-  "Render transcript detail lines for web search ITEM in SESSION.
+(defun codex-ide--web-search-detail-lines
+    (item &optional fallback-item force-query-lines)
+  "Return detail lines for web search ITEM.
 FALLBACK-ITEM provides fields missing from ITEM.  When FORCE-QUERY-LINES is
-non-nil, render query detail lines even when only a single query is present."
-  (let* ((buffer (codex-ide-session-buffer session))
-         (action-type (or (codex-ide--web-search-action-value 'type item)
+non-nil, include query detail lines even when only a single query is present."
+  (let* ((action-type (or (codex-ide--web-search-action-value 'type item)
                           (codex-ide--web-search-action-value 'type fallback-item)))
          (pattern (or (codex-ide--web-search-action-value 'pattern item)
                       (codex-ide--web-search-action-value 'pattern fallback-item)))
          (queries (codex-ide--web-search-queries item fallback-item)))
     (cond
      ((and (equal action-type "findInPage") pattern)
-      (codex-ide--append-agent-text
-       buffer
-       (codex-ide--item-detail-line (format "pattern: %s" pattern))
-       'codex-ide-item-detail-face))
+      (list (format "pattern: %s" pattern)))
      ((and queries
            (or force-query-lines
                (> (length queries) 1)))
-      (dolist (query queries)
-        (codex-ide--append-agent-text
-         buffer
-         (codex-ide--item-detail-line query)
-         'codex-ide-item-detail-face))))))
+      queries))))
+
+(defun codex-ide--render-web-search-details
+    (session item &optional fallback-item force-query-lines insertion-marker skip-lines)
+  "Render transcript detail lines for web search ITEM in SESSION.
+FALLBACK-ITEM provides fields missing from ITEM.  When FORCE-QUERY-LINES is
+non-nil, render query detail lines even when only a single query is present.
+When INSERTION-MARKER is non-nil, insert details there instead of appending.
+SKIP-LINES is a list of already rendered detail line strings.
+Return the rendered detail line strings."
+  (let* ((buffer (codex-ide-session-buffer session))
+         (lines (seq-remove
+                 (lambda (line)
+                   (member line skip-lines))
+                 (codex-ide--web-search-detail-lines
+                  item fallback-item force-query-lines))))
+    (when lines
+      (let ((text (mapconcat #'codex-ide--item-detail-line lines "")))
+        (if (and (markerp insertion-marker)
+                 (eq (marker-buffer insertion-marker) buffer))
+            (codex-ide--insert-agent-text-at-marker
+             buffer
+             insertion-marker
+             text
+             'codex-ide-item-detail-face)
+          (codex-ide--append-agent-text
+           buffer
+           text
+           'codex-ide-item-detail-face))))
+    lines))
 
 (defun codex-ide--append-shell-command-detail (buffer command)
   "Append COMMAND as an indented, shell-highlighted detail line to BUFFER."
@@ -2856,54 +2909,65 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
          buffer
          (format "* %s\n" summary)
          'codex-ide-item-summary-face)
-        (codex-ide--render-item-start-details session item)
-        (let ((state existing-state))
-          (setq state (plist-put state :type item-type))
-          (setq state (plist-put state :item item))
-          (setq state (plist-put state :summary summary))
-          (setq state
-                (plist-put
-                 state
-                 :search-request
-                 (and (equal item-type "commandExecution")
-                      (codex-ide--rg-search-request
-                       (codex-ide--display-command-argv
-                        (alist-get 'command item))))))
-          (setq state (plist-put state :details-rendered t))
-          (when (member item-type '("commandExecution" "mcpToolCall" "fileChange"))
-            ;; Keep delayed item result output anchored directly after the item
-            ;; block; later transcript inserts should not move this placeholder
-            ;; forward.
+        (let ((rendered-detail-lines
+               (codex-ide--render-item-start-details session item)))
+          (let ((state existing-state))
+            (setq state (plist-put state :type item-type))
+            (setq state (plist-put state :item item))
+            (setq state (plist-put state :summary summary))
+            (when rendered-detail-lines
+              (setq state
+                    (plist-put state
+                               :rendered-detail-lines
+                               rendered-detail-lines)))
+            (setq state
+                  (plist-put
+                   state
+                   :search-request
+                   (and (equal item-type "commandExecution")
+                        (codex-ide--rg-search-request
+                         (codex-ide--display-command-argv
+                          (alist-get 'command item))))))
+            (setq state (plist-put state :details-rendered t))
+            (when (member item-type
+                          '("commandExecution" "mcpToolCall" "fileChange"
+                            "webSearch"))
+              ;; Keep delayed per-item output anchored directly after the item
+              ;; block; later transcript inserts should not move this placeholder
+              ;; forward.
+              (setq state
+                    (plist-put state
+                               :item-result-anchor-marker
+                               (with-current-buffer buffer
+                                 (copy-marker
+                                  (codex-ide--transcript-insertion-position
+                                   buffer))))))
             (setq state
                   (plist-put state
-                             :item-result-anchor-marker
-                             (with-current-buffer buffer
-                               (copy-marker
-                                (codex-ide--transcript-insertion-position
-                                 buffer))))))
-          (setq state
-                (plist-put state
-                           :item-result-label
-                           (pcase item-type
-                             ("mcpToolCall" "result")
-                             ("fileChange" "diff")
-                             (_ "output"))))
-          (when (equal item-type "commandExecution")
-            (setq state
-                  (plist-put state
-                             :command-output-anchor-marker
-                             (plist-get state :item-result-anchor-marker))))
-          (setq state (plist-put state :saw-output nil))
-          (codex-ide--put-item-state session item-id state))
-        (when-let ((pending-output
-                    (plist-get (codex-ide--item-state session item-id)
-                               :pending-output-text)))
-          (codex-ide--render-command-output-delta session item-id pending-output)
-          (codex-ide--put-item-state
-           session
-           item-id
-           (plist-put (codex-ide--item-state session item-id)
-                      :pending-output-text nil))))
+                             :item-result-label
+                             (pcase item-type
+                               ("mcpToolCall" "result")
+                               ("fileChange" "diff")
+                               (_ "output"))))
+            (when (equal item-type "commandExecution")
+              (setq state
+                    (plist-put state
+                               :command-output-anchor-marker
+                               (plist-get state :item-result-anchor-marker))))
+            (setq state (plist-put state :saw-output nil))
+            (codex-ide--put-item-state session item-id state))
+          (when-let ((pending-output
+                      (plist-get (codex-ide--item-state session item-id)
+                                 :pending-output-text)))
+            (codex-ide--render-command-output-delta
+             session
+             item-id
+             pending-output)
+            (codex-ide--put-item-state
+             session
+             item-id
+             (plist-put (codex-ide--item-state session item-id)
+                        :pending-output-text nil)))))
       (when (and (not summary)
                  (equal item-type "reasoning"))
         (unless (codex-ide-session-output-prefix-inserted session)
@@ -3094,11 +3158,24 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
             (codex-ide--item-detail-line "tool call failed")
             'error)))
         ("webSearch"
-         (codex-ide--render-web-search-details
-          session
-          item
-          (plist-get state :item)
-          t))
+         (let* ((state (or state '()))
+                (rendered-lines
+                 (codex-ide--render-web-search-details
+                  session
+                  item
+                  (plist-get state :item)
+                  t
+                  (plist-get state :item-result-anchor-marker)
+                  (plist-get state :rendered-detail-lines))))
+           (when rendered-lines
+             (codex-ide--put-item-state
+              session
+              item-id
+              (plist-put
+               state
+               :rendered-detail-lines
+               (append (plist-get state :rendered-detail-lines)
+                       rendered-lines))))))
         ("fileChange"
          (let ((diff-text (codex-ide--file-change-diff-text item))
                (streamed-diff (plist-get state :diff-text))
