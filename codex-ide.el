@@ -4,7 +4,7 @@
 
 ;; Author: Duncan Gillis
 ;; URL: https://github.com/dgillis/emacs-codex-ide
-;; Version: 0.2.4
+;; Version: 0.2.5
 ;; Package-Requires: ((emacs "28.1") (transient "0.9.0"))
 ;; Keywords: codex, ai, agent, tools
 
