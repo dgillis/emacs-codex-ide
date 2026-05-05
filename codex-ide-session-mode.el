@@ -330,7 +330,21 @@ so users can navigate within those controls without opting out of follow mode."
 
 ;;;###autoload
 (define-derived-mode codex-ide-session-mode text-mode "Codex-IDE"
-  "Major mode for Codex app-server session buffers."
+  "Major mode for Codex app-server session buffers.
+
+* \\<codex-ide-session-mode-map>\\[codex-ide-submit] submits the active prompt.
+
+* \\[codex-ide-interrupt] interrupts the current turn.
+
+* \\[codex-ide-previous-prompt-line] and \\[codex-ide-next-prompt-line] move between prompt lines.
+
+* \\[codex-ide-session-mode-nav-forward] and \\[codex-ide-session-mode-nav-backward] move between transcript focal points, including
+  buttons, submitted prompts, and the active prompt.
+
+When point is in the active prompt, `codex-ide-session-prompt-minor-mode'
+adds these bindings:
+
+* \\<codex-ide-session-prompt-minor-mode-map>\\[codex-ide-previous-prompt-history] and \\[codex-ide-next-prompt-history] move through prompt history."
   (codex-ide--disable-session-font-lock)
   (setq-local truncate-lines nil)
   (when codex-ide-session-enable-visual-line-mode

@@ -21,6 +21,15 @@
       (mapc #'walk index))
     (nreverse labels)))
 
+(ert-deftest codex-ide-session-mode-docstring-lists-key-bindings ()
+  (let ((doc (documentation #'codex-ide-session-mode t)))
+    (dolist (binding '("* \\<codex-ide-session-mode-map>\\[codex-ide-submit]"
+                       "* \\[codex-ide-interrupt]"
+                       "* \\[codex-ide-previous-prompt-line]"
+                       "* \\[codex-ide-session-mode-nav-forward]"
+                       "* \\<codex-ide-session-prompt-minor-mode-map>\\[codex-ide-previous-prompt-history]"))
+      (should (string-match-p (regexp-quote binding) doc)))))
+
 (ert-deftest codex-ide-session-mode-imenu-indexes-user-prompts ()
   (with-temp-buffer
     (codex-ide-session-mode)

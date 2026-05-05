@@ -910,8 +910,21 @@ BODY may refer to the lexical variable `session'."
 (ert-deftest codex-ide-renderer-inserts-session-header ()
   (with-temp-buffer
     (let ((range (codex-ide-renderer-insert-session-header "/tmp/project")))
-      (should (equal (buffer-string) "Codex session for /tmp/project\n\n"))
+      (should (equal (substring-no-properties (buffer-string))
+                     (concat
+                      "*** Welcome to Codex-IDE ***\n"
+                      "Project: /tmp/project\n"
+                      (substitute-command-keys "Press \\[describe-mode] for help.")
+                      "\n\n")))
       (should (= (car range) (point-min)))
+      (should (eq (get-text-property (point-min) 'face) 'bold))
+      (goto-char (point-min))
+      (search-forward "C-h m")
+      (let ((key-face (get-text-property (match-beginning 0) 'face)))
+        (should (memq 'help-key-binding key-face))
+        (should (memq 'font-lock-comment-face key-face))
+        (should (eq (get-text-property (match-beginning 0) 'font-lock-face)
+                    'help-key-binding)))
       (should (get-text-property (point-min) 'read-only)))))
 
 (ert-deftest codex-ide-renderer-inserts-approval-resolution ()

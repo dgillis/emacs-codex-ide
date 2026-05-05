@@ -206,9 +206,7 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
             (append (car (overlay-lists))
                     (cdr (overlay-lists))))
       (erase-buffer)
-      (insert (format "Codex session for %s\n\n"
-                      (abbreviate-file-name working-dir)))
-      (codex-ide-renderer-freeze-region (point-min) (point-max)))))
+      (codex-ide-renderer-insert-session-header working-dir))))
 
 (cl-defun codex-ide--create-process-session-internal
     (&key reuse-buffer reuse-name-suffix query-only)

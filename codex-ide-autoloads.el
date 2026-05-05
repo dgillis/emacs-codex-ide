@@ -453,6 +453,20 @@ Move point to the previous focal point in a Codex session buffer." t)
 (autoload 'codex-ide-session-mode "codex-ide-session-mode" "\
 Major mode for Codex app-server session buffers.
 
+* \\<codex-ide-session-mode-map>\\[codex-ide-submit] submits the active prompt.
+
+* \\[codex-ide-interrupt] interrupts the current turn.
+
+* \\[codex-ide-previous-prompt-line] and \\[codex-ide-next-prompt-line] move between prompt lines.
+
+* \\[codex-ide-session-mode-nav-forward] and \\[codex-ide-session-mode-nav-backward] move between transcript focal points, including
+  buttons, submitted prompts, and the active prompt.
+
+When point is in the active prompt, `codex-ide-session-prompt-minor-mode'
+adds these bindings:
+
+* \\<codex-ide-session-prompt-minor-mode-map>\\[codex-ide-previous-prompt-history] and \\[codex-ide-next-prompt-history] move through prompt history.
+
 (fn)" t)
 (register-definition-prefixes "codex-ide-session-mode" '("codex-ide-"))
 

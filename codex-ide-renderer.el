@@ -717,11 +717,26 @@ Return a plist containing `:delete-start', `:boundary', and `:end' markers."
           :boundary boundary
           :end end)))
 
+(defun codex-ide-renderer--append-face (text face)
+  "Return TEXT with FACE appended to existing face properties."
+  (setq text (copy-sequence text))
+  (add-face-text-property 0 (length text) face 'append text)
+  text)
+
 (defun codex-ide-renderer-insert-session-header (working-dir)
   "Insert the initial session header for WORKING-DIR and return (START . END)."
   (codex-ide-renderer-insert-read-only
-   (format "Codex session for %s\n\n"
-           (abbreviate-file-name working-dir))))
+   (concat
+    (propertize "*** Welcome to Codex-IDE ***" 'face 'bold)
+    "\n"
+    (codex-ide-renderer--append-face
+     (format "Project: %s" (abbreviate-file-name working-dir))
+     'font-lock-comment-face)
+    "\n"
+    (codex-ide-renderer--append-face
+     (substitute-command-keys "Press \\[describe-mode] for help.")
+     'font-lock-comment-face)
+    "\n\n")))
 
 (defun codex-ide-renderer-output-separator-string ()
   "Return the separator rule used between transcript sections."

@@ -124,7 +124,10 @@
 				    (with-current-buffer (codex-ide-session-buffer session)
 				      (should (derived-mode-p 'codex-ide-session-mode))
 				      (should visual-line-mode)
-				      (should (string-match-p "Codex session for" (buffer-string))))
+				      (should (string-match-p "\\`\\*\\*\\* Welcome to Codex-IDE \\*\\*\\*"
+							      (buffer-string)))
+				      (should (string-match-p "^Project: " (buffer-string)))
+				      (should (string-match-p "^Press .* for help\\." (buffer-string))))
 				    (with-current-buffer (codex-ide-test--log-buffer session)
 				      (should (derived-mode-p 'codex-ide-log-mode))
 				      (should (equal (buffer-name)
