@@ -68,6 +68,7 @@
 (defvar codex-ide-renderer-command-output-max-rendered-chars)
 (defvar codex-ide-diff-inline-fold-threshold)
 (defvar codex-ide-diff-auto-display-policy)
+(defvar codex-ide-diff-inline-body-map)
 (defvar codex-ide-reasoning-effort)
 (defvar codex-ide-resume-summary-turn-limit)
 (defvar codex-ide-running-submit-action)
@@ -2309,6 +2310,8 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
 									 (plist-get state :item-result-toggle-button-help))
 							    (overlay-put overlay :buffer-name
 									 (plist-get state :item-result-buffer-name))
+							    (overlay-put overlay :directory
+									 (plist-get state :item-result-directory))
 							    (overlay-put overlay :diff-stats
 									 (plist-get state :item-result-stats))
 							    (overlay-put overlay :header-start header-start)
@@ -2716,19 +2719,25 @@ Return the rendered detail line strings."
     (save-current-buffer
       (codex-ide-diff-open-buffer
        diff-text
-       (codex-ide-diff-buffer-name-for-session session-buffer)))))
+       (codex-ide-diff-buffer-name-for-session session-buffer)
+       (and (buffer-live-p session-buffer)
+            (with-current-buffer session-buffer
+              (when-let ((session (codex-ide--session-for-buffer session-buffer)))
+                (codex-ide-session-directory session))))))))
 
 (cl-defun codex-ide--insert-file-change-diff-body
     (display-text &key keymap overlay overlay-property properties)
   "Insert DISPLAY-TEXT as a styled file-change diff body."
+  (ignore keymap)
   (let ((start (point)))
     (dolist (line (split-string display-text "\n"))
       (codex-ide-renderer-insert-read-only
        (concat line "\n")
        (codex-ide--file-change-diff-face line)
        (append
-        (list 'keymap keymap
-              'help-echo "RET toggles this diff"
+        (list 'keymap codex-ide-diff-inline-body-map
+              'help-echo "RET jumps to source"
+              'codex-ide-diff-overlay overlay
               overlay-property overlay)
         properties)))
     (codex-ide-renderer-add-result-rail-overlays
@@ -2739,7 +2748,8 @@ Return the rendered detail line strings."
   "Open the dedicated diff buffer for file-change OVERLAY."
   (codex-ide-diff-open-buffer
    (codex-ide--item-result-text overlay)
-   (overlay-get overlay :buffer-name)))
+   (overlay-get overlay :buffer-name)
+   (overlay-get overlay :directory)))
 
 (defun codex-ide--render-file-change-diff-text
     (session item-id text &optional context)
@@ -2772,6 +2782,8 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
                                  "Toggle this diff"))
           (setq state (plist-put state :item-result-buffer-name
                                  (codex-ide-diff-buffer-name-for-session buffer)))
+          (setq state (plist-put state :item-result-directory
+                                 (codex-ide-session-directory session)))
           (setq state (plist-put state :item-result-stats stats))
           (unless (and (markerp anchor)
                        (eq (marker-buffer anchor) buffer))
@@ -2786,6 +2798,8 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
             (overlay-put overlay :diff-stats stats)
             (overlay-put overlay :buffer-name
                          (codex-ide-diff-buffer-name-for-session buffer))
+            (overlay-put overlay :directory
+                         (codex-ide-session-directory session))
             (overlay-put overlay :item-result-fallback-text trimmed)
             (overlay-put overlay :display-text trimmed)
             (overlay-put overlay :line-count (plist-get stats :line-count))

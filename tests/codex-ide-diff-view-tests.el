@@ -42,6 +42,52 @@
       (when (buffer-live-p diff-buffer)
         (kill-buffer diff-buffer)))))
 
+(ert-deftest codex-ide-diff-open-buffer-binds-return-to-source-jump ()
+  (let ((display-call nil)
+        diff-buffer)
+    (unwind-protect
+        (cl-letf (((symbol-function 'codex-ide-display-buffer)
+                   (lambda (buffer &optional action)
+                     (setq display-call (list buffer action))
+                     nil)))
+          (setq diff-buffer
+                (codex-ide-diff-open-buffer
+                 "diff --git a/foo.txt b/foo.txt\n@@ -1 +1 @@\n-old\n+new"
+                 nil
+                 default-directory))
+          (should (equal (car display-call) diff-buffer))
+          (with-current-buffer diff-buffer
+            (should (eq (key-binding (kbd "RET"))
+                        #'codex-ide-diff-goto-source-at-point))
+            (should (eq (key-binding (kbd "<return>"))
+                        #'codex-ide-diff-goto-source-at-point))
+            (should (equal (expand-file-name default-directory)
+                           (file-name-as-directory
+                            (expand-file-name default-directory))))))
+      (when (buffer-live-p diff-buffer)
+        (kill-buffer diff-buffer)))))
+
+(ert-deftest codex-ide-diff-source-location-tracks-hunk-new-lines ()
+  (let ((diff-text
+         (string-join
+          '("diff --git a/foo.txt b/bar.txt"
+            "--- a/foo.txt"
+            "+++ b/bar.txt"
+            "@@ -1,3 +10,4 @@"
+            " context"
+            "-old"
+            "+new"
+            " after")
+          "\n")))
+    (should (equal (codex-ide-diff--source-location-for-line diff-text 4)
+                   '(:path "bar.txt" :line 10)))
+    (should (equal (codex-ide-diff--source-location-for-line diff-text 5)
+                   '(:path "bar.txt" :line 11)))
+    (should (equal (codex-ide-diff--source-location-for-line diff-text 6)
+                   '(:path "bar.txt" :line 11)))
+    (should (equal (codex-ide-diff--source-location-for-line diff-text 7)
+                   '(:path "bar.txt" :line 12)))))
+
 (ert-deftest codex-ide-diff-open-buffer-reuses-explicit-buffer-name ()
   (let ((display-calls nil)
         (buffer-name "*codex[my-project]*-diff")
@@ -89,7 +135,7 @@
                      (should-not turn-id)
                      "diff --git a/foo.txt b/foo.txt\n@@ -1 +1 @@\n-old\n+new"))
                   ((symbol-function 'codex-ide-diff-open-buffer)
-                   (lambda (diff-text buffer-name)
+                   (lambda (diff-text buffer-name &optional _directory)
                      (setq opened (list diff-text buffer-name))
                      nil)))
           (codex-ide-diff-open-combined-turn-buffer)
@@ -120,7 +166,7 @@
                            (should (equal turn-id "turn-2"))
                            "diff --git a/foo.txt b/foo.txt\n@@ -1 +1 @@\n-old\n+new"))
                         ((symbol-function 'codex-ide-diff-open-buffer)
-                         (lambda (diff-text buffer-name)
+                         (lambda (diff-text buffer-name &optional _directory)
                            (setq opened (list diff-text buffer-name))
                            nil)))
                 (call-interactively #'codex-ide-diff-open-combined-turn-buffer)

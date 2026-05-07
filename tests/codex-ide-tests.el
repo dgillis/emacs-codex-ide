@@ -1707,6 +1707,40 @@
                        '(left-fringe codex-ide-result-rail
                                      codex-ide-result-rail-face)))))))
 
+(ert-deftest codex-ide-file-change-diff-body-ret-jumps-to-source ()
+  (with-temp-buffer
+    (let* ((diff-text
+            (string-join
+             '("diff --git a/foo b/foo"
+               "--- a/foo"
+               "+++ b/foo"
+               "@@ -1 +1 @@"
+               "-old"
+               "+new")
+             "\n"))
+           (overlay (make-overlay (point-min) (point-min)))
+           (body-start (copy-marker (point-min)))
+           captured)
+      (overlay-put overlay :display-text diff-text)
+      (overlay-put overlay :body-start body-start)
+      (overlay-put overlay :directory default-directory)
+      (codex-ide--insert-file-change-diff-body
+       diff-text
+       :overlay overlay
+       :overlay-property codex-ide-item-result-overlay-property)
+      (move-overlay overlay (point-min) (point-max))
+      (goto-char (point-min))
+      (search-forward "+new")
+      (should (eq (key-binding (kbd "RET"))
+                  #'codex-ide-diff-goto-source-at-point))
+      (cl-letf (((symbol-function 'codex-ide-diff-goto-source)
+                 (lambda (resolved-diff line-index directory)
+                   (setq captured
+                         (list resolved-diff line-index directory)))))
+        (call-interactively (key-binding (kbd "RET"))))
+      (should (equal captured
+                     (list diff-text 5 default-directory))))))
+
 (ert-deftest codex-ide-user-prompt-face-extends-line-background ()
   (should (eq (face-attribute 'codex-ide-user-prompt-face :extend nil t)
               t)))
@@ -4243,7 +4277,7 @@
 					      ((symbol-function 'codex-ide-display-buffer)
 					       (lambda (_buffer &optional _action) (selected-window)))
 					      ((symbol-function 'codex-ide-diff-open-buffer)
-					       (lambda (text &optional buffer-name)
+					       (lambda (text &optional buffer-name _directory)
 						 (setq opened-diff text)
 						 (setq opened-diff-buffer-name buffer-name)
 						 nil))
@@ -4558,7 +4592,7 @@
 				    (setf (codex-ide-session-current-turn-id session) "turn-file-change"
 					  (codex-ide-session-status session) "running")
 				    (cl-letf (((symbol-function 'codex-ide-diff-open-buffer)
-					       (lambda (text &optional buffer-name)
+					       (lambda (text &optional buffer-name _directory)
 						 (setq opened-diff text)
 						 (setq opened-diff-buffer-name buffer-name)
 						 nil))
@@ -4611,7 +4645,7 @@
 				    (setf (codex-ide-session-current-turn-id session) "turn-file-change"
 					  (codex-ide-session-status session) "running")
 				    (cl-letf (((symbol-function 'codex-ide-diff-open-buffer)
-					       (lambda (text &optional buffer-name)
+					       (lambda (text &optional buffer-name _directory)
 						 (setq opened-diff text)
 						 (setq opened-diff-buffer-name buffer-name)
 						 nil))
@@ -4674,7 +4708,7 @@
 					      ((symbol-function 'codex-ide-display-buffer)
 					       (lambda (_buffer &optional _action) (selected-window)))
 					      ((symbol-function 'codex-ide-diff-open-buffer)
-					       (lambda (text &optional buffer-name)
+					       (lambda (text &optional buffer-name _directory)
 						 (setq opened-diff text)
 						 (setq opened-diff-buffer-name buffer-name)
 						 nil))
@@ -4794,7 +4828,7 @@
 					       (lambda (&rest _)
 						 (ert-fail "hidden approval buffer should not be displayed")))
 					      ((symbol-function 'codex-ide-diff-open-buffer)
-					       (lambda (text &optional buffer-name)
+					       (lambda (text &optional buffer-name _directory)
 						 (setq opened-diff text)
 						 (setq opened-diff-buffer-name buffer-name)
 						 nil))
@@ -4853,7 +4887,7 @@
 					      ((symbol-function 'codex-ide-display-buffer)
 					       (lambda (_buffer &optional _action) (selected-window)))
 					      ((symbol-function 'codex-ide-diff-open-buffer)
-					       (lambda (text &optional buffer-name)
+					       (lambda (text &optional buffer-name _directory)
 						 (setq opened-diff text)
 						 (setq opened-diff-buffer-name buffer-name)
 						 nil))
