@@ -1851,9 +1851,10 @@
             (should (overlay-get overlay 'invisible))
             (should (string-match-p
                      "one\ntwo\nthree\nfour\nfive\n"
-                     (or (overlay-get overlay :output-fallback-text) ""))))
+                     (codex-ide--command-output-state-full-text state))))
           (should (string-match-p "four\nfive"
-                                  (plist-get state :output-text))))
+                                  (plist-get state :output-tail-text)))
+          (should-not (plist-get state :output-text)))
         (codex-ide--render-item-completion
          session
          '((id . "call-1")
@@ -1930,12 +1931,13 @@
                       (delta . "three\nfour\n")))))
         (let* ((state (codex-ide--item-state session "call-1"))
                (overlay (plist-get state :command-output-overlay)))
-          (should (equal (overlay-get overlay :output-fallback-text)
+          (should-not (plist-get state :output-text))
+          (should (equal (codex-ide--command-output-state-full-text state)
                          "one\ntwo\nthree\nfour\n"))
           (codex-ide--put-item-state
            session
            "call-1"
-           (plist-put state :output-text nil))
+           (plist-put state :output-tail-text nil))
           (codex-ide--open-command-output-overlay overlay))
         (should (string-match-p
                  "\\*codex-output\\[.*:call-1\\]\\*"
@@ -1944,6 +1946,50 @@
         (should (string-match-p
                  "\\$ printf lots\n\none\ntwo\nthree\nfour\n"
                  (buffer-string)))))))
+
+(ert-deftest codex-ide-command-output-streaming-keeps-incremental-tail-state ()
+  (let ((codex-ide-renderer-command-output-max-rendered-lines 3)
+        (codex-ide-renderer-command-output-max-rendered-chars nil))
+    (with-temp-buffer
+      (codex-ide-session-mode)
+      (let ((session (make-codex-ide-session
+                      :directory default-directory
+                      :buffer (current-buffer)
+                      :status "idle"
+                      :item-states (make-hash-table :test 'equal))))
+        (setq-local codex-ide--session session)
+        (codex-ide--insert-input-prompt session "submitted prompt")
+        (codex-ide--begin-turn-display session)
+        (codex-ide--render-item-start
+         session
+         '((id . "call-1")
+           (type . "commandExecution")
+           (command . ["sh" "-c" "printf lots"])))
+        (dotimes (index 50)
+          (codex-ide--handle-notification
+           session
+           `((method . "item/commandExecution/outputDelta")
+             (params . ((itemId . "call-1")
+                        (delta . ,(format "line-%02d\n" index)))))))
+        (let* ((state (codex-ide--item-state session "call-1"))
+               (overlay (plist-get state :command-output-overlay)))
+          (should (overlayp overlay))
+          (should-not (plist-get state :output-text))
+          (should (= (length (plist-get state :output-chunks)) 50))
+          (should (equal (plist-get state :output-tail-text)
+                         "line-47\nline-48\nline-49\n"))
+          (should (= (plist-get state :output-line-count) 50))
+          (should (= (plist-get state :output-visible-line-count) 3))
+          (should (plist-get state :output-truncated))
+          (should (string-match-p
+                   "output: 50 lines, showing last 3, streaming \\[expand\\] \\[full output\\]"
+                   (buffer-string)))
+          (should (string-prefix-p
+                   "line-00\nline-01\n"
+                   (codex-ide--command-output-state-full-text state)))
+          (should (string-suffix-p
+                   "line-48\nline-49\n"
+                   (codex-ide--command-output-state-full-text state))))))))
 
 (ert-deftest codex-ide-command-output-can-start-folded-while-streaming ()
   (let ((codex-ide-renderer-command-output-fold-on-start t))

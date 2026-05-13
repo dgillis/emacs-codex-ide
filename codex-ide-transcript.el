@@ -1931,6 +1931,94 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
        (mapconcat (lambda (line) (concat "    " line)) lines "\n")
        (if ends-with-newline "\n" "")))))
 
+(defun codex-ide--command-output-state-full-text (state)
+  "Return the full command output text retained in STATE."
+  (or (plist-get state :output-text)
+      (when-let* ((chunks (plist-get state :output-chunks)))
+        (mapconcat #'identity (nreverse (copy-sequence chunks)) ""))))
+
+(defun codex-ide--command-output-state-line-count (state)
+  "Return the cached full command output display line count in STATE."
+  (let ((char-count (or (plist-get state :output-char-count) 0)))
+    (cond
+     ((= char-count 0) 0)
+     ((not (plist-get state :output-seen-non-whitespace)) 1)
+     (t
+      (1+ (- (or (plist-get state :output-newline-count) 0)
+             (or (plist-get state
+                            :output-trailing-whitespace-newline-count)
+                 0)))))))
+
+(defun codex-ide--command-output-state-update-counters (state delta)
+  "Return STATE with command output counters updated for DELTA."
+  (let ((index 0)
+        (length (length delta))
+        (newline-count (or (plist-get state :output-newline-count) 0))
+        (trailing-newline-count
+         (or (plist-get state :output-trailing-whitespace-newline-count) 0))
+        (seen-non-whitespace (plist-get state :output-seen-non-whitespace)))
+    (while (< index length)
+      (let ((char (aref delta index)))
+        (if (memq char '(?\s ?\t ?\n ?\r ?\f ?\v))
+            (when (= char ?\n)
+              (setq newline-count (1+ newline-count)
+                    trailing-newline-count (1+ trailing-newline-count)))
+          (setq seen-non-whitespace t
+                trailing-newline-count 0)))
+      (setq index (1+ index)))
+    (setq state (plist-put state :output-newline-count newline-count))
+    (setq state
+          (plist-put state
+                     :output-trailing-whitespace-newline-count
+                     trailing-newline-count))
+    (plist-put state :output-seen-non-whitespace seen-non-whitespace)))
+
+(defun codex-ide--command-output-trim-tail (text)
+  "Return the capped transcript tail for command output TEXT."
+  (let* ((range (codex-ide--command-output-render-range text)))
+    (substring text (car range) (cdr range))))
+
+(defun codex-ide--command-output-state-append-delta (state delta)
+  "Return STATE updated with streamed command output DELTA.
+The full output is retained as chunks, while display metadata is maintained
+incrementally for transcript rendering."
+  (when (plist-get state :output-text)
+    (let ((existing-output (plist-get state :output-text)))
+      (setq state (plist-put state :output-text nil))
+      (setq state (plist-put state :output-chunks nil))
+      (setq state (plist-put state :output-char-count nil))
+      (setq state (plist-put state :output-newline-count nil))
+      (setq state
+            (plist-put state :output-trailing-whitespace-newline-count nil))
+      (setq state (plist-put state :output-seen-non-whitespace nil))
+      (setq state (plist-put state :output-tail-text nil))
+      (setq state (plist-put state :output-line-count nil))
+      (setq state (plist-put state :output-visible-line-count nil))
+      (setq state (plist-put state :output-truncated nil))
+      (setq state
+            (codex-ide--command-output-state-append-delta
+             state
+             existing-output))))
+  (let* ((tail (concat (or (plist-get state :output-tail-text) "") delta))
+         (tail (codex-ide--command-output-trim-tail tail))
+         (char-count (+ (or (plist-get state :output-char-count) 0)
+                        (length delta))))
+    (setq state (plist-put state :output-chunks
+                           (cons delta (plist-get state :output-chunks))))
+    (setq state (plist-put state :output-char-count char-count))
+    (setq state (codex-ide--command-output-state-update-counters state delta))
+    (setq state (plist-put state :output-tail-text tail))
+    (let* ((line-count (codex-ide--command-output-state-line-count state))
+           (visible-line-count (codex-ide--command-output-line-count tail))
+           (truncated (or (< (length tail) char-count)
+                          (< visible-line-count line-count))))
+      (setq state (plist-put state :output-line-count line-count))
+      (setq state (plist-put state :output-visible-line-count
+                             (if truncated
+                                 (min visible-line-count line-count)
+                               line-count)))
+      (plist-put state :output-truncated truncated))))
+
 (defun codex-ide--json-encode-string-or-nil (value)
   "Return VALUE JSON-encoded when possible, or nil on encoding failure."
   (when value
@@ -1992,9 +2080,12 @@ Return (PATTERN PATHS), or nil when ARGV does not describe a search."
   "Return the full result text for item result OVERLAY."
   (let* ((session (overlay-get overlay :session))
          (item-id (overlay-get overlay :item-id))
+         (item-type (overlay-get overlay :item-type))
          (state (and session item-id
                      (codex-ide--item-state session item-id))))
     (or (plist-get state :item-result-text)
+        (and (equal item-type "commandExecution")
+             (codex-ide--command-output-state-full-text state))
         (plist-get state :output-text)
         (overlay-get overlay :item-result-fallback-text)
         (overlay-get overlay :output-fallback-text)
@@ -2436,9 +2527,65 @@ When OVERLAY is folded, remove the body text from the transcript buffer."
          (or (overlay-get overlay :display-text) ""))
         (codex-ide--ensure-active-input-prompt-spacing session)))))
 
+(defun codex-ide--render-command-output-state (session item-id)
+  "Render command output state for ITEM-ID in SESSION."
+  (when-let* ((overlay (codex-ide--ensure-command-output-block session item-id)))
+    (let* ((state (codex-ide--item-state session item-id))
+           (tail (or (plist-get state :output-tail-text)
+                     (let* ((full-text
+                             (or (codex-ide--command-output-state-full-text state)
+                                 ""))
+                            (visible-range
+                             (codex-ide--command-output-render-range full-text)))
+                       (substring full-text
+                                  (car visible-range)
+                                  (cdr visible-range)))))
+           (line-count (or (plist-get state :output-line-count)
+                           (codex-ide--command-output-line-count
+                            (or (codex-ide--command-output-state-full-text state)
+                                ""))))
+           (visible-line-count
+            (or (plist-get state :output-visible-line-count)
+                (codex-ide--command-output-line-count tail)))
+           (truncated
+            (if (plist-member state :output-truncated)
+                (plist-get state :output-truncated)
+              (< visible-line-count line-count)))
+           (display-text
+            (or (codex-ide--format-command-output-text tail truncated)
+                (and truncated
+                     (codex-ide--command-output-truncation-notice))
+                "")))
+      (overlay-put overlay :line-count line-count)
+      (overlay-put overlay :visible-line-count
+                   (if truncated
+                       (min visible-line-count line-count)
+                     line-count))
+      (overlay-put overlay :truncated truncated)
+      (when (not (equal display-text
+                        (overlay-get overlay :display-text)))
+        (overlay-put overlay :display-text display-text)
+        (overlay-put overlay
+                     :body-properties
+                     (codex-ide--current-agent-text-properties)))
+      (codex-ide--set-command-output-header overlay)
+      (codex-ide--set-command-output-body
+       overlay
+       (or (overlay-get overlay :display-text) ""))
+      (codex-ide--ensure-active-input-prompt-spacing session))))
+
+(defun codex-ide--store-command-output-delta (session item-id delta)
+  "Store streamed command output DELTA for ITEM-ID in SESSION."
+  (let* ((state (or (codex-ide--item-state session item-id) '()))
+         (state (codex-ide--command-output-state-append-delta state delta)))
+    (codex-ide--put-item-state session item-id state)
+    state))
+
 (defun codex-ide--append-command-output-text (session item-id text)
   "Append command output TEXT for ITEM-ID in SESSION."
-  (codex-ide--append-item-result-text session item-id text))
+  (when (and (stringp text) (not (string-empty-p text)))
+    (codex-ide--store-command-output-delta session item-id text)
+    (codex-ide--render-command-output-state session item-id)))
 
 (defun codex-ide--render-command-output-delta (session item-id delta)
   "Render streamed command output DELTA for ITEM-ID in SESSION."
@@ -2970,18 +3117,14 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
                                (plist-get state :item-result-anchor-marker))))
             (setq state (plist-put state :saw-output nil))
             (codex-ide--put-item-state session item-id state))
-          (when-let* ((pending-output
-                      (plist-get (codex-ide--item-state session item-id)
-                                 :pending-output-text)))
-            (codex-ide--render-command-output-delta
-             session
-             item-id
-             pending-output)
+          (when (plist-get (codex-ide--item-state session item-id)
+                           :pending-output-p)
+            (codex-ide--render-command-output-state session item-id)
             (codex-ide--put-item-state
              session
              item-id
              (plist-put (codex-ide--item-state session item-id)
-                        :pending-output-text nil)))))
+                        :pending-output-p nil)))))
       (when (and (not summary)
                  (equal item-type "reasoning"))
         (unless (codex-ide-session-output-prefix-inserted session)
@@ -3112,7 +3255,7 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
          (codex-ide--render-current-agent-message-markdown session item-id t))
         ("commandExecution"
          (let* ((search-request (plist-get state :search-request))
-                (output-text (or (plist-get state :output-text)
+                (output-text (or (codex-ide--command-output-state-full-text state)
                                  (alist-get 'aggregatedOutput item)))
                 (exit-code (alist-get 'exitCode item)))
            (codex-ide--complete-command-output-block session item-id output-text)
@@ -4390,25 +4533,20 @@ Signal an error when THREAD-READ lacks replayable transcript items."
             item-id
             (length delta)))
          (unless (string-empty-p delta)
-           (let* ((state (or (codex-ide--item-state session item-id) '()))
-                  (state (plist-put
-                          state
-                          :output-text
-                          (concat (or (plist-get state :output-text) "")
-                                  delta))))
+           (let ((state (codex-ide--store-command-output-delta
+                         session
+                         item-id
+                         delta)))
              (if (or (plist-get state :summary)
                      (plist-get state :command-output-overlay))
-                 (progn
-                   (codex-ide--put-item-state session item-id state)
-                   (codex-ide--render-command-output-delta session item-id delta))
+                 (codex-ide--render-command-output-state session item-id)
                (codex-ide--put-item-state
                 session
                 item-id
                 (plist-put
                  state
-                 :pending-output-text
-                 (concat (or (plist-get state :pending-output-text) "")
-                         delta))))))))
+                 :pending-output-p
+                 t)))))))
       ("item/fileChange/outputDelta"
        (let ((item-id (alist-get 'itemId params))
              (delta (or (alist-get 'delta params) "")))
