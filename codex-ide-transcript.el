@@ -2722,7 +2722,7 @@ Return the rendered detail line strings."
        (codex-ide-diff-buffer-name-for-session session-buffer)
        (and (buffer-live-p session-buffer)
             (with-current-buffer session-buffer
-              (when-let ((session (codex-ide--session-for-buffer session-buffer)))
+              (when-let* ((session (codex-ide--session-for-buffer session-buffer)))
                 (codex-ide-session-directory session))))))))
 
 (cl-defun codex-ide--insert-file-change-diff-body

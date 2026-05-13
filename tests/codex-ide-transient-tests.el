@@ -12,6 +12,50 @@
 (require 'codex-ide-test-fixtures)
 (require 'codex-ide-transient)
 
+(defun codex-ide-test--transient-suffix-prop (suffix prop)
+  "Return PROP from SUFFIX across transient's serialized forms."
+  (cond
+   ((and (consp suffix) (eq (car suffix) 'transient-suffix))
+    (plist-get (cdr suffix) prop))
+   ((and (consp suffix) (listp (nth 2 suffix)))
+    (plist-get (nth 2 suffix) prop))))
+
+(defun codex-ide-test--transient-layout-node-p (value)
+  "Return non-nil when VALUE is a transient layout node."
+  (codex-ide-test--transient-node-type value))
+
+(defun codex-ide-test--transient-node-type (value)
+  "Return VALUE's transient layout node type, if any."
+  (seq-some (lambda (part)
+              (when (memq part '(transient-columns transient-column transient-suffix))
+                part))
+            (cond
+             ((vectorp value) (append value nil))
+             ((consp value) value))))
+
+(defun codex-ide-test--plist-p (value)
+  "Return non-nil when VALUE looks like a plist."
+  (and (listp value) (keywordp (car-safe value))))
+
+(defun codex-ide-test--transient-node-props (node)
+  "Return NODE's property list across transient layout shapes."
+  (seq-find #'codex-ide-test--plist-p
+            (if (vectorp node) (append node nil) node)))
+
+(defun codex-ide-test--transient-node-children (node)
+  "Return NODE's child layout nodes across transient layout shapes."
+  (seq-find (lambda (value)
+              (and (listp value)
+                   (seq-some #'codex-ide-test--transient-layout-node-p value)))
+            (if (vectorp node) (append node nil) node)))
+
+(defun codex-ide-test--transient-layout-root (symbol)
+  "Return SYMBOL's root transient layout node."
+  (let ((layout (plist-get (symbol-plist symbol) 'transient--layout)))
+    (if (vectorp layout)
+        layout
+      (car layout))))
+
 (ert-deftest codex-ide-menu-exposes-navigation-and-view-suffixes ()
   (should (transient-get-suffix 'codex-ide-menu "b"))
   (should (transient-get-suffix 'codex-ide-menu "p"))
@@ -38,18 +82,24 @@
   (should (transient-get-suffix 'codex-ide-config-menu "S")))
 
 (ert-deftest codex-ide-config-menu-groups-codex-ide-settings-under-one-column ()
-  (let* ((layout (plist-get (symbol-plist 'codex-ide-config-menu) 'transient--layout))
-         (columns (aref (car layout) 3))
+  (let* ((root (codex-ide-test--transient-layout-root 'codex-ide-config-menu))
+         (columns-group (if (eq (codex-ide-test--transient-node-type root)
+                                'transient-columns)
+                            root
+                          (car (codex-ide-test--transient-node-children root))))
+         (columns (codex-ide-test--transient-node-children columns-group))
          (descriptions (mapcar (lambda (column)
-                                 (plist-get (aref column 2) :description))
+                                 (plist-get (codex-ide-test--transient-node-props column)
+                                            :description))
                                columns))
          (codex-ide-column (seq-find (lambda (column)
-                                       (equal (plist-get (aref column 2) :description)
+                                       (equal (plist-get (codex-ide-test--transient-node-props column)
+                                                         :description)
                                               "Codex-IDE"))
                                      columns))
          (keys (mapcar (lambda (suffix)
-                         (plist-get (nth 2 suffix) :key))
-                       (aref codex-ide-column 3))))
+                         (codex-ide-test--transient-suffix-prop suffix :key))
+                       (codex-ide-test--transient-node-children codex-ide-column))))
     (should (equal descriptions '("Agent" "Codex-IDE" "Save")))
     (should (equal keys '("c" "x" "e" "A" "u" "w")))))
 
@@ -71,21 +121,28 @@
       (should-not (oref obj transient)))))
 
 (ert-deftest codex-ide-config-menu-save-suffix-exits-after-applying ()
-  (should-not (plist-get (nth 2 (transient-get-suffix 'codex-ide-config-menu "S"))
-                         :transient)))
+  (should-not (codex-ide-test--transient-suffix-prop
+               (transient-get-suffix 'codex-ide-config-menu "S")
+               :transient)))
 
 (ert-deftest codex-ide-menu-session-suffixes-use-current-commands ()
-  (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "s")) :command)
+  (should (eq (codex-ide-test--transient-suffix-prop (transient-get-suffix 'codex-ide-menu "s")
+                                                     :command)
               #'codex-ide))
-  (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "c")) :command)
+  (should (eq (codex-ide-test--transient-suffix-prop (transient-get-suffix 'codex-ide-menu "c")
+                                                     :command)
               #'codex-ide-continue))
-  (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "r")) :command)
+  (should (eq (codex-ide-test--transient-suffix-prop (transient-get-suffix 'codex-ide-menu "r")
+                                                     :command)
               #'codex-ide-reset-current-session))
-  (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "p")) :command)
+  (should (eq (codex-ide-test--transient-suffix-prop (transient-get-suffix 'codex-ide-menu "p")
+                                                     :command)
               #'codex-ide-prompt))
-  (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "S")) :command)
+  (should (eq (codex-ide-test--transient-suffix-prop (transient-get-suffix 'codex-ide-menu "S")
+                                                     :command)
               #'codex-ide-steer))
-  (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-menu "Q")) :command)
+  (should (eq (codex-ide-test--transient-suffix-prop (transient-get-suffix 'codex-ide-menu "Q")
+                                                     :command)
               #'codex-ide-queue)))
 
 (ert-deftest codex-ide-save-config-persists-reasoning-effort ()
@@ -180,7 +237,9 @@
     (should-not applied)))
 
 (ert-deftest codex-ide-debug-menu-exposes-show-debug-info ()
-  (should (eq (plist-get (nth 2 (transient-get-suffix 'codex-ide-debug-menu "i")) :command)
+  (should (eq (codex-ide-test--transient-suffix-prop
+               (transient-get-suffix 'codex-ide-debug-menu "i")
+               :command)
               #'codex-ide-show-debug-info)))
 
 (provide 'codex-ide-transient-tests)

@@ -70,3 +70,6 @@ Unless instructed otherwise, adhere to the practices below.
 
 - Remove any `.elc` files generated during testing/validation.
 - Never commit code unless the user explicitly asks for a commit.
+
+### Agent behavior
+- If it's unclear whether a prompt is requesting action/changes or just asking question(s), avoid making changes until explitictly requested.

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$ROOT_DIR/tests"
+RUN_TESTS_EMACS_EXECUTABLE="${RUN_TESTS_EMACS_EXECUTABLE:-emacs}"
 SELECTED_TEST_FILES=()
 
 ARGS=(
@@ -18,6 +19,10 @@ usage() {
 Usage: $(basename "$0") [--test-file FILE]...
 
 Run codex-ide ERT tests.
+
+Environment:
+  RUN_TESTS_EMACS_EXECUTABLE
+                    Emacs executable to use. Defaults to "emacs".
 
 Options:
   --test-file FILE  Load only the named test file. May be repeated.
@@ -85,4 +90,5 @@ else
   done
 fi
 
-exec emacs "${ARGS[@]}" -f ert-run-tests-batch-and-exit
+echo "Running tests with Emacs executable: $RUN_TESTS_EMACS_EXECUTABLE"
+exec "$RUN_TESTS_EMACS_EXECUTABLE" "${ARGS[@]}" -f ert-run-tests-batch-and-exit
