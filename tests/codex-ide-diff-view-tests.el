@@ -665,6 +665,33 @@
       (when (buffer-live-p session-buffer)
         (kill-buffer session-buffer)))))
 
+(ert-deftest codex-ide-session-diff-open-kills-diff-with-session-buffer ()
+  (let* ((session-buffer (generate-new-buffer "*codex[test-session-diff-kill]*"))
+         (session (make-instance 'codex-ide-session
+                                 :buffer session-buffer
+                                 :directory default-directory))
+         diff-buffer)
+    (unwind-protect
+        (progn
+          (with-current-buffer session-buffer
+            (setq-local codex-ide--session session))
+          (cl-letf (((symbol-function 'codex-ide--session-for-current-project)
+                     (lambda () session))
+                    ((symbol-function 'codex-ide-display-buffer)
+                     (lambda (_buffer &optional _action) nil))
+                    ((symbol-function 'codex-ide-diff-data-combined-turn-diff-text)
+                     (lambda (_resolved-session &optional _turn-id)
+                       "diff --git a/foo.txt b/foo.txt\n@@ -1 +1 @@\n-old\n+new")))
+            (setq diff-buffer (codex-ide-session-diff-open)))
+          (should (buffer-live-p diff-buffer))
+          (let ((kill-buffer-query-functions nil))
+            (kill-buffer session-buffer))
+          (should-not (buffer-live-p diff-buffer)))
+      (when (buffer-live-p diff-buffer)
+        (kill-buffer diff-buffer))
+      (when (buffer-live-p session-buffer)
+        (kill-buffer session-buffer)))))
+
 (ert-deftest codex-ide-session-diff-note-session-updated-refreshes-live-buffer ()
   (let* ((session-buffer (generate-new-buffer "*codex[test-live-refresh]*"))
          (session (make-instance 'codex-ide-session

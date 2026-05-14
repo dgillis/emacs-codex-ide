@@ -867,6 +867,28 @@ Return the created buffer."
     (get-buffer (codex-ide-session-diff-buffer-name-for-session
                  session-buffer))))
 
+(defun codex-ide-session-diff--kill-for-session-buffer ()
+  "Kill the canonical diff buffer associated with the current session buffer."
+  (when (and (boundp 'codex-ide--session)
+             (codex-ide-session-p codex-ide--session))
+    (let ((session codex-ide--session))
+      (when-let* ((diff-buffer
+                   (codex-ide-session-diff--buffer-for-session session)))
+        (when (buffer-live-p diff-buffer)
+          (with-current-buffer diff-buffer
+            (when (eq codex-ide-session-diff--session session)
+              (kill-buffer diff-buffer))))))))
+
+(defun codex-ide-session-diff--install-session-kill-hook (session)
+  "Arrange for SESSION's canonical diff buffer to die with its session buffer."
+  (when-let* ((session-buffer (and session (codex-ide-session-buffer session))))
+    (when (buffer-live-p session-buffer)
+      (with-current-buffer session-buffer
+        (add-hook 'kill-buffer-hook
+                  #'codex-ide-session-diff--kill-for-session-buffer
+                  nil
+                  t)))))
+
 ;;;###autoload
 (defun codex-ide-session-diff-open (&optional session)
   "Open or reuse the canonical session diff buffer for SESSION."
@@ -885,6 +907,7 @@ Return the created buffer."
         (setq-local codex-ide-session-diff-source
                     (or codex-ide-session-diff-source 'live))
         (codex-ide-session-diff-refresh buffer))
+      (codex-ide-session-diff--install-session-kill-hook session)
       (codex-ide-display-buffer
        buffer
        codex-ide--display-buffer-other-window-pop-up-action)
