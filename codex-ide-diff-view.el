@@ -80,6 +80,16 @@ The value is one of `live', `transcript', or `pinned'.")
 (defvar-local codex-ide-session-diff--header-line nil
   "Rendered header line for the current session diff buffer.")
 
+(defface codex-ide-diff-added-snippet-face
+  '((t :inherit codex-ide-file-diff-added-face :extend nil))
+  "Face used for inline added snippets that must not extend to line end."
+  :group 'codex-ide)
+
+(defface codex-ide-diff-removed-snippet-face
+  '((t :inherit codex-ide-file-diff-removed-face :extend nil))
+  "Face used for inline removed snippets that must not extend to line end."
+  :group 'codex-ide)
+
 (defvar codex-ide-session-diff-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map codex-ide-diff-mode-map)
@@ -207,6 +217,8 @@ Return a cons of the parsed file plist and the next line index."
         hunks
         path
         old-path
+        old-null
+        new-null
         (git-block (string-prefix-p "diff --git " (nth start lines))))
     (while (and (< index line-count)
                 (not (and (> index start)
@@ -222,9 +234,17 @@ Return a cons of the parsed file plist and the next line index."
           (setq path (or (codex-ide-diff--path-from-diff-git-line line)
                          path)))
          ((string-prefix-p "--- " line)
+          (setq old-null
+                (or old-null
+                    (string-match-p (rx line-start "---" (+ space) "/dev/null")
+                                    line)))
           (setq old-path (or (codex-ide-diff--path-from-header-line line)
                              old-path)))
          ((string-prefix-p "+++ " line)
+          (setq new-null
+                (or new-null
+                    (string-match-p (rx line-start "+++" (+ space) "/dev/null")
+                                    line)))
           (setq path (or (codex-ide-diff--path-from-header-line line)
                          path))))
         (setq index (1+ index))))
@@ -253,6 +273,8 @@ Return a cons of the parsed file plist and the next line index."
           (setq index (1+ index)))))
     (cons (list :path (or path old-path "changes")
                 :old-path old-path
+                :old-null old-null
+                :new-null new-null
                 :header-lines (nreverse header-lines)
                 :hunks (nreverse hunks))
           index)))
@@ -294,10 +316,38 @@ Return a cons of the parsed file plist and the next line index."
      (eq (codex-ide-section-type section) 'file))
    codex-ide-section--root-sections))
 
-(defun codex-ide-diff--file-stats (file)
+(defun codex-ide-diff--body-only-file-line-count (file)
+  "Return visible body line count for body-only FILE."
+  (let ((count 0))
+    (dolist (indexed-line (plist-get file :header-lines))
+      (unless (codex-ide-diff--ordinary-file-header-line-p
+               (cdr indexed-line))
+        (setq count (1+ count))))
+    count))
+
+(defun codex-ide-diff--body-only-file-side (file &optional directory)
+  "Return the side represented by body-only FILE, either `added' or `removed'."
+  (when (null (plist-get file :hunks))
+    (cond
+     ((plist-get file :old-null) 'added)
+     ((plist-get file :new-null) 'removed)
+     ((let ((path (plist-get file :path)))
+        (and (stringp path)
+             (not (string-empty-p path))
+             (file-exists-p
+              (expand-file-name path (or directory default-directory)))))
+      'added)
+     (t 'removed))))
+
+(defun codex-ide-diff--file-stats (file &optional directory)
   "Return a plist summarizing additions and deletions in parsed FILE."
   (let ((added 0)
         (removed 0))
+    (pcase (codex-ide-diff--body-only-file-side file directory)
+      ('added
+       (setq added (codex-ide-diff--body-only-file-line-count file)))
+      ('removed
+       (setq removed (codex-ide-diff--body-only-file-line-count file))))
     (dolist (hunk (plist-get file :hunks))
       (dolist (indexed-line (plist-get hunk :lines))
         (let ((line (cdr indexed-line)))
@@ -391,15 +441,17 @@ properties to apply to the heading."
                     changed))
     (when added-part
       (insert (propertize (substring bar added-part (or removed-part))
-                          'face 'codex-ide-file-diff-added-face)))
+                          'face 'codex-ide-diff-added-snippet-face)))
     (when removed-part
       (insert (propertize (substring bar removed-part)
-                          'face 'codex-ide-file-diff-removed-face)))
+                          'face 'codex-ide-diff-removed-snippet-face)))
     (insert "\n")))
 
-(defun codex-ide-diff--render-summary (files)
+(defun codex-ide-diff--render-summary (files &optional directory)
   "Render a collapsed summary section for parsed FILES."
-  (let* ((stats (mapcar #'codex-ide-diff--file-stats files))
+  (let* ((stats (mapcar (lambda (file)
+                          (codex-ide-diff--file-stats file directory))
+                        files))
          (path-width (cl-loop for stat in stats
                               maximize (length (plist-get stat :path))))
          (max-changed (cl-loop for stat in stats
@@ -546,13 +598,14 @@ diff line has no corresponding source location."
   "Return the zero-based line index at point in the current buffer."
   (1- (line-number-at-pos)))
 
-(defun codex-ide-diff--insert-line (indexed-line)
-  "Insert INDEXED-LINE with diff styling and source-jump metadata."
+(defun codex-ide-diff--insert-line (indexed-line &optional face)
+  "Insert INDEXED-LINE with diff styling and source-jump metadata.
+When FACE is non-nil, use it instead of deriving a face from the line text."
   (let ((index (car indexed-line))
         (line (cdr indexed-line)))
     (insert (propertize
              line
-             'face (codex-ide-diff--line-face line)
+             'face (or face (codex-ide-diff--line-face line))
              'keymap codex-ide-diff-inline-body-map
              'help-echo "RET jumps to source"
              'codex-ide-diff-line-index index))
@@ -565,11 +618,11 @@ diff line has no corresponding source location."
       (string-prefix-p "+++ " line)
       (string-prefix-p "index " line)))
 
-(defun codex-ide-diff--file-heading (file)
+(defun codex-ide-diff--file-heading (file &optional directory)
   "Return a section heading for parsed diff FILE."
   (let* ((path (plist-get file :path))
          (old-path (plist-get file :old-path))
-         (stats (codex-ide-diff--file-stats file))
+         (stats (codex-ide-diff--file-stats file directory))
          (added (or (plist-get stats :added) 0))
          (removed (or (plist-get stats :removed) 0)))
     (concat
@@ -579,23 +632,30 @@ diff line has no corresponding source location."
      (codex-ide-diff--file-stat-segment
       added
       "+"
-      'codex-ide-file-diff-added-face)
+      'codex-ide-diff-added-snippet-face)
      (codex-ide-diff--file-stat-segment
       removed
       "-"
-      'codex-ide-file-diff-removed-face))))
+      'codex-ide-diff-removed-snippet-face))))
 
-(defun codex-ide-diff--render-file (file)
+(defun codex-ide-diff--render-file (file &optional directory)
   "Render parsed diff FILE as a section."
   (codex-ide-section-insert
    'file
    file
    (codex-ide-diff--section-heading
-    (codex-ide-diff--file-heading file))
+    (codex-ide-diff--file-heading file directory))
    (lambda (_section)
-     (dolist (line (plist-get file :header-lines))
-       (unless (codex-ide-diff--ordinary-file-header-line-p (cdr line))
-         (codex-ide-diff--insert-line line)))
+     (let ((body-only-side
+            (codex-ide-diff--body-only-file-side file directory)))
+       (dolist (line (plist-get file :header-lines))
+         (unless (codex-ide-diff--ordinary-file-header-line-p (cdr line))
+           (codex-ide-diff--insert-line
+            line
+            (pcase body-only-side
+              ('added 'codex-ide-file-diff-added-face)
+              ('removed 'codex-ide-file-diff-removed-face)
+              (_ nil))))))
      (dolist (hunk (plist-get file :hunks))
        (let ((header (plist-get hunk :header)))
          (codex-ide-section-insert
@@ -685,7 +745,7 @@ When FACE is non-nil, combine it with `codex-ide-header-line-face'."
                         (list face 'codex-ide-header-line-face)
                       'codex-ide-header-line-face)))
 
-(defun codex-ide-session-diff--header-diffstat (display-text)
+(defun codex-ide-session-diff--header-diffstat (display-text &optional directory)
   "Return a propertized diffstat segment for DISPLAY-TEXT."
   (let* ((files (and (stringp display-text)
                      (codex-ide-diff--group-files-by-path
@@ -693,7 +753,9 @@ When FACE is non-nil, combine it with `codex-ide-header-line-face'."
          (file-count (length files)))
     (if (zerop file-count)
         (codex-ide-session-diff--header-segment "no changes")
-      (let* ((stats (mapcar #'codex-ide-diff--file-stats files))
+      (let* ((stats (mapcar (lambda (file)
+                              (codex-ide-diff--file-stats file directory))
+                            files))
              (added (cl-loop for stat in stats
                              sum (or (plist-get stat :added) 0)))
              (removed (cl-loop for stat in stats
@@ -737,7 +799,7 @@ When FACE is non-nil, combine it with `codex-ide-header-line-face'."
     (_ nil)))
 
 (defun codex-ide-session-diff--format-header-line
-    (session source turn-id display-text)
+    (session source turn-id display-text &optional directory)
   "Return the session diff header line for SESSION SOURCE TURN-ID DISPLAY-TEXT."
   (let ((segments
          (delq nil
@@ -752,7 +814,9 @@ When FACE is non-nil, combine it with `codex-ide-header-line-face'."
                   (codex-ide-session-diff--header-segment detail))
                 (and (eq source 'transcript)
                      (codex-ide-session-diff--header-segment "follows point"))
-                (codex-ide-session-diff--header-diffstat display-text)))))
+                (codex-ide-session-diff--header-diffstat
+                 display-text
+                 directory)))))
     (concat
      (codex-ide-session-diff--header-segment " ")
      (mapconcat #'identity
@@ -771,10 +835,10 @@ When FACE is non-nil, combine it with `codex-ide-header-line-face'."
       (erase-buffer)
       (if files
           (progn
-            (codex-ide-diff--render-summary files)
+            (codex-ide-diff--render-summary files directory)
             (insert "\n")
             (dolist (file files)
-              (codex-ide-diff--render-file file)))
+              (codex-ide-diff--render-file file directory)))
         (insert (if (codex-ide-session-diff--empty-message-p display-text)
                     (propertize (string-trim-right display-text)
                                 'face 'font-lock-comment-face)
@@ -930,10 +994,11 @@ Return the created buffer."
           (codex-ide-diff-data-display-text diff-text directory)))
     (setq-local codex-ide-session-diff--header-line
                 (codex-ide-session-diff--format-header-line
-                 session
-                 source
-                 turn-id
-                 display-text))
+                session
+                source
+                turn-id
+                display-text
+                directory))
     (let ((inhibit-read-only t))
       (when directory
         (setq-local default-directory (file-name-as-directory directory)))

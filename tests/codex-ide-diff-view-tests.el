@@ -399,16 +399,92 @@
       (should-not (string-match-p
                    (regexp-quote "add-only.txt +1 -")
                    add-heading))
-      (should (memq 'codex-ide-file-diff-added-face
+      (should (memq 'codex-ide-diff-added-snippet-face
                     (get-text-property
                      (string-match-p (regexp-quote "+2") foo-heading)
                      'face
                      foo-heading)))
-      (should (memq 'codex-ide-file-diff-removed-face
+      (should (memq 'codex-ide-diff-removed-snippet-face
                     (get-text-property
                      (string-match-p (regexp-quote "-1") foo-heading)
                      'face
                      foo-heading))))))
+
+(ert-deftest codex-ide-diff-render-body-only-new-file-lines-as-added ()
+  (let* ((root (file-name-as-directory
+                (make-temp-file "codex-ide-diff-view-" t)))
+         (file-path (expand-file-name "foo.txt" root)))
+    (unwind-protect
+        (progn
+          (with-temp-file file-path
+            (insert "first\nsecond\n"))
+          (with-temp-buffer
+            (let ((diff-text
+                   (string-join
+                    '("diff --git a/foo.txt b/foo.txt"
+                      "--- a/foo.txt"
+                      "+++ b/foo.txt"
+                      "first"
+                      "second")
+                    "\n")))
+              (codex-ide-diff-mode)
+              (codex-ide-diff--render-text diff-text diff-text root))
+            (let* ((file (car (codex-ide-diff--file-sections)))
+                   (heading
+                    (buffer-substring
+                     (codex-ide-section-heading-start file)
+                     (codex-ide-section-heading-end file))))
+              (let ((stat-index
+                     (string-match-p (regexp-quote "+2")
+                                     (substring-no-properties heading))))
+                (should stat-index)
+                (should (memq 'codex-ide-diff-added-snippet-face
+                              (get-text-property stat-index 'face heading))))
+              (goto-char (point-min))
+              (search-forward "first")
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'codex-ide-file-diff-added-face))
+              (search-forward "second")
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'codex-ide-file-diff-added-face)))))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
+(ert-deftest codex-ide-diff-render-body-only-deleted-file-lines-as-removed ()
+  (let ((root (file-name-as-directory
+               (make-temp-file "codex-ide-diff-view-" t))))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((diff-text
+                 (string-join
+                  '("diff --git a/foo.txt b/foo.txt"
+                    "--- a/foo.txt"
+                    "+++ b/foo.txt"
+                    "first"
+                    "second")
+                  "\n")))
+            (codex-ide-diff-mode)
+            (codex-ide-diff--render-text diff-text diff-text root))
+          (let* ((file (car (codex-ide-diff--file-sections)))
+                 (heading
+                  (buffer-substring
+                   (codex-ide-section-heading-start file)
+                   (codex-ide-section-heading-end file))))
+            (let ((stat-index
+                   (string-match-p (regexp-quote "-2")
+                                   (substring-no-properties heading))))
+              (should stat-index)
+              (should (memq 'codex-ide-diff-removed-snippet-face
+                            (get-text-property stat-index 'face heading))))
+            (goto-char (point-min))
+            (search-forward "first")
+            (should (eq (get-text-property (match-beginning 0) 'face)
+                        'codex-ide-file-diff-removed-face))
+            (search-forward "second")
+            (should (eq (get-text-property (match-beginning 0) 'face)
+                        'codex-ide-file-diff-removed-face))))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
 
 (ert-deftest codex-ide-diff-render-summary-groups-repeated-file-stats ()
   (with-temp-buffer
