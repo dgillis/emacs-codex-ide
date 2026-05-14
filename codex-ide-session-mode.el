@@ -24,6 +24,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'codex-ide-approvals-data)
 (require 'codex-ide-core)
 (require 'codex-ide-diff-data)
 (require 'codex-ide-nav)
@@ -255,19 +256,15 @@ When non-nil, positions at or after the returned buffer location are treated as
 part of the live interactive request zone and should preserve existing tail
 follow state."
   (setq session (or session (and (boundp 'codex-ide--session) codex-ide--session)))
-  (let ((approvals (and session
-                        (codex-ide--session-metadata-get session :pending-approvals)))
-        start)
-    (when (hash-table-p approvals)
-      (maphash
-       (lambda (_id approval)
-         (let ((marker (plist-get approval :start-marker)))
-           (when (and (markerp marker)
-                      (eq (marker-buffer marker) (current-buffer)))
-             (setq start (if start
-                             (min start (marker-position marker))
-                           (marker-position marker))))))
-       approvals))
+  (let (start)
+    (dolist (approval (and session
+                           (codex-ide-approvals-data-pending-list session)))
+      (let ((marker (codex-ide-approvals-data-view-get approval :start-marker)))
+        (when (and (markerp marker)
+                   (eq (marker-buffer marker) (current-buffer)))
+          (setq start (if start
+                          (min start (marker-position marker))
+                        (marker-position marker))))))
     start))
 
 (defun codex-ide-session-mode--tail-follow-preserve-p (&optional session pos)

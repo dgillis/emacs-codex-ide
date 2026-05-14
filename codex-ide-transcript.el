@@ -40,6 +40,7 @@
 (require 'json)
 (require 'seq)
 (require 'subr-x)
+(require 'codex-ide-approvals-data)
 (require 'codex-ide-context)
 (require 'codex-ide-core)
 (require 'codex-ide-protocol)
@@ -3720,19 +3721,21 @@ Signal an error when THREAD-READ lacks replayable transcript items."
   (cdr (assoc (completing-read prompt choices nil t) choices)))
 
 (defun codex-ide--pending-approvals (&optional session)
-  "Return the pending approval table for SESSION."
+  "Return a pending-only approval table snapshot for SESSION.
+
+This compatibility helper preserves the old pending-oriented read semantics.
+Mutating the returned table does not update the canonical approval store."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
-  (or (codex-ide--session-metadata-get session :pending-approvals)
-      (codex-ide--session-metadata-put
-       session
-       :pending-approvals
-       (make-hash-table :test 'equal))))
+  (let ((pending (make-hash-table :test 'equal)))
+    (dolist (approval (codex-ide-approvals-data-pending-list session))
+      (puthash (plist-get approval :id)
+               (append approval (codex-ide-approvals-data-view approval))
+               pending))
+    pending))
 
 (defun codex-ide--pending-approvals-p (session)
   "Return non-nil when SESSION has unresolved approvals."
-  (let ((approvals (codex-ide--session-metadata-get session :pending-approvals)))
-    (and (hash-table-p approvals)
-         (> (hash-table-count approvals) 0))))
+  (codex-ide-approvals-data-pending-p session))
 
 (defun codex-ide--status-preserving-pending-approvals (session status)
   "Return STATUS unless SESSION still needs approval attention."
@@ -3760,12 +3763,30 @@ Signal an error when THREAD-READ lacks replayable transcript items."
     (_
      `((decision . ,value)))))
 
+(defun codex-ide--approval-resolution-status (kind value)
+  "Return normalized approval lifecycle status for KIND resolved as VALUE."
+  (pcase kind
+    ('elicitation
+     (pcase (alist-get 'action value)
+       ("accept" 'accepted)
+       ("decline" 'declined)
+       ("cancel" 'canceled)
+       (_ 'resolved)))
+    ('permissions
+     (if (eq value 'decline) 'declined 'accepted))
+    (_
+     (cond
+      ((equal value "decline") 'declined)
+      ((equal value "cancel") 'canceled)
+      (t 'accepted)))))
+
 (defun codex-ide--mark-approval-resolved (approval label)
   "Update APPROVAL's transcript block to show resolved LABEL."
-  (let ((buffer (marker-buffer (plist-get approval :status-marker)))
-        (status-marker (plist-get approval :status-marker))
-        (start-marker (plist-get approval :start-marker))
-        (end-marker (plist-get approval :end-marker)))
+  (let* ((view (codex-ide-approvals-data-view approval))
+         (buffer (marker-buffer (plist-get view :status-marker)))
+         (status-marker (plist-get view :status-marker))
+         (start-marker (plist-get view :start-marker))
+         (end-marker (plist-get view :end-marker)))
     (when (and (buffer-live-p buffer)
                (markerp status-marker)
                (markerp start-marker)
@@ -3793,32 +3814,40 @@ Signal an error when THREAD-READ lacks replayable transcript items."
 
 (defun codex-ide--resolve-buffer-approval (session id value label)
   "Resolve pending approval ID for SESSION as VALUE with display LABEL."
-  (let* ((approvals (codex-ide--pending-approvals session))
-         (approval (gethash id approvals)))
+  (let* ((approval (codex-ide-approvals-data-get session id))
+         (pending-p (eq (plist-get approval :status) 'pending)))
     (if (not approval)
-        (message "Codex approval already resolved")
-      (remhash id approvals)
-      (codex-ide-log-message
-       session
-       "%s approval resolved as %s"
-       (capitalize (symbol-name (plist-get approval :kind)))
-       (codex-ide--approval-display-value value))
-      (codex-ide--mark-approval-resolved approval label)
-      (codex-ide--set-session-status
-       session
-       (codex-ide--status-preserving-pending-approvals
-        session
-        (if (codex-ide-session-current-turn-id session) "running" "idle"))
-       'approval-resolved)
-      (codex-ide--refresh-input-placeholder session)
-      (codex-ide--update-header-line session)
-      (codex-ide--jsonrpc-send-response
-       session
-       id
-       (codex-ide--approval-result
-        (plist-get approval :kind)
-        value
-        (plist-get approval :params))))))
+        (message "Codex approval unknown")
+      (if (not pending-p)
+          (message "Codex approval already resolved")
+        (let* ((kind (plist-get approval :kind))
+               (result (codex-ide--approval-result
+                        kind
+                        value
+                        (plist-get approval :params)))
+               (status (codex-ide--approval-resolution-status kind value)))
+          (codex-ide-log-message
+           session
+           "%s approval resolved as %s"
+           (capitalize (symbol-name kind))
+           (codex-ide--approval-display-value value))
+          (codex-ide--mark-approval-resolved approval label)
+          (codex-ide-approvals-data-resolve
+           session
+           id
+           status
+           :decision value
+           :result result
+           :clear-view t)
+          (codex-ide--set-session-status
+           session
+           (codex-ide--status-preserving-pending-approvals
+            session
+            (if (codex-ide-session-current-turn-id session) "running" "idle"))
+           'approval-resolved)
+          (codex-ide--refresh-input-placeholder session)
+          (codex-ide--update-header-line session)
+          (codex-ide--jsonrpc-send-response session id result))))))
 
 (defun codex-ide--insert-approval-choice-button (session id label value)
   "Insert an approval button for SESSION request ID with LABEL and VALUE."
@@ -3912,16 +3941,18 @@ Signal an error when THREAD-READ lacks replayable transcript items."
             (codex-ide--restore-input-point-marker restore-point)
           (when moving
             (goto-char (point-max))))))
-    (puthash id
-             (append
-              (list :kind kind
-                    :params params
-                    :start-marker start-marker
-                    :status-marker status-marker
-                    :end-marker end-marker)
-              metadata
-              (plist-get render-state :metadata))
-             (codex-ide--pending-approvals session))
+    (codex-ide-approvals-data-add
+     session
+     id
+     kind
+     params
+     :turn-id (codex-ide-session-current-turn-id session)
+     :view (append
+            (list :start-marker start-marker
+                  :status-marker status-marker
+                  :end-marker end-marker)
+            (plist-get render-state :metadata))
+     :metadata metadata)
     (codex-ide--set-session-status session "approval" 'approval-requested)
     (codex-ide--refresh-input-placeholder session)
     (codex-ide--update-header-line session)
@@ -4046,10 +4077,10 @@ Signal an error when THREAD-READ lacks replayable transcript items."
 
 (defun codex-ide--submit-buffer-elicitation (session id)
   "Validate and submit elicitation response for SESSION request ID."
-  (let* ((approval (gethash id (codex-ide--pending-approvals session)))
-         (fields (plist-get approval :fields))
+  (let* ((approval (codex-ide-approvals-data-get session id))
+         (fields (codex-ide-approvals-data-view-get approval :fields))
          (content nil))
-    (unless approval
+    (unless (and approval (eq (plist-get approval :status) 'pending))
       (user-error "Codex elicitation already resolved"))
     (condition-case err
         (progn
