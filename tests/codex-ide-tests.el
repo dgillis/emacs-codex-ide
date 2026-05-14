@@ -3659,7 +3659,7 @@
 					(should
 					 (equal
 					  (format-mode-line header-line-format)
-					  "Focus: focused-source-buffer | Model: gpt-5.4 | Quota: 15%/5h 3%/wk (prolite) | Context: 305.5k/258.4k | Last[in,cache,out,reason]: 42.8k,26.1k,244,68"))))))))
+					  " Focus: focused-source-buffer | Model: gpt-5.4 | Quota: 15%/5h 3%/wk (prolite) | Context: 305.5k/258.4k | Last[in,cache,out,reason]: 42.8k,26.1k,244,68"))))))))
 
   (ert-deftest codex-ide-header-line-shows-model-name ()
     (let ((project-dir (codex-ide-test--make-temp-project)))

@@ -19,6 +19,7 @@
 (require 'cl-lib)
 (require 'codex-ide-diff-data)
 (require 'codex-ide-section)
+(require 'codex-ide-utils)
 (require 'subr-x)
 
 (declare-function codex-ide-display-buffer "codex-ide-window"
@@ -76,6 +77,9 @@ The value is one of `live', `transcript', or `pinned'.")
 (defvar-local codex-ide-session-diff--turn-id nil
   "Turn id selected by the current session diff buffer, when any.")
 
+(defvar-local codex-ide-session-diff--header-line nil
+  "Rendered header line for the current session diff buffer.")
+
 (defvar codex-ide-session-diff-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map codex-ide-diff-mode-map)
@@ -97,6 +101,8 @@ The value is one of `live', `transcript', or `pinned'.")
 * \\[codex-ide-session-diff-pin-current-turn] pins the diff buffer to the turn at point in the session transcript.
 
 * \\[codex-ide-session-diff-refresh] refreshes the current diff source."
+  (setq-local header-line-format
+              '((:eval codex-ide-session-diff--header-line)))
   (setq-local mode-line-process
               '("[" (:eval (symbol-name codex-ide-session-diff-source)) "]")))
 
@@ -666,7 +672,91 @@ in the captured state are folded after the rerender."
 (defun codex-ide-session-diff--empty-message-p (text)
   "Return non-nil when TEXT is a session diff empty-state message."
   (and (stringp text)
-       (string-prefix-p "# Codex session diff: " text)))
+       (string-match-p (rx line-start "# " (+ nonl) "\n"
+                           "# Press ")
+                       text)))
+
+(defun codex-ide-session-diff--header-segment (text &optional face)
+  "Return TEXT propertized for a session diff header segment.
+When FACE is non-nil, combine it with `codex-ide-header-line-face'."
+  (propertize text
+              'face (if face
+                        (list face 'codex-ide-header-line-face)
+                      'codex-ide-header-line-face)))
+
+(defun codex-ide-session-diff--header-diffstat (display-text)
+  "Return a propertized diffstat segment for DISPLAY-TEXT."
+  (let* ((files (and (stringp display-text)
+                     (codex-ide-diff--group-files-by-path
+                      (codex-ide-diff--parse-files display-text))))
+         (file-count (length files)))
+    (if (zerop file-count)
+        (codex-ide-session-diff--header-segment "no changes")
+      (let* ((stats (mapcar #'codex-ide-diff--file-stats files))
+             (added (cl-loop for stat in stats
+                             sum (or (plist-get stat :added) 0)))
+             (removed (cl-loop for stat in stats
+                               sum (or (plist-get stat :removed) 0))))
+        (concat
+         (codex-ide-session-diff--header-segment
+          (format "%d %s "
+                  file-count
+                  (codex-ide-diff--plural file-count "file" "files")))
+         (codex-ide-session-diff--header-segment
+          (format "+%d" added)
+          'codex-ide-file-diff-added-face)
+         (codex-ide-session-diff--header-segment " ")
+         (codex-ide-session-diff--header-segment
+          (format "-%d" removed)
+          'codex-ide-file-diff-removed-face))))))
+
+(defun codex-ide-session-diff--source-label (source)
+  "Return a user-facing label for session diff SOURCE."
+  (pcase source
+    ('live "Live diff")
+    ('pinned "Pinned diff")
+    ('transcript "Turn-at-point diff")
+    (_ (capitalize (format "%s" source)))))
+
+(defun codex-ide-session-diff--source-detail (session source turn-id)
+  "Return a user-facing detail string for SESSION diff SOURCE and TURN-ID."
+  (pcase source
+    ('live
+     (if (and session (codex-ide-session-current-turn-id session))
+         "running turn"
+       "latest turn"))
+    ('pinned
+     (if turn-id
+         (format "turn %s" (codex-ide-short-turn-id turn-id))
+       "no pinned turn"))
+    ('transcript
+     (if turn-id
+         (format "turn %s" (codex-ide-short-turn-id turn-id))
+       "no turn at point"))
+    (_ nil)))
+
+(defun codex-ide-session-diff--format-header-line
+    (session source turn-id display-text)
+  "Return the session diff header line for SESSION SOURCE TURN-ID DISPLAY-TEXT."
+  (let ((segments
+         (delq nil
+               (list
+                (codex-ide-session-diff--header-segment
+                 (codex-ide-session-diff--source-label source))
+                (when-let* ((detail
+                             (codex-ide-session-diff--source-detail
+                              session
+                              source
+                              turn-id)))
+                  (codex-ide-session-diff--header-segment detail))
+                (and (eq source 'transcript)
+                     (codex-ide-session-diff--header-segment "follows point"))
+                (codex-ide-session-diff--header-diffstat display-text)))))
+    (concat
+     (codex-ide-session-diff--header-segment " ")
+     (mapconcat #'identity
+                segments
+                (codex-ide-session-diff--header-segment " | ")))))
 
 (defun codex-ide-diff--render-text-1 (raw-text display-text directory)
   "Render RAW-TEXT and DISPLAY-TEXT in the current Codex diff buffer."
@@ -788,13 +878,11 @@ Return the created buffer."
      codex-ide--display-buffer-other-window-pop-up-action)
     buffer))
 
-(defun codex-ide-session-diff--empty-message (source turn-id message)
-  "Return empty-state text for SOURCE TURN-ID and MESSAGE."
+(defun codex-ide-session-diff--empty-message (_source _turn-id message)
+  "Return empty-state text for MESSAGE."
   (string-join
    (delq nil
-         (list (format "# Codex session diff: %s" source)
-               (and turn-id (format "# Turn: %s" turn-id))
-               (format "# %s" message)
+         (list (format "# %s" message)
                (concat "# "
                        (substitute-command-keys
                         "Press \\[describe-mode] for help."))))
@@ -839,6 +927,12 @@ Return the created buffer."
          (directory (and session (codex-ide-session-directory session)))
          (display-text
           (codex-ide-diff-data-display-text diff-text directory)))
+    (setq-local codex-ide-session-diff--header-line
+                (codex-ide-session-diff--format-header-line
+                 session
+                 source
+                 turn-id
+                 display-text))
     (let ((inhibit-read-only t))
       (when directory
         (setq-local default-directory (file-name-as-directory directory)))

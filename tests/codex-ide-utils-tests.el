@@ -10,6 +10,14 @@
 (require 'cl-lib)
 (require 'codex-ide-utils)
 
+(ert-deftest codex-ide-short-turn-id-uses-last-dash-delimited-segment ()
+  (should (equal (codex-ide-short-turn-id
+                  "019e25d6-2b37-7550-a989-922b69c9c56a")
+                 "922b69c9c56a"))
+  (should (equal (codex-ide-short-turn-id "turn-1") "1"))
+  (should (equal (codex-ide-short-turn-id "turn") "turn"))
+  (should-not (codex-ide-short-turn-id "  ")))
+
 (ert-deftest codex-ide-human-time-ago-renders-recent-relative-times ()
   (let ((now (encode-time 0 0 12 17 4 2026)))
     (cl-letf (((symbol-function 'time-since)

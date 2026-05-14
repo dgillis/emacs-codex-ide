@@ -617,18 +617,98 @@
                   "*codex[my-project]*")
                  "*codex[my-project]*-session-diff")))
 
-(ert-deftest codex-ide-session-diff-mode-does-not-set-header-line ()
+(ert-deftest codex-ide-session-diff-mode-sets-header-line ()
   (with-temp-buffer
     (codex-ide-session-diff-mode)
-    (should-not header-line-format)))
+    (should header-line-format)))
+
+(ert-deftest codex-ide-session-diff-header-line-shows-source-turn-and-colored-stat ()
+  (let* ((session-buffer (generate-new-buffer "*codex[test-header-line]*"))
+         (session (make-instance 'codex-ide-session
+                                 :buffer session-buffer
+                                 :directory default-directory))
+         (turn-id "019e25d6-2b37-7550-a989-922b69c9c56a")
+         (display-text
+          (string-join
+           '("diff --git a/foo.txt b/foo.txt"
+             "--- a/foo.txt"
+             "+++ b/foo.txt"
+             "@@ -1 +1 @@"
+             "-old"
+             "+new")
+           "\n"))
+         (header nil))
+    (unwind-protect
+        (with-temp-buffer
+          (codex-ide-session-diff-mode)
+          (setq-local codex-ide-session-diff--header-line
+                      (codex-ide-session-diff--format-header-line
+                       session
+                       'pinned
+                       turn-id
+                       display-text))
+          (setq header codex-ide-session-diff--header-line)
+          (should (equal (substring-no-properties header)
+                         " Pinned diff | turn 922b69c9c56a | 1 file +1 -1"))
+          (let ((added-index (string-match-p "\\+1" header))
+                (removed-index (string-match-p "-1\\'" header)))
+            (should (member 'codex-ide-file-diff-added-face
+                            (ensure-list
+                             (get-text-property added-index 'face header))))
+            (should (member 'codex-ide-file-diff-removed-face
+                            (ensure-list
+                             (get-text-property removed-index 'face header))))))
+      (when (buffer-live-p session-buffer)
+        (kill-buffer session-buffer)))))
+
+(ert-deftest codex-ide-session-diff-header-line-shows-no-changes ()
+  (with-temp-buffer
+    (codex-ide-session-diff-mode)
+    (setq-local codex-ide-session-diff--header-line
+                (codex-ide-session-diff--format-header-line
+                 nil
+                 'transcript
+                 nil
+                 "# No prompt at transcript position\n# Press C-h m for help."))
+    (should (equal (substring-no-properties
+                    codex-ide-session-diff--header-line)
+                   " Turn-at-point diff | no turn at point | follows point | no changes"))))
+
+(ert-deftest codex-ide-session-diff-header-line-shows-running-turn ()
+  (let* ((session-buffer (generate-new-buffer "*codex[test-running-header-line]*"))
+         (session (make-instance 'codex-ide-session
+                                 :buffer session-buffer
+                                 :current-turn-id "019e25c9-5964-7b60-be3b-18b9ecaa82f3"
+                                 :directory default-directory))
+         (display-text
+          (string-join
+           '("diff --git a/foo.txt b/foo.txt"
+             "--- a/foo.txt"
+             "+++ b/foo.txt"
+             "@@ -1 +1 @@"
+             "-old"
+             "+new")
+           "\n")))
+    (unwind-protect
+        (with-temp-buffer
+          (codex-ide-session-diff-mode)
+          (setq-local codex-ide-session-diff--header-line
+                      (codex-ide-session-diff--format-header-line
+                       session
+                       'live
+                       nil
+                       display-text))
+          (should (equal (substring-no-properties
+                          codex-ide-session-diff--header-line)
+                         " Live diff | running turn | 1 file +1 -1")))
+      (when (buffer-live-p session-buffer)
+        (kill-buffer session-buffer)))))
 
 (ert-deftest codex-ide-session-diff-empty-message-points-to-mode-help ()
   (should (equal (codex-ide-session-diff--empty-message
                   'transcript "turn-1" "No prompt at transcript position")
                  (string-join
-                  '("# Codex session diff: transcript"
-                    "# Turn: turn-1"
-                    "# No prompt at transcript position"
+                  '("# No prompt at transcript position"
                     "# Press C-h m for help.")
                   "\n"))))
 
@@ -662,7 +742,9 @@
             (should (derived-mode-p 'codex-ide-section-mode))
             (should (eq codex-ide-session-diff--session session))
             (should (eq codex-ide-session-diff-source 'live))
-            (should-not header-line-format)
+            (should (equal (substring-no-properties
+                            codex-ide-session-diff--header-line)
+                           " Live diff | latest turn | 1 file +1 -1"))
             (should (string-match-p "foo\\.txt" (buffer-string)))))
       (when (buffer-live-p diff-buffer)
         (kill-buffer diff-buffer))

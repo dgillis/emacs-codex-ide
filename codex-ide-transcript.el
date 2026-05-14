@@ -1105,15 +1105,17 @@ When DRAFT is nil, preserve the current active prompt text."
               (codex-ide--format-model-summary session)))
         (setq header-line-format
               (propertize
-               (string-join
-                (delq nil
-                      (list
-                       focus
-                       model-summary
-                       rate-limit-summary
-                       token-context-summary
-                       token-last-summary))
-                " | ")
+               (concat
+                " "
+                (string-join
+                 (delq nil
+                       (list
+                        focus
+                        model-summary
+                        rate-limit-summary
+                        token-context-summary
+                        token-last-summary))
+                 " | "))
                'face 'codex-ide-header-line-face)))
       (codex-ide--update-mode-line session))))
 

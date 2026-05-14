@@ -8,6 +8,16 @@
 
 (require 'subr-x)
 
+(defun codex-ide-short-turn-id (turn-id)
+  "Return a compact display label for TURN-ID.
+For dash-delimited ids, return the final non-empty segment.  Return nil when
+TURN-ID is not a non-empty string."
+  (when (stringp turn-id)
+    (let ((trimmed (string-trim turn-id)))
+      (unless (string-empty-p trimmed)
+        (or (car (last (split-string trimmed "-" t)))
+            trimmed)))))
+
 (defun codex-ide--human-time-normalize (timestamp)
   "Return TIMESTAMP as an Emacs time value, or nil when it cannot be parsed."
   (cond
