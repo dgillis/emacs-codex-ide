@@ -3589,6 +3589,87 @@
 					(should-not (eq (get-text-property (match-beginning 0) 'face)
 							'codex-ide-user-prompt-face))))))))
 
+  (ert-deftest codex-ide-prompt-blocks-non-session-origin-when-session-is-busy ()
+    (let* ((project-dir (codex-ide-test--make-temp-project))
+           (file-path (codex-ide-test--make-project-file
+                       project-dir "src/example.el" "(message \"hello\")\n"))
+           read-called
+           display-called
+           request-called
+           error-message)
+      (codex-ide-test-with-fixture project-dir
+				   (codex-ide-test-with-fake-processes
+				    (let ((session (codex-ide--create-process-session)))
+				      (setf (codex-ide-session-thread-id session) "thread-busy-origin"
+					    (codex-ide-session-current-turn-id session) "turn-busy-origin"
+					    (codex-ide-session-status session) "running")
+				      (with-current-buffer (find-file-noselect file-path)
+					(setq-local default-directory
+						    (file-name-as-directory project-dir))
+					(cl-letf (((symbol-function 'read-from-minibuffer)
+						   (lambda (&rest _args)
+						     (setq read-called t)
+						     "Explain this buffer"))
+						  ((symbol-function 'codex-ide--ensure-session-for-current-project)
+						   (lambda () session))
+						  ((symbol-function 'codex-ide-display-buffer)
+						   (lambda (&rest _args)
+						     (setq display-called t)
+						     (selected-window)))
+						  ((symbol-function 'codex-ide--request-sync)
+						   (lambda (&rest _args)
+						     (setq request-called t)
+						     nil)))
+					  (condition-case err
+					      (codex-ide-prompt)
+					    (user-error
+					     (setq error-message
+						   (error-message-string err)))))
+					(should error-message)
+					(should (string-match-p
+						 "Codex session is busy in"
+						 error-message))
+					(should (string-match-p
+						 (regexp-quote
+						  (buffer-name
+						   (codex-ide-session-buffer session)))
+						 error-message))
+					(should-not read-called)
+					(should-not display-called)
+					(should-not request-called)))))))
+
+  (ert-deftest codex-ide-steer-blocks-non-session-origin-when-session-is-busy ()
+    (let* ((project-dir (codex-ide-test--make-temp-project))
+           (file-path (codex-ide-test--make-project-file
+                       project-dir "src/example.el" "(message \"hello\")\n"))
+           request-called
+           error-message)
+      (codex-ide-test-with-fixture project-dir
+				   (codex-ide-test-with-fake-processes
+				    (let ((session (codex-ide--create-process-session)))
+				      (setf (codex-ide-session-thread-id session) "thread-busy-steer"
+					    (codex-ide-session-current-turn-id session) "turn-busy-steer"
+					    (codex-ide-session-status session) "running")
+				      (with-current-buffer (find-file-noselect file-path)
+					(setq-local default-directory
+						    (file-name-as-directory project-dir))
+					(cl-letf (((symbol-function 'codex-ide--request-sync)
+						   (lambda (&rest _args)
+						     (setq request-called t)
+						     nil)))
+					  (condition-case err
+					      (codex-ide--steer-prompt "Actually do this")
+					    (user-error
+					     (setq error-message
+						   (error-message-string err)))))
+					(should error-message)
+					(should (string-match-p
+						 (regexp-quote
+						  (buffer-name
+						   (codex-ide-session-buffer session)))
+						 error-message))
+					(should-not request-called)))))))
+
   (ert-deftest codex-ide-submit-queues-running-turn-when-configured ()
     (let ((project-dir (codex-ide-test--make-temp-project))
           (codex-ide-running-submit-action 'queue)

@@ -4669,6 +4669,25 @@ Signal an error when THREAD-READ lacks replayable transcript items."
           (codex-ide--current-input session)
         (read-string "Codex prompt: "))))
 
+(defun codex-ide--submission-origin-buffer (session)
+  "Return the buffer from which a prompt submission originated for SESSION."
+  (or codex-ide--prompt-origin-buffer
+      (and (eq (current-buffer) (codex-ide-session-buffer session))
+           (codex-ide-session-buffer session))
+      (current-buffer)))
+
+(defun codex-ide--ensure-busy-session-submission-origin (session)
+  "Signal if SESSION is busy and submission did not originate in its buffer."
+  (when (codex-ide-session-current-turn-id session)
+    (let ((origin-buffer (codex-ide--submission-origin-buffer session))
+          (session-buffer (codex-ide-session-buffer session)))
+      (unless (eq origin-buffer session-buffer)
+        (user-error
+         "Codex session is busy in %s; switch to that session buffer to send steering input, or wait for the turn to finish"
+         (if (buffer-live-p session-buffer)
+             (buffer-name session-buffer)
+           "its session buffer"))))))
+
 (defun codex-ide--send-turn-start (session thread-id payload)
   "Send a `turn/start` request for SESSION THREAD-ID using PAYLOAD."
   (when-let* ((effort (codex-ide-config-effective-value 'reasoning-effort session)))
@@ -4753,6 +4772,8 @@ Signal an error when THREAD-READ lacks replayable transcript items."
   (interactive)
   (let ((origin-buffer (current-buffer))
         (session (codex-ide--ensure-session-for-current-project)))
+    (let ((codex-ide--prompt-origin-buffer origin-buffer))
+      (codex-ide--ensure-busy-session-submission-origin session))
     (let* ((buffer (codex-ide-session-buffer session))
            (prompt (read-from-minibuffer
                     (format "Send prompt (%s): " (buffer-name buffer)))))
@@ -4820,12 +4841,14 @@ Signal an error when THREAD-READ lacks replayable transcript items."
   (let* ((session (codex-ide--session-for-current-project))
          (thread-id (codex-ide-session-thread-id session))
          (turn-id (codex-ide-session-current-turn-id session))
-         (prompt-to-send (codex-ide--prompt-for-submission session prompt))
+         prompt-to-send
          payload)
     (unless turn-id
       (user-error "No active Codex turn to steer"))
     (unless thread-id
       (user-error "Codex session has no active thread"))
+    (codex-ide--ensure-busy-session-submission-origin session)
+    (setq prompt-to-send (codex-ide--prompt-for-submission session prompt))
     (setq payload (codex-ide--prepare-running-prompt session prompt-to-send))
     (codex-ide-log-message
      session
@@ -4856,12 +4879,14 @@ Signal an error when THREAD-READ lacks replayable transcript items."
   (let* ((session (codex-ide--session-for-current-project))
          (thread-id (codex-ide-session-thread-id session))
          (turn-id (codex-ide-session-current-turn-id session))
-         (prompt-to-send (codex-ide--prompt-for-submission session prompt))
+         prompt-to-send
          payload)
     (unless turn-id
       (user-error "No active Codex turn to queue behind"))
     (unless thread-id
       (user-error "Codex session has no active thread"))
+    (codex-ide--ensure-busy-session-submission-origin session)
+    (setq prompt-to-send (codex-ide--prompt-for-submission session prompt))
     (codex-ide--ensure-submittable-prompt prompt-to-send)
     (codex-ide--push-prompt-history session prompt-to-send)
     (setq payload (codex-ide--running-prompt-payload session prompt-to-send))
@@ -4886,12 +4911,16 @@ Signal an error when THREAD-READ lacks replayable transcript items."
   (interactive)
   (let* ((session (codex-ide--session-for-current-project))
          (thread-id (codex-ide-session-thread-id session))
-         (prompt-to-send (codex-ide--prompt-for-submission session prompt))
+         prompt-to-send
          payload)
     (if (codex-ide-session-current-turn-id session)
-        (pcase codex-ide-running-submit-action
-          ('queue (codex-ide--queue-prompt prompt-to-send))
-          (_ (codex-ide--steer-prompt prompt-to-send)))
+        (progn
+          (codex-ide--ensure-busy-session-submission-origin session)
+          (setq prompt-to-send (codex-ide--prompt-for-submission session prompt))
+          (pcase codex-ide-running-submit-action
+            ('queue (codex-ide--queue-prompt prompt-to-send))
+            (_ (codex-ide--steer-prompt prompt-to-send))))
+      (setq prompt-to-send (codex-ide--prompt-for-submission session prompt))
       (unless thread-id
         (user-error "Codex session has no active thread"))
       (codex-ide--ensure-submittable-prompt prompt-to-send)
