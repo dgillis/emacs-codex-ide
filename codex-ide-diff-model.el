@@ -123,6 +123,7 @@ Return a cons of the parsed file plist and the next line index."
                 :old-path old-path
                 :old-null old-null
                 :new-null new-null
+                :body-only (null hunks)
                 :header-lines (nreverse header-lines)
                 :hunks (nreverse hunks))
           index)))
@@ -175,7 +176,8 @@ Return a cons of the parsed file plist and the next line index."
 
 (defun codex-ide-diff-model-body-only-side (file &optional directory)
   "Return the side represented by body-only FILE, either `added' or `removed'."
-  (when (null (plist-get file :hunks))
+  (when (or (plist-get file :body-only)
+            (null (plist-get file :hunks)))
     (cond
      ((plist-get file :old-null) 'added)
      ((plist-get file :new-null) 'removed)

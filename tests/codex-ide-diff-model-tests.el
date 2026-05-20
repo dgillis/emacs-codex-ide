@@ -84,6 +84,42 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
+(ert-deftest codex-ide-diff-model-file-stats-counts-grouped-body-only-side ()
+  (let* ((root (file-name-as-directory
+                (make-temp-file "codex-ide-diff-model-" t)))
+         (diff-text
+          (string-join
+           '("diff --git a/foo.txt b/foo.txt"
+             "--- a/foo.txt"
+             "+++ b/foo.txt"
+             "first"
+             "second"
+             "diff --git a/foo.txt b/foo.txt"
+             "--- a/foo.txt"
+             "+++ b/foo.txt"
+             "@@ -2 +2,2 @@"
+             " second"
+             "+newer")
+           "\n"))
+         (file (car (codex-ide-diff-model-group-files-by-path
+                     (codex-ide-diff-model-parse-files diff-text)))))
+    (unwind-protect
+        (progn
+          (should (equal (codex-ide-diff-model-file-stats file root)
+                         '(:path "foo.txt"
+                                 :added 1
+                                 :removed 2
+                                 :changed 3)))
+          (with-temp-file (expand-file-name "foo.txt" root)
+            (insert "first\nsecond\nnewer\n"))
+          (should (equal (codex-ide-diff-model-file-stats file root)
+                         '(:path "foo.txt"
+                                 :added 3
+                                 :removed 0
+                                 :changed 3))))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
 (ert-deftest codex-ide-diff-model-source-location-tracks-body-only-lines ()
   (let ((diff-text
          (string-join

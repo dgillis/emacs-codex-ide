@@ -450,6 +450,52 @@
       (when (file-directory-p root)
         (delete-directory root t)))))
 
+(ert-deftest codex-ide-diff-render-grouped-body-only-new-file-lines-as-added ()
+  (let* ((root (file-name-as-directory
+                (make-temp-file "codex-ide-diff-view-" t)))
+         (file-path (expand-file-name "foo.txt" root)))
+    (unwind-protect
+        (progn
+          (with-temp-file file-path
+            (insert "first\nsecond\nnewer\n"))
+          (with-temp-buffer
+            (let ((diff-text
+                   (string-join
+                    '("diff --git a/foo.txt b/foo.txt"
+                      "--- a/foo.txt"
+                      "+++ b/foo.txt"
+                      "first"
+                      "second"
+                      "diff --git a/foo.txt b/foo.txt"
+                      "--- a/foo.txt"
+                      "+++ b/foo.txt"
+                      "@@ -2 +2,2 @@"
+                      " second"
+                      "+newer")
+                    "\n")))
+              (codex-ide-diff-mode)
+              (codex-ide-diff--render-text diff-text diff-text root))
+            (let* ((file (car (codex-ide-diff--file-sections)))
+                   (heading
+                    (buffer-substring
+                     (codex-ide-section-heading-start file)
+                     (codex-ide-section-heading-end file))))
+              (should (string-match-p
+                       (regexp-quote "foo.txt +3")
+                       (substring-no-properties heading)))
+              (goto-char (point-min))
+              (search-forward "first")
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'codex-ide-file-diff-added-face))
+              (search-forward "second")
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'codex-ide-file-diff-added-face))
+              (search-forward "+newer")
+              (should (eq (get-text-property (match-beginning 0) 'face)
+                          'codex-ide-file-diff-added-face)))))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
 (ert-deftest codex-ide-diff-render-body-only-deleted-file-lines-as-removed ()
   (let ((root (file-name-as-directory
                (make-temp-file "codex-ide-diff-view-" t))))
