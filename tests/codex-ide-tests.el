@@ -5591,6 +5591,59 @@
 				    (should (string-match-p "Codex:Error"
 							    (codex-ide-renderer-mode-line-status session))))))))
 
+(ert-deftest codex-ide-ignores-notifications-for-other-threads ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :status "running"
+                    :current-turn-id "parent-turn"
+                    :output-prefix-inserted t
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (setf (codex-ide-session-thread-id session) "parent-thread")
+      (codex-ide--insert-input-prompt session nil)
+      (codex-ide--refresh-input-placeholder session)
+      (codex-ide--handle-notification
+       session
+       '((method . "thread/status/changed")
+         (params . ((threadId . "child-thread")
+                    (status . ((type . "idle")))))))
+      (codex-ide--handle-notification
+       session
+       '((method . "turn/started")
+         (params . ((threadId . "child-thread")
+                    (turn . ((id . "child-turn")))))))
+      (codex-ide--handle-notification
+       session
+       '((method . "item/agentMessage/delta")
+         (params . ((threadId . "child-thread")
+                    (turnId . "child-turn")
+                    (itemId . "child-message")
+                    (delta . "child output")))))
+      (codex-ide--handle-notification
+       session
+       '((method . "turn/completed")
+         (params . ((threadId . "child-thread")
+                    (turn . ((id . "child-turn")))))))
+      (should (equal (codex-ide-session-current-turn-id session) "parent-turn"))
+      (should (equal (codex-ide-session-status session) "running"))
+      (should (codex-ide-session-output-prefix-inserted session))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     "Running..."))
+      (with-current-buffer (codex-ide-session-buffer session)
+        (should-not (string-match-p "child output" (buffer-string))))
+      (codex-ide--handle-notification
+       session
+       '((method . "turn/completed")
+         (params . ((threadId . "parent-thread")
+                    (turn . ((id . "parent-turn")))))))
+      (should-not (codex-ide-session-current-turn-id session))
+      (should-not (codex-ide-session-output-prefix-inserted session))
+      (should (equal (codex-ide-session-status session) "idle"))
+      (should (equal (codex-ide-test--input-placeholder-text session)
+                     codex-ide-prompt-placeholder-text)))))
+
 (ert-deftest codex-ide-error-notification-handles-authentication-failures-gracefully ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir

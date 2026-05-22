@@ -4417,6 +4417,16 @@ Mutating the returned table does not update the canonical approval store."
                "\n")
        'shadow))))
 
+(defun codex-ide--notification-belongs-to-session-p (session params)
+  "Return non-nil when notification PARAMS should mutate SESSION.
+Notifications without a `threadId' are treated as session-scoped for backward
+compatibility with older app-server payloads and global notifications."
+  (let ((notification-thread-id (alist-get 'threadId params))
+        (session-thread-id (codex-ide-session-thread-id session)))
+    (or (null notification-thread-id)
+        (null session-thread-id)
+        (equal notification-thread-id session-thread-id))))
+
 (defun codex-ide--handle-notification (&optional session message)
   "Handle a notification MESSAGE for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
@@ -4424,7 +4434,14 @@ Mutating the returned table does not update the canonical approval store."
         (params (alist-get 'params message))
         (buffer (codex-ide-session-buffer session)))
     (codex-ide-log-message session "Received notification %s" method)
-    (pcase method
+    (if (not (codex-ide--notification-belongs-to-session-p session params))
+        (codex-ide-log-message
+         session
+         "Ignoring notification %s for thread %s (session thread %s)"
+         method
+         (alist-get 'threadId params)
+         (codex-ide-session-thread-id session))
+      (pcase method
       ("thread/started"
        (codex-ide--remember-reasoning-effort session params)
        (codex-ide--remember-model-name session params)
@@ -4668,7 +4685,7 @@ Mutating the returned table does not update the canonical approval store."
         (format "\n[%s]\n"
                 (codex-ide-mcp-elicitation-format-completion params))
         'shadow))
-      (_ nil))))
+        (_ nil)))))
 
 (defun codex-ide--queued-prompts (session)
   "Return SESSION's queued prompt entries."
