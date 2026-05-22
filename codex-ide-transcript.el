@@ -3151,8 +3151,99 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
      entries
      "\n\n")))
 
+(defun codex-ide--collab-agent-buffer-name (session thread-id)
+  "Return the buffer name for sub-agent THREAD-ID in SESSION."
+  (let* ((directory (and session (codex-ide-session-directory session)))
+         (project (and directory
+                       (file-name-nondirectory
+                        (directory-file-name directory)))))
+    (format "*codex-sub-agent[%s:%s]*"
+            (or project "session")
+            (or (codex-ide--short-agent-thread-id thread-id)
+                "agent"))))
+
+(defun codex-ide--open-collab-agent-message-buffer
+    (session parent-item-id thread-id message)
+  "Open a full final-message buffer for sub-agent THREAD-ID."
+  (unless (and (stringp message)
+               (not (string-empty-p (string-trim message))))
+    (user-error "No sub-agent message available"))
+  (let ((buffer (get-buffer-create
+                 (codex-ide--collab-agent-buffer-name session thread-id))))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "Sub-agent %s\n"
+                        (or (codex-ide--short-agent-thread-id thread-id)
+                            (format "%s" thread-id))))
+        (when parent-item-id
+          (insert (format "Parent item: %s\n" parent-item-id)))
+        (insert "\n" (string-trim-right message) "\n")
+        (goto-char (point-min))
+        (special-mode)
+        (setq-local buffer-undo-list t)
+        (when (bound-and-true-p visual-line-mode)
+          (visual-line-mode -1))
+        (when (bound-and-true-p font-lock-mode)
+          (font-lock-mode -1))))
+    (pop-to-buffer buffer)))
+
+(defun codex-ide--append-agent-detail-action-line
+    (buffer text button-label callback help-echo)
+  "Append agent detail TEXT to BUFFER with an action button."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let* ((session (codex-ide--session-for-buffer buffer))
+             (restore-point (codex-ide--input-point-marker session))
+             (moving (and (= (point) (point-max)) (not restore-point)))
+             (active-boundary (codex-ide--active-input-boundary-marker buffer))
+             (insertion-position (codex-ide--transcript-insertion-position buffer))
+             (advance-active-boundary
+              (and active-boundary
+                   (= insertion-position (marker-position active-boundary))))
+             range)
+        (codex-ide--maybe-save-transcript-position
+         insertion-position
+         (codex-ide-renderer-append-to-buffer
+          ""
+          :insertion-point insertion-position
+          :restore-point restore-point
+          :preserve-point t
+          :move-point-to-end moving
+          :after-insert
+          (lambda (_start _end inserted-at)
+            (let ((start inserted-at)
+                  (props (codex-ide--current-agent-text-properties)))
+              (goto-char inserted-at)
+              (insert (propertize
+                       (string-trim-right (codex-ide--item-detail-line text))
+                       'face 'codex-ide-item-detail-face
+                       'font-lock-face 'codex-ide-item-detail-face
+                       'rear-nonsticky t
+                       'front-sticky t))
+              (add-text-properties start (point) props)
+              (insert (propertize " " 'face 'codex-ide-item-detail-face))
+              (codex-ide-renderer-insert-action-button
+               button-label
+               callback
+               help-echo
+               (codex-ide-nav-button-keymap)
+               props)
+              (insert (propertize "\n" 'face 'codex-ide-item-detail-face))
+              (setq range (cons start (point)))
+              (codex-ide--freeze-region start (point))
+              (codex-ide--advance-append-boundary-after
+               buffer
+               inserted-at
+               (point))
+              (when advance-active-boundary
+                (set-marker active-boundary (point))
+                (when session
+                  (codex-ide--ensure-active-input-prompt-spacing session)))))))
+        range))))
+
 (defun codex-ide--render-collab-agent-details
-    (buffer item &optional completion)
+    (buffer item &optional completion session item-id)
   "Render collab agent ITEM details into BUFFER.
 When COMPLETION is non-nil, render completion-specific state details."
   (let (rendered-lines)
@@ -3179,15 +3270,34 @@ When COMPLETION is non-nil, render completion-specific state details."
         (append-detail (format "prompt: %s" prompt) nil))
       (when completion
         (dolist (entry (codex-ide--collab-agent-states item))
-          (append-detail
-           (format "agent %s: %s%s"
-                   (or (codex-ide--short-agent-thread-id (car entry))
-                       (format "%s" (car entry)))
-                   (codex-ide--collab-agent-state-status (cdr entry))
-                   (if (alist-get 'message (cdr entry))
-                       " (message available)"
-                     ""))
-           nil))))
+          (let* ((thread-id (car entry))
+                 (state (cdr entry))
+                 (message (and (listp state) (alist-get 'message state)))
+                 (agent-label (or (codex-ide--short-agent-thread-id thread-id)
+                                  (format "%s" thread-id)))
+                 (text (format "agent %s: %s%s"
+                               agent-label
+                               (codex-ide--collab-agent-state-status state)
+                               (if message
+                                   " (message available)"
+                                 ""))))
+            (if (and (stringp message)
+                     (not (string-empty-p (string-trim message)))
+                     session)
+                (push
+                 (codex-ide--append-agent-detail-action-line
+                  buffer
+                  text
+                  "open"
+                  (lambda ()
+                    (codex-ide--open-collab-agent-message-buffer
+                     session
+                     item-id
+                     thread-id
+                     message))
+                  "Open this sub-agent message in a separate buffer")
+                 rendered-lines)
+              (append-detail text nil))))))
     (nreverse rendered-lines)))
 
 (defun codex-ide--render-item-start-details (session item)
@@ -3225,7 +3335,8 @@ When COMPLETION is non-nil, render completion-specific state details."
            (format "args: %s" (json-encode arguments)))
           'codex-ide-item-detail-face)))
       ("collabAgentToolCall"
-       (codex-ide--render-collab-agent-details buffer item))
+       (codex-ide--render-collab-agent-details buffer item nil session
+                                               (alist-get 'id item)))
       ("fileChange"
        (dolist (change (or (alist-get 'changes item) '()))
          (codex-ide--append-agent-text
@@ -3514,7 +3625,12 @@ When COMPLETION is non-nil, render completion-specific state details."
          (progn
            (when state
              (let ((rendered-lines
-                    (codex-ide--render-collab-agent-details buffer item t)))
+                    (codex-ide--render-collab-agent-details
+                     buffer
+                     item
+                     t
+                     session
+                     item-id)))
                (when rendered-lines
                  (codex-ide--put-item-state
                   session

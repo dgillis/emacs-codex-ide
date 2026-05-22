@@ -1913,6 +1913,58 @@
         (should (string-match-p "messages: 3 lines \\[fold\\]"
                                 (buffer-string)))))))
 
+(ert-deftest codex-ide-collab-agent-message-open-button-opens-agent-buffer ()
+  (let ((buffer-name "*codex-sub-agent[codex-ide:a]*"))
+    (when-let* ((buffer (get-buffer buffer-name)))
+      (kill-buffer buffer))
+    (unwind-protect
+        (with-temp-buffer
+          (codex-ide-session-mode)
+          (let ((session (make-codex-ide-session
+                          :directory default-directory
+                          :buffer (current-buffer)
+                          :status "idle"
+                          :item-states (make-hash-table :test 'equal))))
+            (setq-local codex-ide--session session)
+            (codex-ide--insert-input-prompt session "submitted prompt")
+            (codex-ide--begin-turn-display session)
+            (codex-ide--render-item-start
+             session
+             (list (cons 'id "call-1")
+                   (cons 'type "collabAgentToolCall")
+                   (cons 'tool "wait")
+                   (cons 'status "inProgress")
+                   (cons 'receiverThreadIds ["thread-agent-a"])))
+            (codex-ide--render-item-completion
+             session
+             (list (cons 'id "call-1")
+                   (cons 'type "collabAgentToolCall")
+                   (cons 'tool "wait")
+                   (cons 'status "completed")
+                   (cons 'receiverThreadIds ["thread-agent-a"])
+                   (cons 'agentsStates
+                         (list
+                          (cons "thread-agent-a"
+                                (list (cons 'status "completed")
+                                      (cons 'message
+                                            "Agent-specific final message")))))))
+            (goto-char (point-min))
+            (search-forward "agent a: completed (message available)")
+            (search-forward "[open]")
+            (let ((action (button-get (button-at (match-beginning 0))
+                                      'action)))
+              (should action)
+              (funcall action nil))
+            (should (get-buffer buffer-name))
+            (with-current-buffer buffer-name
+              (should (eq major-mode 'special-mode))
+              (should (string-match-p "Sub-agent a" (buffer-string)))
+              (should (string-match-p "Parent item: call-1" (buffer-string)))
+              (should (string-match-p "Agent-specific final message"
+                                      (buffer-string))))))
+      (when-let* ((buffer (get-buffer buffer-name)))
+        (kill-buffer buffer)))))
+
 (ert-deftest codex-ide-command-output-face-extends-lines ()
   (should (eq (face-attribute 'codex-ide-command-output-face :extend nil t)
               t)))
