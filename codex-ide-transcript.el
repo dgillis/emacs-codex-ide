@@ -3127,6 +3127,30 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
           (concat (substring single-line 0 117) "...")
         single-line))))
 
+(defun codex-ide--collab-agent-final-message-entries (item)
+  "Return sorted final-message entries for collab agent ITEM."
+  (delq nil
+        (mapcar
+         (lambda (entry)
+           (let ((message (and (listp (cdr entry))
+                               (alist-get 'message (cdr entry)))))
+             (when (and (stringp message)
+                        (not (string-empty-p (string-trim message))))
+               (cons (car entry) message))))
+         (codex-ide--collab-agent-states item))))
+
+(defun codex-ide--collab-agent-final-messages-text (item)
+  "Return formatted final sub-agent messages for collab agent ITEM."
+  (when-let* ((entries (codex-ide--collab-agent-final-message-entries item)))
+    (mapconcat
+     (lambda (entry)
+       (format "Sub-agent %s\n%s"
+               (or (codex-ide--short-agent-thread-id (car entry))
+                   (format "%s" (car entry)))
+               (string-trim-right (cdr entry))))
+     entries
+     "\n\n")))
+
 (defun codex-ide--render-collab-agent-details
     (buffer item &optional completion)
   "Render collab agent ITEM details into BUFFER.
@@ -3259,7 +3283,7 @@ When COMPLETION is non-nil, render completion-specific state details."
             (setq state (plist-put state :details-rendered t))
             (when (member item-type
                           '("commandExecution" "mcpToolCall" "fileChange"
-                            "webSearch"))
+                            "webSearch" "collabAgentToolCall"))
               ;; Keep delayed per-item output anchored directly after the item
               ;; block; later transcript inserts should not move this placeholder
               ;; forward.
@@ -3276,6 +3300,7 @@ When COMPLETION is non-nil, render completion-specific state details."
                              (pcase item-type
                                ("mcpToolCall" "result")
                                ("fileChange" "diff")
+                               ("collabAgentToolCall" "messages")
                                (_ "output"))))
             (when (equal item-type "commandExecution")
               (setq state
@@ -3486,18 +3511,30 @@ When COMPLETION is non-nil, render completion-specific state details."
             (codex-ide--item-detail-line "tool call failed")
             'error)))
         ("collabAgentToolCall"
-         (when state
-           (let ((rendered-lines
-                  (codex-ide--render-collab-agent-details buffer item t)))
-             (when rendered-lines
+         (progn
+           (when state
+             (let ((rendered-lines
+                    (codex-ide--render-collab-agent-details buffer item t)))
+               (when rendered-lines
+                 (codex-ide--put-item-state
+                  session
+                  item-id
+                  (plist-put
+                   state
+                   :rendered-detail-lines
+                   (append (plist-get state :rendered-detail-lines)
+                           rendered-lines))))))
+           (when-let* ((messages-text
+                        (codex-ide--collab-agent-final-messages-text item)))
+             (let ((state (or (codex-ide--item-state session item-id) '())))
                (codex-ide--put-item-state
                 session
                 item-id
-                (plist-put
-                 state
-                 :rendered-detail-lines
-                 (append (plist-get state :rendered-detail-lines)
-                         rendered-lines)))))))
+                (plist-put state :result-display-text messages-text)))
+             (codex-ide--complete-item-result-block
+              session
+              item-id
+              messages-text))))
         ("webSearch"
          (let* ((state (or state '()))
                 (rendered-lines

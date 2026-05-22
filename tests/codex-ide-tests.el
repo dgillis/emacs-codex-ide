@@ -1864,6 +1864,55 @@
                  text))
         (should-not (string-match-p "Final message body" text))))))
 
+(ert-deftest codex-ide-collab-agent-final-messages-render-folded-inline ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       (list (cons 'id "call-1")
+             (cons 'type "collabAgentToolCall")
+             (cons 'tool "wait")
+             (cons 'status "inProgress")
+             (cons 'receiverThreadIds ["thread-a"])))
+      (let ((item (list (cons 'id "call-1")
+                        (cons 'type "collabAgentToolCall")
+                        (cons 'tool "wait")
+                        (cons 'status "completed")
+                        (cons 'receiverThreadIds ["thread-a"])
+                        (cons 'agentsStates
+                              (list
+                               (cons "thread-a"
+                                     (list (cons 'status "completed")
+                                           (cons 'message
+                                                 "Final message body\nwith detail"))))))))
+        (codex-ide--render-item-completion session item))
+      (goto-char (point-min))
+      (search-forward "messages: 3 lines [expand]")
+      (let ((overlay (get-char-property
+                      (match-beginning 0)
+                      codex-ide-item-result-overlay-property)))
+        (should (overlayp overlay))
+        (should (overlay-get overlay :folded))
+        (should (overlay-get overlay 'invisible))
+        (should (equal (overlay-get overlay :result-full-text)
+                       "Sub-agent a\nFinal message body\nwith detail"))
+        (should-not (string-match-p "Final message body"
+                                    (buffer-string)))
+        (codex-ide-toggle-item-result-at-point (match-beginning 0))
+        (should-not (overlay-get overlay 'invisible))
+        (should (string-match-p "Sub-agent a" (buffer-string)))
+        (should (string-match-p "Final message body" (buffer-string)))
+        (should (string-match-p "messages: 3 lines \\[fold\\]"
+                                (buffer-string)))))))
+
 (ert-deftest codex-ide-command-output-face-extends-lines ()
   (should (eq (face-attribute 'codex-ide-command-output-face :extend nil t)
               t)))
