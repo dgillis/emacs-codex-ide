@@ -1782,6 +1782,88 @@
           (should-not (string-match-p "    hello\n    world"
                                       (buffer-string))))))))
 
+(ert-deftest codex-ide-collab-agent-tool-call-renders-clear-status ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       (list (cons 'id "call-1")
+             (cons 'type "collabAgentToolCall")
+             (cons 'tool "spawnAgent")
+             (cons 'status "inProgress")
+             (cons 'receiverThreadIds nil)
+             (cons 'prompt "Review codex-ide.el\nDo not edit.")))
+      (let ((text (buffer-string)))
+        (should (string-match-p
+                 "\\* Spawned sub-agent (in progress)" text))
+        (should (string-match-p "  └ status: in progress" text))
+        (should (string-match-p "  └ receivers: none" text))
+        (should (string-match-p
+                 "  └ prompt: Review codex-ide\\.el Do not edit\\."
+                 text)))
+      (let ((item (list (cons 'id "call-1")
+                        (cons 'type "collabAgentToolCall")
+                        (cons 'tool "spawnAgent")
+                        (cons 'status "completed")
+                        (cons 'receiverThreadIds ["thread-alpha"])
+                        (cons 'agentsStates
+                              (list
+                               (cons "thread-alpha"
+                                     (list (cons 'status "pendingInit")
+                                           (cons 'message nil))))))))
+        (codex-ide--render-item-completion session item))
+      (let ((text (buffer-string)))
+        (should (string-match-p "  └ status: completed" text))
+        (should (string-match-p "  └ receivers: alpha" text))
+        (should (string-match-p "  └ agent alpha: pendingInit" text))))))
+
+(ert-deftest codex-ide-collab-agent-wait-renders-agent-state-summary ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       (list (cons 'id "call-1")
+             (cons 'type "collabAgentToolCall")
+             (cons 'tool "wait")
+             (cons 'status "inProgress")
+             (cons 'receiverThreadIds ["thread-a" "thread-b"])))
+      (let ((item (list (cons 'id "call-1")
+                        (cons 'type "collabAgentToolCall")
+                        (cons 'tool "wait")
+                        (cons 'status "completed")
+                        (cons 'receiverThreadIds ["thread-a"])
+                        (cons 'agentsStates
+                              (list
+                               (cons "thread-a"
+                                     (list (cons 'status "completed")
+                                           (cons 'message "Final message body"))))))))
+        (codex-ide--render-item-completion session item))
+      (let ((text (buffer-string)))
+        (should (string-match-p
+                 "\\* Waited for sub-agents (in progress)" text))
+        (should (string-match-p "  └ receivers: 2 agents: a, b" text))
+        (should (string-match-p "  └ receivers: a" text))
+        (should (string-match-p
+                 "  └ agent a: completed (message available)"
+                 text))
+        (should-not (string-match-p "Final message body" text))))))
+
 (ert-deftest codex-ide-command-output-face-extends-lines ()
   (should (eq (face-attribute 'codex-ide-command-output-face :extend nil t)
               t)))

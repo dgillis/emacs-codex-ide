@@ -3037,6 +3037,8 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
        (format "Called tool %s" (or (alist-get 'tool item) "tool")))
       ("collabToolCall"
        (format "Delegated with %s" (or (alist-get 'tool item) "collab tool")))
+      ("collabAgentToolCall"
+       (codex-ide--collab-agent-summary item))
       ("fileChange"
        (let ((count (length (or (alist-get 'changes item) '()))))
          (format "Prepared %d file change%s" count (if (= count 1) "" "s"))))
@@ -3056,6 +3058,113 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
     (or (not session-directory)
         (not (equal (codex-ide--normalize-directory cwd)
                     (codex-ide--normalize-directory session-directory))))))
+
+(defun codex-ide--short-agent-thread-id (thread-id)
+  "Return a compact display label for agent THREAD-ID."
+  (cond
+   ((not (stringp thread-id)) nil)
+   ((string-empty-p (string-trim thread-id)) nil)
+   (t
+    (or (car (last (split-string (string-trim thread-id) "-" t)))
+        (string-trim thread-id)))))
+
+(defun codex-ide--collab-agent-action (item)
+  "Return a human-readable action label for collab agent ITEM."
+  (pcase (alist-get 'tool item)
+    ("spawnAgent" "Spawned sub-agent")
+    ("wait" "Waited for sub-agents")
+    ("closeAgent" "Closed sub-agent")
+    (tool (format "Ran sub-agent tool %s" (or tool "unknown")))))
+
+(defun codex-ide--collab-agent-status-text (status)
+  "Return a compact display string for collab agent STATUS."
+  (pcase status
+    ("inProgress" "in progress")
+    ((or "completed" "failed" "cancelled") status)
+    (_ (or status "unknown"))))
+
+(defun codex-ide--collab-agent-summary (item)
+  "Return a one-line summary for collab agent ITEM."
+  (format "%s (%s)"
+          (codex-ide--collab-agent-action item)
+          (codex-ide--collab-agent-status-text (alist-get 'status item))))
+
+(defun codex-ide--collab-agent-states (item)
+  "Return sorted agent state entries for collab agent ITEM."
+  (let (entries)
+    (dolist (entry (alist-get 'agentsStates item))
+      (push entry entries))
+    (sort entries
+          (lambda (left right)
+            (string< (format "%s" (car left))
+                     (format "%s" (car right)))))))
+
+(defun codex-ide--collab-agent-state-status (state)
+  "Return the status string from collab agent STATE."
+  (codex-ide--collab-agent-status-text
+   (and (listp state) (alist-get 'status state))))
+
+(defun codex-ide--collab-agent-receiver-summary (item)
+  "Return a compact receiver-thread summary for collab agent ITEM."
+  (let ((receivers (delq nil
+                         (mapcar #'codex-ide--short-agent-thread-id
+                                 (or (alist-get 'receiverThreadIds item)
+                                     '())))))
+    (cond
+     ((null receivers) "none")
+     ((= (length receivers) 1) (car receivers))
+     (t (format "%d agents: %s"
+                (length receivers)
+                (string-join receivers ", "))))))
+
+(defun codex-ide--collab-agent-prompt-summary (prompt)
+  "Return a compact prompt summary for collab agent PROMPT."
+  (when (and (stringp prompt)
+             (not (string-empty-p (string-trim prompt))))
+    (let ((single-line
+           (replace-regexp-in-string "[\n\t ]+" " " (string-trim prompt))))
+      (if (> (length single-line) 120)
+          (concat (substring single-line 0 117) "...")
+        single-line))))
+
+(defun codex-ide--render-collab-agent-details
+    (buffer item &optional completion)
+  "Render collab agent ITEM details into BUFFER.
+When COMPLETION is non-nil, render completion-specific state details."
+  (let (rendered-lines)
+    (cl-labels
+        ((append-detail
+          (text face)
+          (let ((range
+                 (codex-ide--append-agent-text
+                  buffer
+                  (codex-ide--item-detail-line text)
+                  (or face 'codex-ide-item-detail-face))))
+            (push range rendered-lines))))
+      (append-detail
+       (format "status: %s"
+               (codex-ide--collab-agent-status-text (alist-get 'status item)))
+       (if (equal (alist-get 'status item) "failed") 'error nil))
+      (append-detail
+       (format "receivers: %s"
+               (codex-ide--collab-agent-receiver-summary item))
+       nil)
+      (when-let* ((prompt (and (not completion)
+                               (codex-ide--collab-agent-prompt-summary
+                                (alist-get 'prompt item)))))
+        (append-detail (format "prompt: %s" prompt) nil))
+      (when completion
+        (dolist (entry (codex-ide--collab-agent-states item))
+          (append-detail
+           (format "agent %s: %s%s"
+                   (or (codex-ide--short-agent-thread-id (car entry))
+                       (format "%s" (car entry)))
+                   (codex-ide--collab-agent-state-status (cdr entry))
+                   (if (alist-get 'message (cdr entry))
+                       " (message available)"
+                     ""))
+           nil))))
+    (nreverse rendered-lines)))
 
 (defun codex-ide--render-item-start-details (session item)
   "Render detail lines for ITEM in SESSION."
@@ -3091,6 +3200,8 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
           (codex-ide--item-detail-line
            (format "args: %s" (json-encode arguments)))
           'codex-ide-item-detail-face)))
+      ("collabAgentToolCall"
+       (codex-ide--render-collab-agent-details buffer item))
       ("fileChange"
        (dolist (change (or (alist-get 'changes item) '()))
          (codex-ide--append-agent-text
@@ -3374,6 +3485,19 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
             buffer
             (codex-ide--item-detail-line "tool call failed")
             'error)))
+        ("collabAgentToolCall"
+         (when state
+           (let ((rendered-lines
+                  (codex-ide--render-collab-agent-details buffer item t)))
+             (when rendered-lines
+               (codex-ide--put-item-state
+                session
+                item-id
+                (plist-put
+                 state
+                 :rendered-detail-lines
+                 (append (plist-get state :rendered-detail-lines)
+                         rendered-lines)))))))
         ("webSearch"
          (let* ((state (or state '()))
                 (rendered-lines
