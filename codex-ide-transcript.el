@@ -85,6 +85,8 @@
 (defvar codex-ide-status-placeholder-text-alist)
 (defvar codex-ide-steering-placeholder-text)
 (defvar codex-ide-model)
+(defvar codex-ide-image-detail)
+(defvar codex-ide-image-thumbnail-max-height)
 (defvar codex-ide-buffer-display-when-approval-required)
 (defvar codex-ide-display-buffer-pop-up-action)
 (defvar codex-ide--display-buffer-other-window-pop-up-action)
@@ -1094,6 +1096,7 @@ Move MARKER after the inserted text."
 (defun codex-ide--delete-input-overlay (session)
   "Delete the active input overlay for SESSION, if any."
   (codex-ide--delete-input-placeholder-overlay session)
+  (codex-ide--delete-pending-local-images-overlay session)
   (when-let* ((overlay (codex-ide-session-input-overlay session)))
     (delete-overlay overlay)
     (setf (codex-ide-session-input-overlay session) nil)))
@@ -1183,6 +1186,7 @@ Move MARKER after the inserted text."
   "Return non-nil when SESSION's input placeholder should be visible."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (and (codex-ide--input-prompt-active-p session)
+       (not (codex-ide--pending-local-images session))
        (codex-ide--current-input-empty-p session)))
 
 (defun codex-ide--current-input-empty-p (&optional session)
@@ -1321,6 +1325,247 @@ Move MARKER after the inserted text."
          'after-string
          (and (codex-ide--input-placeholder-visible-p session)
               (codex-ide--input-placeholder-display-string session)))))))
+
+(defun codex-ide--pending-local-images (&optional session)
+  "Return SESSION's pending local image paths."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (and session
+       (codex-ide--session-metadata-get session :pending-local-images)))
+
+(defun codex-ide--pending-local-image-temp-files (&optional session)
+  "Return SESSION's pending temporary local image files."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (and session
+       (codex-ide--session-metadata-get
+        session
+        :pending-local-image-temp-files)))
+
+(defun codex-ide--delete-local-image-temp-files (paths)
+  "Delete temporary local image PATHS, ignoring missing files."
+  (dolist (path paths)
+    (when (and (stringp path)
+               (file-exists-p path))
+      (ignore-errors
+        (delete-file path)))))
+
+(defun codex-ide--remove-local-image-temp-file (session path)
+  "Remove PATH from SESSION's temporary image files and delete it."
+  (let ((temporary-files (codex-ide--pending-local-image-temp-files session)))
+    (when (member path temporary-files)
+      (codex-ide--delete-local-image-temp-files (list path))
+      (codex-ide--session-metadata-put
+       session
+       :pending-local-image-temp-files
+       (delete path (copy-sequence temporary-files))))))
+
+(defun codex-ide--delete-pending-local-images-overlay (session)
+  "Delete SESSION's pending local image display overlay, if any."
+  (when-let* ((overlay (codex-ide--session-metadata-get
+                        session
+                        :pending-local-images-overlay)))
+    (when (overlayp overlay)
+      (delete-overlay overlay))
+    (codex-ide--session-metadata-put
+     session
+     :pending-local-images-overlay
+     nil)))
+
+(defun codex-ide--local-image-thumbnail-image (path)
+  "Return an image descriptor for local image PATH, or nil."
+  (when (and codex-ide-image-thumbnail-max-height
+             (integerp codex-ide-image-thumbnail-max-height)
+             (> codex-ide-image-thumbnail-max-height 0)
+             (stringp path)
+             (file-readable-p path)
+             (fboundp 'create-image))
+    (ignore-errors
+      (create-image path
+                    nil
+                    nil
+                    :max-height codex-ide-image-thumbnail-max-height
+                    :ascent 'center))))
+
+(defun codex-ide--local-image-thumbnail-string (path)
+  "Return a display string thumbnail for local image PATH, or nil."
+  (when-let* ((image (codex-ide--local-image-thumbnail-image path)))
+    (propertize
+     " "
+     'display image
+     'help-echo (abbreviate-file-name path)
+     'rear-nonsticky t)))
+
+(defun codex-ide--pending-local-image-preview-string (index path)
+  "Return a display token for pending local image PATH at INDEX."
+  (let ((token (propertize
+                (format "[Image #%d]" index)
+                'face 'codex-ide-link-face
+                'help-echo (abbreviate-file-name path))))
+    (if-let* ((thumbnail (codex-ide--local-image-thumbnail-string path)))
+        (concat token " " thumbnail)
+      token)))
+
+(defun codex-ide--pending-local-images-display-string (paths)
+  "Return the pending image display string for PATHS."
+  (when paths
+    (concat
+     " "
+     (mapconcat
+      #'identity
+      (cl-loop for path in paths
+               for index from 1
+               collect (codex-ide--pending-local-image-preview-string
+                        index
+                        path))
+      " "))))
+
+(defun codex-ide--local-image-attachments-display-string (paths)
+  "Return transcript attachment display text for local image PATHS."
+  (when paths
+    (concat
+     "Attached images: "
+     (mapconcat
+      #'identity
+      (cl-loop for path in paths
+               for index from 1
+               collect (codex-ide--pending-local-image-preview-string
+                        index
+                        path))
+      " ")
+     "\n")))
+
+(defun codex-ide--insert-local-image-attachments (paths)
+  "Insert transcript attachment display for local image PATHS.
+Return the inserted range as a cons cell, or nil when nothing was inserted."
+  (when-let* ((display (codex-ide--local-image-attachments-display-string paths)))
+    (let ((start (point)))
+      (insert (propertize display 'face 'codex-ide-item-detail-face))
+      (cons start (point)))))
+
+(defun codex-ide--refresh-pending-local-images-display (&optional session)
+  "Refresh SESSION's pending local image display."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (when session
+    (let* ((paths (codex-ide--pending-local-images session))
+           (buffer (codex-ide-session-buffer session))
+           (marker (codex-ide--input-end-marker session))
+           (overlay (codex-ide--session-metadata-get
+                     session
+                     :pending-local-images-overlay)))
+      (unless (and paths
+                   (buffer-live-p buffer)
+                   (markerp marker)
+                   (eq (marker-buffer marker) buffer))
+        (codex-ide--delete-pending-local-images-overlay session)
+        (setq overlay nil))
+      (when (and paths
+                 (buffer-live-p buffer)
+                 (markerp marker)
+                 (eq (marker-buffer marker) buffer))
+        (with-current-buffer buffer
+          (unless (and (overlayp overlay)
+                       (overlay-buffer overlay))
+            (when (overlayp overlay)
+              (delete-overlay overlay))
+            (setq overlay (make-overlay
+                           (marker-position marker)
+                           (marker-position marker)
+                           buffer
+                           nil
+                           t))
+            (overlay-put overlay 'codex-ide-pending-local-images t)
+            (codex-ide--session-metadata-put
+             session
+             :pending-local-images-overlay
+             overlay))
+          (move-overlay overlay
+                        (marker-position marker)
+                        (marker-position marker)
+                        buffer)
+          (overlay-put overlay 'after-string nil)
+          (overlay-put
+           overlay
+           'before-string
+           (codex-ide--pending-local-images-display-string paths)))))))
+
+(defun codex-ide--add-pending-local-image (session path &optional temporary)
+  "Attach local image PATH to SESSION's editable prompt."
+  (codex-ide--session-metadata-put
+   session
+   :pending-local-images
+   (append (codex-ide--pending-local-images session) (list path)))
+  (when temporary
+    (codex-ide--session-metadata-put
+     session
+     :pending-local-image-temp-files
+     (append (codex-ide--pending-local-image-temp-files session)
+             (list path))))
+  (codex-ide--refresh-pending-local-images-display session))
+
+(defun codex-ide--clear-pending-local-images
+    (session &optional preserve-temporary-files)
+  "Clear SESSION's pending local images."
+  (unless preserve-temporary-files
+    (codex-ide--delete-local-image-temp-files
+     (codex-ide--pending-local-image-temp-files session)))
+  (codex-ide--session-metadata-put session :pending-local-images nil)
+  (codex-ide--session-metadata-put
+   session
+   :pending-local-image-temp-files
+   nil)
+  (codex-ide--delete-pending-local-images-overlay session))
+
+(defun codex-ide--remove-last-pending-local-image (session)
+  "Remove and return SESSION's last pending local image path."
+  (when-let* ((paths (codex-ide--pending-local-images session)))
+    (let ((removed (car (last paths)))
+          (remaining (butlast paths)))
+      (codex-ide--session-metadata-put
+       session
+       :pending-local-images
+       remaining)
+      (codex-ide--remove-local-image-temp-file session removed)
+      (codex-ide--refresh-pending-local-images-display session)
+      removed)))
+
+(defun codex-ide--point-after-pending-local-images-token-p (session)
+  "Return non-nil when point is after SESSION's pending image token."
+  (and session
+       (eq (current-buffer) (codex-ide-session-buffer session))
+       (let ((overlay (codex-ide--session-metadata-get
+                       session
+                       :pending-local-images-overlay)))
+         (and (overlayp overlay)
+              (overlay-buffer overlay)
+              (= (point) (overlay-start overlay))))))
+
+(defun codex-ide--maybe-remove-attached-image-at-point ()
+  "Remove the last pending local image when point is after its token."
+  (when-let* ((session (codex-ide--session-for-buffer (current-buffer))))
+    (when (and (codex-ide--point-after-pending-local-images-token-p session)
+               (codex-ide--pending-local-images session))
+      (let ((removed (codex-ide--remove-last-pending-local-image session)))
+        (when removed
+          (message "Removed attached image: %s"
+                   (file-name-nondirectory removed)))
+        removed))))
+
+;;;###autoload
+(defun codex-ide-delete-backward-or-remove-attached-image (&optional arg)
+  "Delete backward, or remove the attached image token at point."
+  (interactive "p")
+  (if (and (= (or arg 1) 1)
+           (codex-ide--maybe-remove-attached-image-at-point))
+      nil
+    (backward-delete-char-untabify (or arg 1))))
+
+;;;###autoload
+(defun codex-ide-delete-forward-or-remove-attached-image (&optional arg)
+  "Delete forward, or remove the attached image token at point."
+  (interactive "p")
+  (if (and (= (or arg 1) 1)
+           (codex-ide--maybe-remove-attached-image-at-point))
+      nil
+    (delete-char (or arg 1))))
 
 (defun codex-ide--refresh-input-placeholder-after-change (&rest _args)
   "Refresh the active prompt placeholder after editable buffer changes."
@@ -1699,6 +1944,7 @@ Optionally seed it with INITIAL-TEXT."
                (setf (codex-ide-session-input-overlay session) overlay))
              (codex-ide--setup-input-placeholder-hooks)
              (codex-ide--refresh-input-placeholder session)
+             (codex-ide--refresh-pending-local-images-display session)
              (when moving
                (goto-char (codex-ide--input-end-position session)))
              (codex-ide--sync-prompt-minor-mode session))))
@@ -1718,10 +1964,11 @@ When PROMPT-KIND is `steering', indent it under the steering block."
     (codex-ide-renderer-insert-context-summary text))))
 
 (defun codex-ide--freeze-active-input-prompt
-    (&optional session context-summary prompt-kind)
+    (&optional session context-summary prompt-kind local-images)
   "Freeze SESSION's active input prompt as submitted transcript text.
 When CONTEXT-SUMMARY is non-nil, insert it beneath the prompt.
-When PROMPT-KIND is `steering', render it as nested steering input."
+When PROMPT-KIND is `steering', render it as nested steering input.
+When LOCAL-IMAGES is non-nil, render them as submitted attachments."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
@@ -1783,6 +2030,11 @@ When PROMPT-KIND is `steering', render it as nested steering input."
                   steering-prompt-start
                   steering-body-start
                   (codex-ide--input-end-position session))))
+             (when local-images
+               (goto-char (point-max))
+               (when-let* ((range (codex-ide--insert-local-image-attachments
+                                   local-images)))
+                 (codex-ide--freeze-region (car range) (cdr range))))
              (when context-summary
                (goto-char (point-max))
                (let ((range (codex-ide--insert-context-summary
@@ -1866,8 +2118,9 @@ When INITIAL-TEXT is non-nil, seed a newly inserted prompt with it."
            text)
           (goto-char (codex-ide--input-end-position session))
           (codex-ide--refresh-input-placeholder session)
+          (codex-ide--refresh-pending-local-images-display session)
           (codex-ide--transcript-render-context-note-position
-           (codex-ide--input-end-position session)))))))
+           (point-max)))))))
 
 (defun codex-ide--browse-prompt-history (direction)
   "Browse prompt history in DIRECTION for the current Codex session.
@@ -2009,10 +2262,12 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
      (t
       start))))
 
-(defun codex-ide--begin-turn-display (&optional session context-summary quiet)
+(defun codex-ide--begin-turn-display
+    (&optional session context-summary quiet local-images)
   "Freeze the current prompt and show immediate pending output for SESSION.
 When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt.
-When QUIET is non-nil, do not refresh SESSION's header line."
+When QUIET is non-nil, do not refresh SESSION's header line.
+When LOCAL-IMAGES is non-nil, render them as submitted attachments."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
@@ -2038,6 +2293,11 @@ When QUIET is non-nil, do not refresh SESSION's header line."
              (when-let* ((start (codex-ide-session-input-prompt-start-marker session)))
                (codex-ide--style-user-prompt-region start (point-max))
                (codex-ide--freeze-region start (point-max))
+               (when local-images
+                 (goto-char (point-max))
+                 (when-let* ((range (codex-ide--insert-local-image-attachments
+                                     local-images)))
+                   (codex-ide--freeze-region (car range) (cdr range))))
                (when context-summary
                  (setq context-start (point-max))
                  (goto-char context-start)
@@ -4710,6 +4970,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
       (setq-local default-directory working-dir)
       (setq-local codex-ide--session session)
       (codex-ide--delete-input-overlay session)
+      (codex-ide--clear-pending-local-images session)
       (setf (codex-ide-session-current-turn-id session) nil
             (codex-ide-session-current-message-item-id session) nil
             (codex-ide-session-current-message-prefix-inserted session) nil
@@ -5919,9 +6180,13 @@ compatibility with older app-server payloads and global notifications."
   "Return non-nil when SESSION has at least one queued prompt."
   (consp (codex-ide--queued-prompts session)))
 
-(defun codex-ide--queued-prompt-entry (prompt payload)
-  "Return a queued prompt entry for PROMPT and PAYLOAD."
-  (list :prompt prompt :payload payload))
+(defun codex-ide--queued-prompt-entry
+    (prompt payload &optional local-images temporary-local-images)
+  "Return a queued prompt entry for PROMPT, PAYLOAD, and image metadata."
+  (list :prompt prompt
+        :payload payload
+        :local-images local-images
+        :temporary-local-images temporary-local-images))
 
 (defun codex-ide--clear-queued-prompts (session)
   "Clear SESSION's queued prompt metadata."
@@ -6210,12 +6475,14 @@ the mismatch warning only reflects meaningful behavior changes."
 (defun codex-ide--submit-queued-prompt (session)
   "Submit SESSION's next queued prompt as a new turn."
   (let* ((queue (codex-ide--queued-prompts session))
-         (entry (car queue))
-         (prompt (plist-get entry :prompt))
-         (payload (plist-get entry :payload))
-         (thread-id (codex-ide-session-thread-id session))
-         (draft (and (codex-ide--input-prompt-active-p session)
-                     (codex-ide--current-input session))))
+	 (entry (car queue))
+	 (prompt (plist-get entry :prompt))
+	 (payload (plist-get entry :payload))
+	 (local-images (plist-get entry :local-images))
+	 (temporary-local-images (plist-get entry :temporary-local-images))
+	 (thread-id (codex-ide-session-thread-id session))
+	 (draft (and (codex-ide--input-prompt-active-p session)
+	             (codex-ide--current-input session))))
     (unless (and prompt payload)
       (error "No queued Codex prompt"))
     (codex-ide--set-queued-prompts session (cdr queue))
@@ -6226,9 +6493,13 @@ the mismatch warning only reflects meaningful behavior changes."
      (length prompt))
     (codex-ide--delete-running-input-list session)
     (if (codex-ide--input-prompt-active-p session)
-        (codex-ide--replace-current-input session prompt)
+	(codex-ide--replace-current-input session prompt)
       (codex-ide--insert-input-prompt session prompt))
-    (codex-ide--begin-turn-display session (alist-get 'context-summary payload))
+    (codex-ide--begin-turn-display
+     session
+     (alist-get 'context-summary payload)
+     nil
+     local-images)
     (when (and draft (not (string-empty-p draft)))
       (codex-ide--replace-current-input session draft))
     (codex-ide--refresh-running-input-display session)
@@ -6236,7 +6507,8 @@ the mismatch warning only reflects meaningful behavior changes."
     (condition-case err
         (progn
           (codex-ide--send-turn-start session thread-id payload)
-          (codex-ide--after-turn-start-submitted session payload))
+          (codex-ide--after-turn-start-submitted session payload)
+          (codex-ide--delete-local-image-temp-files temporary-local-images))
       (error
        (codex-ide-log-message session "Queued prompt submission failed: %s"
                               (error-message-string err))
@@ -6295,34 +6567,65 @@ the mismatch warning only reflects meaningful behavior changes."
   (interactive)
   (codex-ide--goto-prompt-line 1))
 
-(defun codex-ide--ensure-submittable-prompt (prompt)
-  "Signal a user error unless PROMPT has content."
-  (when (string-empty-p prompt)
+(defun codex-ide--ensure-submittable-prompt (prompt &optional local-images)
+  "Signal a user error unless PROMPT or LOCAL-IMAGES has content."
+  (when (and (string-empty-p (or prompt ""))
+             (null local-images))
     (user-error "Prompt is empty")))
 
-(defun codex-ide--running-prompt-payload (session prompt)
-  "Build turn payload for PROMPT from SESSION's buffer."
-  (with-current-buffer (codex-ide-session-buffer session)
-    (codex-ide--compose-turn-payload prompt)))
+(defun codex-ide--submission-local-images (session local-images)
+  "Return LOCAL-IMAGES plus SESSION's pending local image paths."
+  (append local-images (codex-ide--pending-local-images session)))
 
-(defun codex-ide--prepare-running-prompt (session prompt)
-  "Record and freeze PROMPT for SESSION while a turn is running."
-  (codex-ide--ensure-submittable-prompt prompt)
+(defun codex-ide--submission-image-detail (image-detail)
+  "Return the image detail to use for this submission."
+  (or image-detail codex-ide-image-detail))
+
+(defun codex-ide--running-prompt-payload
+    (session prompt &optional local-images image-detail)
+  "Build turn payload for PROMPT from SESSION's buffer.
+
+LOCAL-IMAGES and IMAGE-DETAIL are forwarded to
+`codex-ide--compose-turn-payload'."
+  (with-current-buffer (codex-ide-session-buffer session)
+    (codex-ide--compose-turn-payload
+     prompt
+     :local-images local-images
+     :image-detail image-detail)))
+
+(defun codex-ide--prepare-running-prompt
+    (session prompt &optional local-images image-detail)
+  "Record and freeze PROMPT for SESSION while a turn is running.
+
+LOCAL-IMAGES and IMAGE-DETAIL are forwarded to the turn payload."
+  (codex-ide--ensure-submittable-prompt prompt local-images)
   (codex-ide--push-prompt-history session prompt)
-  (let ((payload (codex-ide--running-prompt-payload session prompt)))
+  (let ((payload (codex-ide--running-prompt-payload
+                  session
+                  prompt
+                  local-images
+                  image-detail)))
     (unless (eq (current-buffer) (codex-ide-session-buffer session))
       (codex-ide--insert-input-prompt session prompt))
     (codex-ide--freeze-active-input-prompt
      session
      (alist-get 'context-summary payload)
-     'steering)
+     'steering
+     local-images)
     payload))
 
-(defun codex-ide--steer-prompt (&optional prompt)
-  "Submit PROMPT as steering input for the active Codex turn."
+(defun codex-ide--steer-prompt (&optional prompt local-images image-detail)
+  "Submit PROMPT as steering input for the active Codex turn.
+
+LOCAL-IMAGES and IMAGE-DETAIL are forwarded to the app-server input payload."
   (let* ((session (codex-ide--session-for-current-project))
          (thread-id (codex-ide-session-thread-id session))
          (turn-id (codex-ide-session-current-turn-id session))
+         (pending-local-images (codex-ide--pending-local-images session))
+         (effective-local-images
+          (codex-ide--submission-local-images session local-images))
+         (effective-image-detail
+          (codex-ide--submission-image-detail image-detail))
          prompt-to-send
          payload)
     (unless turn-id
@@ -6331,7 +6634,11 @@ the mismatch warning only reflects meaningful behavior changes."
       (user-error "Codex session has no active thread"))
     (codex-ide--ensure-busy-session-submission-origin session)
     (setq prompt-to-send (codex-ide--prompt-for-submission session prompt))
-    (setq payload (codex-ide--prepare-running-prompt session prompt-to-send))
+    (setq payload (codex-ide--prepare-running-prompt
+                   session
+                   prompt-to-send
+                   effective-local-images
+                   effective-image-detail))
     (codex-ide-log-message
      session
      "Steering turn %s (%d chars)"
@@ -6348,6 +6655,8 @@ the mismatch warning only reflects meaningful behavior changes."
           (codex-ide--mark-session-prompt-submitted session)
           (when (alist-get 'included-session-context payload)
             (codex-ide--session-metadata-put session :session-context-sent t))
+          (when pending-local-images
+            (codex-ide--clear-pending-local-images session))
           (codex-ide--refresh-running-input-display session)
           (message "Sent steering input to Codex"))
       (error
@@ -6356,11 +6665,20 @@ the mismatch warning only reflects meaningful behavior changes."
        (codex-ide--reopen-input-after-submit-error session prompt-to-send err)
        (signal (car err) (cdr err))))))
 
-(defun codex-ide--queue-prompt (&optional prompt)
-  "Queue PROMPT to run after the active Codex turn finishes."
+(defun codex-ide--queue-prompt (&optional prompt local-images image-detail)
+  "Queue PROMPT to run after the active Codex turn finishes.
+
+LOCAL-IMAGES and IMAGE-DETAIL are forwarded to the queued turn payload."
   (let* ((session (codex-ide--session-for-current-project))
          (thread-id (codex-ide-session-thread-id session))
          (turn-id (codex-ide-session-current-turn-id session))
+         (pending-local-images (codex-ide--pending-local-images session))
+         (pending-temporary-local-images
+          (codex-ide--pending-local-image-temp-files session))
+         (effective-local-images
+          (codex-ide--submission-local-images session local-images))
+         (effective-image-detail
+          (codex-ide--submission-image-detail image-detail))
          prompt-to-send
          payload)
     (unless turn-id
@@ -6369,13 +6687,25 @@ the mismatch warning only reflects meaningful behavior changes."
       (user-error "Codex session has no active thread"))
     (codex-ide--ensure-busy-session-submission-origin session)
     (setq prompt-to-send (codex-ide--prompt-for-submission session prompt))
-    (codex-ide--ensure-submittable-prompt prompt-to-send)
+    (codex-ide--ensure-submittable-prompt
+     prompt-to-send
+     effective-local-images)
     (codex-ide--push-prompt-history session prompt-to-send)
-    (setq payload (codex-ide--running-prompt-payload session prompt-to-send))
+    (setq payload (codex-ide--running-prompt-payload
+                   session
+                   prompt-to-send
+                   effective-local-images
+                   effective-image-detail))
     (codex-ide--set-queued-prompts
      session
      (append (codex-ide--queued-prompts session)
-             (list (codex-ide--queued-prompt-entry prompt-to-send payload))))
+	    (list (codex-ide--queued-prompt-entry
+	            prompt-to-send
+	            payload
+	            effective-local-images
+	            pending-temporary-local-images))))
+    (when pending-local-images
+      (codex-ide--clear-pending-local-images session t))
     (when (alist-get 'included-session-context payload)
       (codex-ide--session-metadata-put session :session-context-sent t))
     (when (eq (current-buffer) (codex-ide-session-buffer session))
@@ -6388,11 +6718,19 @@ the mismatch warning only reflects meaningful behavior changes."
      (length prompt-to-send))
     (message "Queued prompt for the next Codex turn")))
 
-(defun codex-ide--submit-prompt (&optional prompt)
-  "Submit PROMPT to the current Codex session."
+(defun codex-ide--submit-prompt (&optional prompt local-images image-detail)
+  "Submit PROMPT to the current Codex session.
+
+LOCAL-IMAGES is a list of local image paths to send with PROMPT.
+IMAGE-DETAIL, when non-nil, is forwarded to each image input item."
   (interactive)
   (let* ((session (codex-ide--session-for-current-project))
          (thread-id (codex-ide-session-thread-id session))
+         (pending-local-images (codex-ide--pending-local-images session))
+         (effective-local-images
+          (codex-ide--submission-local-images session local-images))
+         (effective-image-detail
+          (codex-ide--submission-image-detail image-detail))
          prompt-to-send
          payload)
     (if (codex-ide-session-current-turn-id session)
@@ -6400,12 +6738,20 @@ the mismatch warning only reflects meaningful behavior changes."
           (codex-ide--ensure-busy-session-submission-origin session)
           (setq prompt-to-send (codex-ide--prompt-for-submission session prompt))
           (pcase codex-ide-running-submit-action
-            ('queue (codex-ide--queue-prompt prompt-to-send))
-            (_ (codex-ide--steer-prompt prompt-to-send))))
+            ('queue (codex-ide--queue-prompt
+                     prompt-to-send
+                     local-images
+                     image-detail))
+            (_ (codex-ide--steer-prompt
+                prompt-to-send
+                local-images
+                image-detail))))
       (setq prompt-to-send (codex-ide--prompt-for-submission session prompt))
       (unless thread-id
         (user-error "Codex session has no active thread"))
-      (codex-ide--ensure-submittable-prompt prompt-to-send)
+      (codex-ide--ensure-submittable-prompt
+       prompt-to-send
+       effective-local-images)
       (codex-ide--push-prompt-history session prompt-to-send)
       (codex-ide--register-submitted-turn-prompt session prompt-to-send)
       (codex-ide-log-message
@@ -6417,13 +6763,22 @@ the mismatch warning only reflects meaningful behavior changes."
         (codex-ide--insert-input-prompt session prompt-to-send))
       (setq payload
             (with-current-buffer (codex-ide-session-buffer session)
-              (codex-ide--compose-turn-payload prompt-to-send)))
-      (codex-ide--begin-turn-display session (alist-get 'context-summary payload))
+              (codex-ide--compose-turn-payload
+               prompt-to-send
+               :local-images effective-local-images
+               :image-detail effective-image-detail)))
+      (codex-ide--begin-turn-display
+       session
+       (alist-get 'context-summary payload)
+       nil
+       effective-local-images)
       (redisplay)
       (condition-case err
           (progn
             (codex-ide--send-turn-start session thread-id payload)
-            (codex-ide--after-turn-start-submitted session payload))
+            (codex-ide--after-turn-start-submitted session payload)
+            (when pending-local-images
+              (codex-ide--clear-pending-local-images session)))
         (error
          (codex-ide-log-message session "Prompt submission failed: %s" (error-message-string err))
          (codex-ide--reopen-input-after-submit-error session prompt-to-send err)

@@ -10,6 +10,25 @@
 (require 'codex-ide-test-fixtures)
 (require 'codex-ide)
 
+(defun codex-ide-context-test--display-image-file (display)
+  "Return DISPLAY's image file, or nil."
+  (and (consp display)
+       (eq (car display) 'image)
+       (plist-get (cdr display) :file)))
+
+(defun codex-ide-context-test--buffer-has-image-display-p (path)
+  "Return non-nil when the current buffer has an image display for PATH."
+  (catch 'found
+    (let ((pos (point-min)))
+      (while (< pos (point-max))
+        (when (equal (codex-ide-context-test--display-image-file
+                      (get-text-property pos 'display))
+                     path)
+          (throw 'found t))
+        (setq pos (or (next-single-property-change pos 'display nil (point-max))
+                      (point-max)))))
+    nil))
+
 (ert-deftest codex-ide-first-submit-injects-session-context-once ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-path (codex-ide-test--make-project-file
@@ -147,6 +166,151 @@
 							   prompt-text))
 				   (should (string-match-p "Selected region text: message"
 							   prompt-text))))))
+
+(ert-deftest codex-ide-compose-turn-input-appends-local-images ()
+  (let ((project-dir (codex-ide-test--make-temp-project)))
+    (codex-ide-test-with-fixture project-dir
+      (let* ((session (codex-ide--create-process-session))
+             (image-path (expand-file-name "screenshot.png" project-dir))
+             (input (let ((codex-ide--session session))
+                      (codex-ide--compose-turn-input
+                       "Describe this screenshot"
+                       :local-images (list image-path)
+                       :image-detail "high")))
+             (text-item (aref input 0))
+             (image-item (aref input 1)))
+        (should (= (length input) 2))
+        (should (equal (alist-get 'type text-item) "text"))
+        (should (string-match-p "Describe this screenshot"
+                                (alist-get 'text text-item)))
+        (should (equal (alist-get 'type image-item) "localImage"))
+        (should (equal (alist-get 'path image-item) image-path))
+        (should (equal (alist-get 'detail image-item) "high"))))))
+
+(ert-deftest codex-ide-submit-prompt-sends-local-images ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (image-path (expand-file-name "screenshot.png" project-dir))
+         (submitted nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-with-image")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "Describe this")
+            (cl-letf (((symbol-function 'codex-ide--request-sync)
+                       (lambda (_session method params)
+                         (when (equal method "turn/start")
+                           (setq submitted params))
+                         nil)))
+              (codex-ide--submit-prompt nil (list image-path) "auto")))
+          (let* ((input (alist-get 'input submitted))
+                 (text-item (aref input 0))
+                 (image-item (aref input 1)))
+            (should (equal (alist-get 'threadId submitted) "thread-with-image"))
+            (should (string-match-p "Describe this"
+                                    (alist-get 'text text-item)))
+            (should (equal (alist-get 'type image-item) "localImage"))
+            (should (equal (alist-get 'path image-item) image-path))
+            (should (equal (alist-get 'detail image-item) "auto"))))))))
+
+(ert-deftest codex-ide-submit-prompt-renders-local-image-thumbnail-in-transcript ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (image-path (codex-ide-test--make-project-file
+                      project-dir
+                      "screenshot.png"
+                      "fake-png"))
+         (submitted nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-with-image")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "Describe this")
+            (codex-ide--add-pending-local-image session image-path)
+            (cl-letf (((symbol-function 'create-image)
+                       (lambda (file &rest _args)
+                         `(image :file ,file)))
+                      ((symbol-function 'codex-ide--request-sync)
+                       (lambda (_session method params)
+                         (when (equal method "turn/start")
+                           (setq submitted params))
+                         nil)))
+              (codex-ide--submit-prompt))
+            (should (string-match-p "Attached images:" (buffer-string)))
+            (should (string-match-p "\\[Image #1\\]" (buffer-string)))
+            (should (codex-ide-context-test--buffer-has-image-display-p
+                     image-path)))
+          (let* ((input (alist-get 'input submitted))
+                 (text-item (aref input 0))
+                 (image-item (aref input 1)))
+            (should-not (string-match-p image-path (alist-get 'text text-item)))
+            (should (equal (alist-get 'type image-item) "localImage"))
+            (should (equal (alist-get 'path image-item) image-path))))))))
+
+(ert-deftest codex-ide-submit-prompt-sends-and-clears-pending-local-images ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (image-path (expand-file-name "screenshot.png" project-dir))
+         (submitted nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-with-pending-image")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "Describe this")
+            (codex-ide--add-pending-local-image session image-path)
+            (cl-letf (((symbol-function 'codex-ide--request-sync)
+                       (lambda (_session method params)
+                         (when (equal method "turn/start")
+                           (setq submitted params))
+                         nil)))
+              (codex-ide--submit-prompt)))
+          (let* ((input (alist-get 'input submitted))
+                 (image-item (aref input 1)))
+            (should (equal (alist-get 'type image-item) "localImage"))
+            (should (equal (alist-get 'path image-item) image-path))
+            (should-not (codex-ide--pending-local-images session))
+            (should-not (codex-ide--session-metadata-get
+                         session
+                         :pending-local-images-overlay))))))))
+
+(ert-deftest codex-ide-submit-prompt-allows-image-only-pending-input ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (image-path (expand-file-name "screenshot.png" project-dir))
+         (submitted nil))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-image-only")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session nil)
+            (codex-ide--add-pending-local-image session image-path)
+            (cl-letf (((symbol-function 'codex-ide--request-sync)
+                       (lambda (_session method params)
+                         (when (equal method "turn/start")
+                           (setq submitted params))
+                         nil)))
+              (codex-ide--submit-prompt)))
+          (let* ((input (alist-get 'input submitted))
+                 (image-item (aref input 1)))
+            (should (equal (alist-get 'type image-item) "localImage"))
+            (should (equal (alist-get 'path image-item) image-path))))))))
+
+(ert-deftest codex-ide-submit-prompt-keeps-pending-local-images-on-error ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (image-path (expand-file-name "screenshot.png" project-dir)))
+    (codex-ide-test-with-fixture project-dir
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (setf (codex-ide-session-thread-id session) "thread-image-error")
+          (with-current-buffer (codex-ide-session-buffer session)
+            (codex-ide--insert-input-prompt session "Describe this")
+            (codex-ide--add-pending-local-image session image-path)
+            (cl-letf (((symbol-function 'codex-ide--request-sync)
+                       (lambda (&rest _)
+                         (error "network down"))))
+              (should-error (codex-ide--submit-prompt) :type 'error)))
+          (should (equal (codex-ide--pending-local-images session)
+                         (list image-path))))))))
 
 (ert-deftest codex-ide-buffer-selection-context-includes-bounds-and-text ()
   (with-temp-buffer

@@ -17,6 +17,8 @@
 (declare-function codex-ide-prompt "codex-ide" ())
 (declare-function codex-ide-queue "codex-ide" ())
 (declare-function codex-ide-reset-current-session "codex-ide" ())
+(declare-function codex-ide-submit-clipboard-image "codex-ide-images" ())
+(declare-function codex-ide-submit-image "codex-ide-images" (path))
 (declare-function codex-ide-steer "codex-ide" ())
 (declare-function codex-ide-switch-to-buffer "codex-ide" ())
 (declare-function codex-ide-show-cli-info "codex-ide" ())
@@ -44,6 +46,7 @@
 (defvar codex-ide-cli-extra-flags)
 (defvar codex-ide-model)
 (defvar codex-ide-fast)
+(defvar codex-ide-image-detail)
 (defvar codex-ide-reasoning-effort)
 (defvar codex-ide-running-submit-action)
 (defvar codex-ide-approval-policy)
@@ -425,6 +428,7 @@
   (customize-save-variable 'codex-ide-cli-extra-flags codex-ide-cli-extra-flags)
   (customize-save-variable 'codex-ide-model codex-ide-model)
   (customize-save-variable 'codex-ide-fast codex-ide-fast)
+  (customize-save-variable 'codex-ide-image-detail codex-ide-image-detail)
   (customize-save-variable 'codex-ide-reasoning-effort codex-ide-reasoning-effort)
   (customize-save-variable 'codex-ide-running-submit-action
                            codex-ide-running-submit-action)
@@ -449,6 +453,8 @@
 			  ["Session"
 			   ("b" "Switch to session buffer" codex-ide-switch-to-buffer)
 			   ("p" "Send prompt from minibuffer" codex-ide-prompt)
+			   ("i" "Attach image file" codex-ide-submit-image)
+			   ("I" "Attach clipboard image" codex-ide-submit-clipboard-image)
 			   ("S" "Steer active turn" codex-ide-steer
 			    :if codex-ide--in-session-buffer-p)
 			   ("Q" "Queue next turn" codex-ide-queue
