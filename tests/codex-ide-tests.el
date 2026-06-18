@@ -2942,9 +2942,8 @@
                                 (buffer-string)))))))
 
 (ert-deftest codex-ide-collab-agent-message-open-button-opens-agent-buffer ()
-  (let ((buffer-name "*codex-sub-agent[codex-ide:a]*"))
-    (when-let* ((buffer (get-buffer buffer-name)))
-      (kill-buffer buffer))
+  (let ((thread-id "thread-agent-a")
+        buffer-name)
     (unwind-protect
         (with-temp-buffer
           (codex-ide-session-mode)
@@ -2953,6 +2952,10 @@
                           :buffer (current-buffer)
                           :status "idle"
                           :item-states (make-hash-table :test 'equal))))
+            (setq buffer-name
+                  (codex-ide--collab-agent-buffer-name session thread-id))
+            (when-let* ((buffer (get-buffer buffer-name)))
+              (kill-buffer buffer))
             (setq-local codex-ide--session session)
             (codex-ide--insert-input-prompt session "submitted prompt")
             (codex-ide--begin-turn-display session)
@@ -2962,17 +2965,17 @@
                    (cons 'type "collabAgentToolCall")
                    (cons 'tool "wait")
                    (cons 'status "inProgress")
-                   (cons 'receiverThreadIds ["thread-agent-a"])))
+                   (cons 'receiverThreadIds (vector thread-id))))
             (codex-ide--render-item-completion
              session
              (list (cons 'id "call-1")
                    (cons 'type "collabAgentToolCall")
                    (cons 'tool "wait")
                    (cons 'status "completed")
-                   (cons 'receiverThreadIds ["thread-agent-a"])
+                   (cons 'receiverThreadIds (vector thread-id))
                    (cons 'agentsStates
                          (list
-                          (cons "thread-agent-a"
+                          (cons thread-id
                                 (list (cons 'status "completed")
                                       (cons 'message
                                             "Agent-specific final message")))))))
@@ -2990,7 +2993,8 @@
               (should (string-match-p "Parent item: call-1" (buffer-string)))
               (should (string-match-p "Agent-specific final message"
                                       (buffer-string))))))
-      (when-let* ((buffer (get-buffer buffer-name)))
+      (when-let* (((stringp buffer-name))
+                  (buffer (get-buffer buffer-name)))
         (kill-buffer buffer)))))
 
 (ert-deftest codex-ide-command-output-face-extends-lines ()
