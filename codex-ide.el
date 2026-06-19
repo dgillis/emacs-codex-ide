@@ -321,6 +321,7 @@ thread-list limit."
 (require 'codex-ide-transient)
 (require 'codex-ide-mcp-bridge)
 (require 'codex-ide-session)
+(require 'codex-ide-loop)
 (require 'codex-ide-delete-session-thread)
 
 (provide 'codex-ide)

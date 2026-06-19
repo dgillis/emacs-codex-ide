@@ -19,6 +19,7 @@
 
 (autoload 'codex-ide-session-buffer-list "codex-ide-session-buffer-list" nil t)
 (autoload 'codex-ide-session-diff-open "codex-ide-diff-view" nil t)
+(autoload 'codex-ide-loop-jump-or-create "codex-ide-loop" nil t)
 (autoload 'codex-ide-status "codex-ide-status-mode" nil t)
 (autoload 'codex-ide-submit "codex-ide-transcript" nil t)
 
@@ -29,11 +30,17 @@
 (defvar codex-ide-slash-command--suppress-completion-submit nil
   "Non-nil while slash command completion should not submit on exit.")
 
+(defconst codex-ide-slash-command--loop-entry
+  '("loop" codex-ide-loop-jump-or-create
+    "Jump to or create this session's loop buffer.")
+  "Default slash command entry for Codex loop buffers.")
+
 (defcustom codex-ide-slash-commands
-  '(("buffers" codex-ide-session-buffer-list "List live Codex session buffers.")
+  `(("buffers" codex-ide-session-buffer-list "List live Codex session buffers.")
     ("diff" codex-ide-session-diff-open "Open the session diff view.")
     ("fast" codex-ide-slash-command-toggle-fast
      "Toggle fast mode for this session.")
+    ,codex-ide-slash-command--loop-entry
     ("model" codex-ide-slash-command-set-model
      "Set the model and reasoning effort for this session.")
     ("reasoning" codex-ide-slash-command-set-reasoning-effort
@@ -48,6 +55,18 @@ symbol, and DESCRIPTION is shown in completion annotations."
                        (function :tag "Interactive command")
                        (string :tag "Description")))
   :group 'codex-ide-slash-command)
+
+(defun codex-ide-slash-command--ensure-core-loop-entry ()
+  "Ensure `/loop' is present after reloading older core command defaults."
+  (when (and (not (assoc "loop" codex-ide-slash-commands))
+             (assoc "buffers" codex-ide-slash-commands)
+             (assoc "diff" codex-ide-slash-commands)
+             (assoc "sessions" codex-ide-slash-commands))
+    (setq codex-ide-slash-commands
+          (append codex-ide-slash-commands
+                  (list codex-ide-slash-command--loop-entry)))))
+
+(codex-ide-slash-command--ensure-core-loop-entry)
 
 (defun codex-ide-slash-command--current-session ()
   "Return the current Codex session for a slash command."

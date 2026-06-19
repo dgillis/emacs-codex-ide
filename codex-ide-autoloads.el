@@ -603,6 +603,41 @@ otherwise use the most recent completed turn.
 (autoload 'codex-ide-slash-command-complete-or-submit "codex-ide-slash-command"
 "Complete the active slash command or submit it when complete." t)
 (register-definition-prefixes "codex-ide-slash-command" '("codex-ide-slash-command"))
+
+
+;;; Generated autoloads from codex-ide-loop.el
+
+(autoload 'codex-ide-loop-nav-forward "codex-ide-loop"
+"Move to the next interactive button in the current loop buffer." t)
+(autoload 'codex-ide-loop-nav-backward "codex-ide-loop"
+"Move to the previous interactive button in the current loop buffer." t)
+(autoload 'codex-ide-loop-create "codex-ide-loop"
+"Create or show a loop buffer for the current Codex session.
+INTERVAL is read interactively and accepts suffixes supported by
+`codex-ide-loop-default-interval'.  The new loop starts paused.
+
+(fn INTERVAL)" t)
+(autoload 'codex-ide-loop-jump-or-create "codex-ide-loop"
+"Jump to this session's loop buffer, or create one with INTERVAL.
+
+This command is session-buffer scoped.  It reuses the loop associated with the
+current Codex session buffer when one exists.  Otherwise, it prompts for an
+interval unless INTERVAL was supplied programmatically.
+
+(fn &optional INTERVAL)" t)
+(autoload 'codex-ide-loop-start "codex-ide-loop"
+"Start or resume the current Codex loop." t)
+(autoload 'codex-ide-loop-pause "codex-ide-loop"
+"Pause the current Codex loop." t)
+(autoload 'codex-ide-loop-stop "codex-ide-loop"
+"Stop and detach the current Codex loop." t)
+(autoload 'codex-ide-loop-send-now "codex-ide-loop"
+"Submit the current loop prompt immediately when the session is ready." t)
+(autoload 'codex-ide-loop-jump-to-session "codex-ide-loop"
+"Show the session buffer attached to the current Codex loop." t)
+(autoload 'codex-ide-loop-jump-to-loop "codex-ide-loop"
+"Show the loop buffer attached to the current Codex session." t)
+(register-definition-prefixes "codex-ide-loop" '("codex-ide-loop-"))
 
 ;;; End of scraped data
 

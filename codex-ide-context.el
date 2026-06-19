@@ -285,18 +285,22 @@ DETAIL, when non-nil, is applied to each image item."
                               (not (string-empty-p path))))
                        paths))))
 
-(cl-defun codex-ide--compose-turn-payload (prompt &key local-images image-detail)
+(cl-defun codex-ide--compose-turn-payload
+    (prompt &key local-images image-detail suppress-context)
   "Build prompt payload metadata for PROMPT in the current working directory.
 
 LOCAL-IMAGES is a list of image file paths to include after the text input.
-IMAGE-DETAIL, when non-nil, is forwarded to each `localImage' item."
+IMAGE-DETAIL, when non-nil, is forwarded to each `localImage' item.
+When SUPPRESS-CONTEXT is non-nil, omit Emacs session and prompt context."
   (let* ((context-payload
-          (when (codex-ide--emacs-context-policy-includes-p 'prompt)
+          (when (and (not suppress-context)
+                     (codex-ide--emacs-context-policy-includes-p 'prompt))
             (codex-ide--context-payload-for-prompt)))
          (context-prefix (alist-get 'formatted context-payload))
          (session (codex-ide--get-default-session-for-current-buffer))
          (session-prefix
-          (when (and (codex-ide--emacs-context-policy-includes-p 'session)
+          (when (and (not suppress-context)
+                     (codex-ide--emacs-context-policy-includes-p 'session)
                      (not (codex-ide--session-metadata-get
                            session
                            :session-context-sent)))
@@ -314,7 +318,8 @@ IMAGE-DETAIL, when non-nil, is forwarded to each `localImage' item."
                   local-images
                   image-detail))))))
 
-(cl-defun codex-ide--compose-turn-input (prompt &key local-images image-detail)
+(cl-defun codex-ide--compose-turn-input
+    (prompt &key local-images image-detail suppress-context)
   "Build `turn/start' input items for PROMPT.
 
 LOCAL-IMAGES and IMAGE-DETAIL are forwarded to
@@ -322,7 +327,8 @@ LOCAL-IMAGES and IMAGE-DETAIL are forwarded to
   (alist-get 'input (codex-ide--compose-turn-payload
                      prompt
                      :local-images local-images
-                     :image-detail image-detail)))
+                     :image-detail image-detail
+                     :suppress-context suppress-context)))
 
 (defun codex-ide--strip-leading-context-block (text open-tag close-tag)
   "Remove a leading context block delimited by OPEN-TAG and CLOSE-TAG from TEXT."

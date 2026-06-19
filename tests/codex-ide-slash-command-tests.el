@@ -34,7 +34,10 @@
 
 (ert-deftest codex-ide-slash-command-default-registry-contains-session-commands ()
   (should (equal (codex-ide-slash-command-names)
-                 '("buffers" "diff" "fast" "model" "reasoning" "sessions")))
+                 '("buffers" "diff" "fast" "loop" "model" "reasoning" "sessions")))
+  (should (eq (codex-ide-slash-command-entry-command
+               (codex-ide-slash-command-lookup "loop"))
+              'codex-ide-loop-jump-or-create))
   (should (eq (codex-ide-slash-command-entry-command
                (codex-ide-slash-command-lookup "model"))
               'codex-ide-slash-command-set-model))
@@ -59,6 +62,15 @@
         (codex-ide-slash-command-test--called nil))
     (should (codex-ide-slash-command-dispatch-prompt "/test"))
     (should codex-ide-slash-command-test--called)))
+
+(ert-deftest codex-ide-slash-command-loop-dispatches-loop-command ()
+  (let (called)
+    (cl-letf (((symbol-function 'codex-ide-loop-jump-or-create)
+               (lambda ()
+                 (interactive)
+                 (setq called t))))
+      (should (codex-ide-slash-command-dispatch-prompt "/loop"))
+      (should called))))
 
 (ert-deftest codex-ide-slash-command-rejects-unknown-command ()
   (let ((codex-ide-slash-commands

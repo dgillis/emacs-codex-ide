@@ -142,6 +142,34 @@
 							       text)))))
 				       (should (string-match-p "Explain this" text))))))))
 
+(ert-deftest codex-ide-compose-turn-input-can-suppress-emacs-context ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (file-path (codex-ide-test--make-project-file
+                     project-dir "src/example.el" "(message \"hello\")\n")))
+    (codex-ide-test-with-fixture project-dir
+				 (let ((codex-ide-session-baseline-prompt
+                                        "Session instructions")
+				       (codex-ide-emacs-context-policy 'all))
+				   (with-current-buffer (find-file-noselect file-path)
+				     (setq-local default-directory
+                                                 (file-name-as-directory project-dir))
+				     (codex-ide--track-active-buffer (current-buffer)))
+				   (let* ((session (codex-ide--create-process-session))
+					  (text (alist-get
+						 'text
+						 (aref (let ((codex-ide--session session))
+							 (codex-ide--compose-turn-input
+                                                          "Explain this"
+                                                          :suppress-context t))
+						       0))))
+				     (should (equal text "Explain this"))
+				     (should-not (string-match-p
+                                                  "\\[Emacs session context\\]"
+                                                  text))
+				     (should-not (string-match-p
+                                                  "\\[Emacs prompt context\\]"
+                                                  text)))))))
+
 (ert-deftest codex-ide-compose-turn-input-includes-selected-region-when-active ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-path (codex-ide-test--make-project-file

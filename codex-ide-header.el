@@ -25,6 +25,11 @@
   :type 'number
   :group 'codex-ide)
 
+(defvar codex-ide-header-extra-summary-functions nil
+  "Hook of functions that return extra header summaries for a session.
+Each function receives one argument, the `codex-ide-session' object, and should
+return a propertized string or nil.")
+
 (defun codex-ide--update-mode-line (&optional session)
   "Refresh the mode line indicator for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
@@ -181,6 +186,20 @@ When RAW-HEADER is non-nil, escape percent signs for `header-line-format'."
                   (format " limit:%s" reached)
                 "")))))
 
+(defun codex-ide--header-extra-summaries (session)
+  "Return extra header summaries for SESSION."
+  (delq nil
+        (mapcar
+         (lambda (function)
+           (when (functionp function)
+             (condition-case err
+                 (funcall function session)
+               (error
+                (message "Codex header summary failed: %s"
+                         (error-message-string err))
+                nil))))
+         codex-ide-header-extra-summary-functions)))
+
 (defun codex-ide--update-header-line (&optional session)
   "Refresh the header line for SESSION."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
@@ -206,12 +225,14 @@ When RAW-HEADER is non-nil, escape percent signs for `header-line-format'."
                (concat
                 " "
                 (string-join
-                 (delq nil
-                       (list
-                        focus
-                        model-summary
-                        rate-limit-summary
-                        token-context-summary))
+                 (append
+                  (delq nil
+                        (list
+                         focus
+                         model-summary
+                         rate-limit-summary
+                         token-context-summary))
+                  (codex-ide--header-extra-summaries session))
                  " | "))
                'face 'codex-ide-header-line-face)))
       (codex-ide--update-mode-line session))))

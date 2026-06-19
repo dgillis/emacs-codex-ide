@@ -87,6 +87,7 @@
 (defvar codex-ide-placeholder-ellipsis-animation-interval)
 (defvar codex-ide-status-placeholder-text-alist)
 (defvar codex-ide-steering-placeholder-text)
+(defvar codex-ide-loop-session-placeholder-function nil)
 (defvar codex-ide-model)
 (defvar codex-ide-image-detail)
 (defvar codex-ide-image-thumbnail-max-height)
@@ -1138,7 +1139,10 @@ Move MARKER after the inserted text."
           (if (string= status "approval")
               (codex-ide--approval-placeholder-text session text)
             text))
-      codex-ide-prompt-placeholder-text)))
+      (or (and session
+               (functionp codex-ide-loop-session-placeholder-function)
+               (funcall codex-ide-loop-session-placeholder-function session))
+          codex-ide-prompt-placeholder-text))))
 
 (defconst codex-ide--input-placeholder-ellipsis-frames
   '("." ".." "..." "")
@@ -2256,11 +2260,12 @@ DIRECTION should be -1 for a previous prompt line and 1 for a next prompt line."
       start))))
 
 (defun codex-ide--begin-turn-display
-    (&optional session context-summary quiet local-images)
+    (&optional session context-summary quiet local-images metadata-line)
   "Freeze the current prompt and show immediate pending output for SESSION.
 When CONTEXT-SUMMARY is non-nil, insert it beneath the submitted prompt.
 When QUIET is non-nil, do not refresh SESSION's header line.
-When LOCAL-IMAGES is non-nil, render them as submitted attachments."
+When LOCAL-IMAGES is non-nil, render them as submitted attachments.
+When METADATA-LINE is non-nil, insert it beneath the submitted prompt."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
@@ -2279,7 +2284,8 @@ When LOCAL-IMAGES is non-nil, render them as submitted attachments."
                       (codex-ide-session-input-prompt-start-marker session)
                       buffer)
                      (point-max)))
-                context-start)
+                context-start
+                metadata-start)
            (codex-ide--with-transcript-render-transaction-at
             (session buffer transaction-position)
             (codex-ide--delete-running-input-list session)
@@ -2295,7 +2301,12 @@ When LOCAL-IMAGES is non-nil, render them as submitted attachments."
                 (setq context-start (point-max))
                 (goto-char context-start)
                 (codex-ide--insert-context-summary context-summary)
-                (codex-ide--freeze-region context-start (point))))
+                (codex-ide--freeze-region context-start (point)))
+              (when metadata-line
+                (setq metadata-start (point-max))
+                (goto-char metadata-start)
+                (codex-ide--insert-context-summary metadata-line)
+                (codex-ide--freeze-region metadata-start (point))))
             (codex-ide--delete-input-overlay session)
             (codex-ide--sync-prompt-minor-mode session)
             (when-let* ((start (codex-ide-session-input-prompt-start-marker session)))
@@ -6574,7 +6585,7 @@ the mismatch warning only reflects meaningful behavior changes."
   (or image-detail codex-ide-image-detail))
 
 (defun codex-ide--running-prompt-payload
-    (session prompt &optional local-images image-detail)
+    (session prompt &optional local-images image-detail suppress-context)
   "Build turn payload for PROMPT from SESSION's buffer.
 
 LOCAL-IMAGES and IMAGE-DETAIL are forwarded to
@@ -6583,7 +6594,8 @@ LOCAL-IMAGES and IMAGE-DETAIL are forwarded to
     (codex-ide--compose-turn-payload
      prompt
      :local-images local-images
-     :image-detail image-detail)))
+     :image-detail image-detail
+     :suppress-context suppress-context)))
 
 (defun codex-ide--prepare-running-prompt
     (session prompt &optional local-images image-detail)
@@ -6844,14 +6856,15 @@ Return non-nil when PROMPT was a slash command."
          (codex-ide--reopen-input-after-submit-error session prompt err)
          (signal (car err) (cdr err)))))))
 
-(defun codex-ide--submit-prompt (&optional prompt local-images image-detail)
-  "Submit PROMPT to the current Codex session.
+(defun codex-ide--submit-prompt-to-session
+    (session &optional prompt local-images image-detail metadata-line suppress-context)
+  "Submit PROMPT to SESSION.
 
 LOCAL-IMAGES is a list of local image paths to send with PROMPT.
-IMAGE-DETAIL, when non-nil, is forwarded to each image input item."
-  (interactive)
-  (let* ((session (codex-ide--session-for-current-project))
-         (thread-id (codex-ide-session-thread-id session))
+IMAGE-DETAIL, when non-nil, is forwarded to each image input item.
+METADATA-LINE, when non-nil, is rendered beneath the submitted prompt.
+When SUPPRESS-CONTEXT is non-nil, omit Emacs session and prompt context."
+  (let* ((thread-id (codex-ide-session-thread-id session))
          (pending-local-images (codex-ide--pending-local-images session))
          (effective-local-images
           (codex-ide--submission-local-images session local-images))
@@ -6894,12 +6907,14 @@ IMAGE-DETAIL, when non-nil, is forwarded to each image input item."
                 (codex-ide--compose-turn-payload
                  prompt-to-send
                  :local-images effective-local-images
-                 :image-detail effective-image-detail)))
+                 :image-detail effective-image-detail
+                 :suppress-context suppress-context)))
         (codex-ide--begin-turn-display
          session
          (alist-get 'context-summary payload)
          nil
-         effective-local-images)
+         effective-local-images
+         metadata-line)
         (redisplay)
         (condition-case err
             (progn
@@ -6911,6 +6926,18 @@ IMAGE-DETAIL, when non-nil, is forwarded to each image input item."
            (codex-ide-log-message session "Prompt submission failed: %s" (error-message-string err))
            (codex-ide--reopen-input-after-submit-error session prompt-to-send err)
            (signal (car err) (cdr err))))))))
+
+(defun codex-ide--submit-prompt (&optional prompt local-images image-detail)
+  "Submit PROMPT to the current Codex session.
+
+LOCAL-IMAGES is a list of local image paths to send with PROMPT.
+IMAGE-DETAIL, when non-nil, is forwarded to each image input item."
+  (interactive)
+  (codex-ide--submit-prompt-to-session
+   (codex-ide--session-for-current-project)
+   prompt
+   local-images
+   image-detail))
 
 ;;;###autoload
 (defun codex-ide-submit ()
@@ -6929,6 +6956,34 @@ IMAGE-DETAIL, when non-nil, is forwarded to each image input item."
   "Queue the current prompt as the next Codex turn."
   (interactive)
   (codex-ide--queue-prompt))
+
+(cl-defun codex-ide-transcript-submit-prompt-to-session
+    (session prompt &key local-images image-detail metadata-line suppress-context)
+  "Submit PROMPT to exactly SESSION.
+
+LOCAL-IMAGES, IMAGE-DETAIL, METADATA-LINE, and SUPPRESS-CONTEXT are forwarded
+to the normal prompt submission path.  This helper is for callers outside the
+session buffer that already hold a concrete session object."
+  (unless (codex-ide-session-p session)
+    (user-error "No Codex session provided"))
+  (unless (process-live-p (codex-ide-session-process session))
+    (user-error "Codex session process is not running"))
+  (let ((buffer (codex-ide-session-buffer session)))
+    (unless (buffer-live-p buffer)
+      (user-error "Codex session buffer is no longer live"))
+    (with-current-buffer buffer
+      (when prompt
+        (if (codex-ide--input-prompt-active-p session)
+            (codex-ide--replace-current-input session prompt)
+          (codex-ide--insert-input-prompt session prompt)))
+      (let ((codex-ide--prompt-origin-buffer buffer))
+        (codex-ide--submit-prompt-to-session
+         session
+         prompt
+         local-images
+         image-detail
+         metadata-line
+         suppress-context)))))
 
 (defun codex-ide-transcript-append-to-buffer (buffer text &optional face properties)
   "Append TEXT to BUFFER as transcript text."
