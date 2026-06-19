@@ -13,10 +13,12 @@
 
 (declare-function codex-ide-session-buffer "codex-ide-core" (session))
 (declare-function codex-ide--add-pending-local-image "codex-ide-transcript"
-                  (session path &optional temporary))
+                  (session path))
 (declare-function codex-ide--ensure-input-prompt "codex-ide-transcript"
                   (&optional session initial-text))
 (declare-function codex-ide--ensure-session-for-current-project "codex-ide-session" ())
+(declare-function codex-ide--local-image-temp-prefix "codex-ide-transcript"
+                  (&optional session))
 
 (defconst codex-ide--clipboard-png-class
   (format "%cclass PNGf%c" #x00ab #x00bb)
@@ -59,13 +61,15 @@
       "Clipboard does not contain a PNG image"
     (format "Failed to save clipboard image: %s" details)))
 
-(defun codex-ide--save-clipboard-image ()
-  "Save the macOS clipboard PNG image to a temporary file and return its path."
+(defun codex-ide--save-clipboard-image (session)
+  "Save the macOS clipboard PNG image for SESSION and return its path."
   (unless (eq system-type 'darwin)
     (user-error "Clipboard image submission currently supports macOS only"))
   (unless (executable-find "osascript")
     (user-error "Cannot find osascript for clipboard image submission"))
-  (let ((path (make-temp-file "codex-ide-clipboard-" nil ".png"))
+  (let ((path (make-temp-file (codex-ide--local-image-temp-prefix session)
+                              nil
+                              ".png"))
         (buffer (generate-new-buffer " *codex-ide-clipboard-image*")))
     (unwind-protect
         (let ((exit-code
@@ -87,12 +91,12 @@
                            details)))))
       (kill-buffer buffer))))
 
-(defun codex-ide--attach-image (path &optional temporary)
+(defun codex-ide--attach-image (path)
   "Attach local image PATH to the current Codex prompt."
   (let ((session (codex-ide--ensure-session-for-current-project)))
     (with-current-buffer (codex-ide-session-buffer session)
       (codex-ide--ensure-input-prompt session)
-      (codex-ide--add-pending-local-image session path temporary))
+      (codex-ide--add-pending-local-image session path))
     (message "Attached image: %s" (file-name-nondirectory path))))
 
 ;;;###autoload
@@ -105,7 +109,8 @@
 (defun codex-ide-submit-clipboard-image ()
   "Attach the macOS clipboard image to the current Codex prompt."
   (interactive)
-  (codex-ide--attach-image (codex-ide--save-clipboard-image) t))
+  (let ((session (codex-ide--ensure-session-for-current-project)))
+    (codex-ide--attach-image (codex-ide--save-clipboard-image session))))
 
 (provide 'codex-ide-images)
 

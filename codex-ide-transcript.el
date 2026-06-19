@@ -1332,31 +1332,36 @@ Move MARKER after the inserted text."
   (and session
        (codex-ide--session-metadata-get session :pending-local-images)))
 
-(defun codex-ide--pending-local-image-temp-files (&optional session)
-  "Return SESSION's pending temporary local image files."
+(defun codex-ide--local-image-temp-prefix (&optional session)
+  "Return SESSION's stable local image temp filename prefix."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
-  (and session
-       (codex-ide--session-metadata-get
-        session
-        :pending-local-image-temp-files)))
+  (unless session
+    (error "No Codex session available"))
+  (or (codex-ide--session-metadata-get session :local-image-temp-prefix)
+      (let ((prefix (file-name-nondirectory
+                     (make-temp-name "codex-ide-clipboard-"))))
+        (codex-ide--session-metadata-put
+         session
+         :local-image-temp-prefix
+         prefix)
+        prefix)))
 
-(defun codex-ide--delete-local-image-temp-files (paths)
-  "Delete temporary local image PATHS, ignoring missing files."
-  (dolist (path paths)
-    (when (and (stringp path)
-               (file-exists-p path))
-      (ignore-errors
-        (delete-file path)))))
-
-(defun codex-ide--remove-local-image-temp-file (session path)
-  "Remove PATH from SESSION's temporary image files and delete it."
-  (let ((temporary-files (codex-ide--pending-local-image-temp-files session)))
-    (when (member path temporary-files)
-      (codex-ide--delete-local-image-temp-files (list path))
-      (codex-ide--session-metadata-put
-       session
-       :pending-local-image-temp-files
-       (delete path (copy-sequence temporary-files))))))
+(defun codex-ide--delete-session-local-image-temp-files (&optional session)
+  "Delete local image temp files created for SESSION."
+  (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
+  (when-let* ((prefix (and session
+                           (codex-ide--session-metadata-get
+                            session
+                            :local-image-temp-prefix))))
+    (dolist (path (file-expand-wildcards
+                   (expand-file-name
+                    (concat prefix "*.png")
+                    temporary-file-directory)
+                   t))
+      (when (and (file-regular-p path)
+                 (string-prefix-p prefix (file-name-nondirectory path)))
+        (ignore-errors
+          (delete-file path))))))
 
 (defun codex-ide--delete-pending-local-images-overlay (session)
   "Delete SESSION's pending local image display overlay, if any."
@@ -1398,7 +1403,7 @@ Move MARKER after the inserted text."
   "Return a display token for pending local image PATH at INDEX."
   (let ((token (propertize
                 (format "[Image #%d]" index)
-                'face 'codex-ide-link-face
+                'face 'link
                 'help-echo (abbreviate-file-name path))))
     (if-let* ((thumbnail (codex-ide--local-image-thumbnail-string path)))
         (concat token " " thumbnail)
@@ -1487,31 +1492,17 @@ Return the inserted range as a cons cell, or nil when nothing was inserted."
            'before-string
            (codex-ide--pending-local-images-display-string paths)))))))
 
-(defun codex-ide--add-pending-local-image (session path &optional temporary)
+(defun codex-ide--add-pending-local-image (session path)
   "Attach local image PATH to SESSION's editable prompt."
   (codex-ide--session-metadata-put
    session
    :pending-local-images
    (append (codex-ide--pending-local-images session) (list path)))
-  (when temporary
-    (codex-ide--session-metadata-put
-     session
-     :pending-local-image-temp-files
-     (append (codex-ide--pending-local-image-temp-files session)
-             (list path))))
   (codex-ide--refresh-pending-local-images-display session))
 
-(defun codex-ide--clear-pending-local-images
-    (session &optional preserve-temporary-files)
+(defun codex-ide--clear-pending-local-images (session)
   "Clear SESSION's pending local images."
-  (unless preserve-temporary-files
-    (codex-ide--delete-local-image-temp-files
-     (codex-ide--pending-local-image-temp-files session)))
   (codex-ide--session-metadata-put session :pending-local-images nil)
-  (codex-ide--session-metadata-put
-   session
-   :pending-local-image-temp-files
-   nil)
   (codex-ide--delete-pending-local-images-overlay session))
 
 (defun codex-ide--remove-last-pending-local-image (session)
@@ -1523,7 +1514,6 @@ Return the inserted range as a cons cell, or nil when nothing was inserted."
        session
        :pending-local-images
        remaining)
-      (codex-ide--remove-local-image-temp-file session removed)
       (codex-ide--refresh-pending-local-images-display session)
       removed)))
 
@@ -4970,6 +4960,7 @@ Signal an error when THREAD-READ lacks replayable transcript items."
       (setq-local default-directory working-dir)
       (setq-local codex-ide--session session)
       (codex-ide--delete-input-overlay session)
+      (codex-ide--delete-session-local-image-temp-files session)
       (codex-ide--clear-pending-local-images session)
       (setf (codex-ide-session-current-turn-id session) nil
             (codex-ide-session-current-message-item-id session) nil
@@ -6181,12 +6172,11 @@ compatibility with older app-server payloads and global notifications."
   (consp (codex-ide--queued-prompts session)))
 
 (defun codex-ide--queued-prompt-entry
-    (prompt payload &optional local-images temporary-local-images)
+    (prompt payload &optional local-images)
   "Return a queued prompt entry for PROMPT, PAYLOAD, and image metadata."
   (list :prompt prompt
         :payload payload
-        :local-images local-images
-        :temporary-local-images temporary-local-images))
+        :local-images local-images))
 
 (defun codex-ide--clear-queued-prompts (session)
   "Clear SESSION's queued prompt metadata."
@@ -6479,7 +6469,6 @@ the mismatch warning only reflects meaningful behavior changes."
 	 (prompt (plist-get entry :prompt))
 	 (payload (plist-get entry :payload))
 	 (local-images (plist-get entry :local-images))
-	 (temporary-local-images (plist-get entry :temporary-local-images))
 	 (thread-id (codex-ide-session-thread-id session))
 	 (draft (and (codex-ide--input-prompt-active-p session)
 	             (codex-ide--current-input session))))
@@ -6507,8 +6496,7 @@ the mismatch warning only reflects meaningful behavior changes."
     (condition-case err
         (progn
           (codex-ide--send-turn-start session thread-id payload)
-          (codex-ide--after-turn-start-submitted session payload)
-          (codex-ide--delete-local-image-temp-files temporary-local-images))
+          (codex-ide--after-turn-start-submitted session payload))
       (error
        (codex-ide-log-message session "Queued prompt submission failed: %s"
                               (error-message-string err))
@@ -6673,8 +6661,6 @@ LOCAL-IMAGES and IMAGE-DETAIL are forwarded to the queued turn payload."
          (thread-id (codex-ide-session-thread-id session))
          (turn-id (codex-ide-session-current-turn-id session))
          (pending-local-images (codex-ide--pending-local-images session))
-         (pending-temporary-local-images
-          (codex-ide--pending-local-image-temp-files session))
          (effective-local-images
           (codex-ide--submission-local-images session local-images))
          (effective-image-detail
@@ -6702,10 +6688,9 @@ LOCAL-IMAGES and IMAGE-DETAIL are forwarded to the queued turn payload."
 	    (list (codex-ide--queued-prompt-entry
 	            prompt-to-send
 	            payload
-	            effective-local-images
-	            pending-temporary-local-images))))
+	            effective-local-images))))
     (when pending-local-images
-      (codex-ide--clear-pending-local-images session t))
+      (codex-ide--clear-pending-local-images session))
     (when (alist-get 'included-session-context payload)
       (codex-ide--session-metadata-put session :session-context-sent t))
     (when (eq (current-buffer) (codex-ide-session-buffer session))

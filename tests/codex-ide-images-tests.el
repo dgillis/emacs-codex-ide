@@ -176,7 +176,7 @@
           (with-current-buffer (codex-ide-session-buffer session)
             (codex-ide--insert-input-prompt session nil)
             (cl-letf (((symbol-function 'codex-ide--save-clipboard-image)
-                       (lambda () "/tmp/clipboard.png"))
+                       (lambda (&optional _session) "/tmp/clipboard.png"))
                       ((symbol-function 'codex-ide--session-for-current-project)
                        (lambda () session))
                       ((symbol-function 'codex-ide--ensure-session-for-current-project)
@@ -195,7 +195,7 @@
                        :pending-local-images-overlay)
                       'before-string)))))))))
 
-(ert-deftest codex-ide-delete-backward-removes-temporary-clipboard-image-file ()
+(ert-deftest codex-ide-delete-backward-keeps-temporary-clipboard-image-file ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (image-path (codex-ide-test--make-project-file
                       project-dir
@@ -207,7 +207,7 @@
           (with-current-buffer (codex-ide-session-buffer session)
             (codex-ide--insert-input-prompt session nil)
             (cl-letf (((symbol-function 'codex-ide--save-clipboard-image)
-                       (lambda () image-path))
+                       (lambda (&optional _session) image-path))
                       ((symbol-function 'codex-ide--session-for-current-project)
                        (lambda () session))
                       ((symbol-function 'codex-ide--ensure-session-for-current-project)
@@ -216,7 +216,7 @@
             (goto-char (codex-ide--input-end-position session))
             (codex-ide-delete-backward-or-remove-attached-image)
             (should-not (codex-ide--pending-local-images session))
-            (should-not (file-exists-p image-path))))))))
+            (should (file-exists-p image-path))))))))
 
 (ert-deftest codex-ide-delete-backward-removes-last-attached-image ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
@@ -323,19 +323,21 @@
             (should (equal (codex-ide--current-input session)
                            "ab"))))))))
 
-(ert-deftest codex-ide-reset-session-buffer-clears-pending-local-images ()
+(ert-deftest codex-ide-reset-session-buffer-clears-pending-local-images-and-session-temp-files ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
-         (image-path (codex-ide-test--make-project-file
-                      project-dir
-                      "clipboard.png"
-                      "fake-png")))
+         (prefix "codex-ide-clipboard-test-reset-")
+         (image-path (make-temp-file prefix nil ".png")))
     (codex-ide-test-with-fixture project-dir
       (codex-ide-test-with-fake-processes
         (let ((session (codex-ide--create-process-session)))
+          (codex-ide--session-metadata-put
+           session
+           :local-image-temp-prefix
+           prefix)
           (with-current-buffer (codex-ide-session-buffer session)
             (codex-ide--insert-input-prompt session nil)
             (cl-letf (((symbol-function 'codex-ide--save-clipboard-image)
-                       (lambda () image-path))
+                       (lambda (&optional _session) image-path))
                       ((symbol-function 'codex-ide--session-for-current-project)
                        (lambda () session))
                       ((symbol-function 'codex-ide--ensure-session-for-current-project)
@@ -348,7 +350,7 @@
                          :pending-local-images-overlay))
             (should-not (file-exists-p image-path))))))))
 
-(ert-deftest codex-ide-submit-prompt-deletes-temporary-clipboard-image-after-send ()
+(ert-deftest codex-ide-submit-prompt-keeps-temporary-clipboard-image-after-send ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (image-path (codex-ide-test--make-project-file
                       project-dir
@@ -362,7 +364,7 @@
           (with-current-buffer (codex-ide-session-buffer session)
             (codex-ide--insert-input-prompt session "describe")
             (cl-letf (((symbol-function 'codex-ide--save-clipboard-image)
-                       (lambda () image-path))
+                       (lambda (&optional _session) image-path))
                       ((symbol-function 'codex-ide--session-for-current-project)
                        (lambda () session))
                       ((symbol-function 'codex-ide--ensure-session-for-current-project)
@@ -373,12 +375,12 @@
                            (setq submitted params))
                          nil)))
               (codex-ide-submit-clipboard-image)
-              (codex-ide--submit-prompt))
+            (codex-ide--submit-prompt))
             (should submitted)
             (should-not (codex-ide--pending-local-images session))
-            (should-not (file-exists-p image-path))))))))
+            (should (file-exists-p image-path))))))))
 
-(ert-deftest codex-ide-queued-prompt-keeps-temporary-image-until-send ()
+(ert-deftest codex-ide-queued-prompt-keeps-temporary-image-after-send ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (image-path (codex-ide-test--make-project-file
                       project-dir
@@ -396,7 +398,7 @@
           (with-current-buffer (codex-ide-session-buffer session)
             (codex-ide--insert-input-prompt session "describe later")
             (cl-letf (((symbol-function 'codex-ide--save-clipboard-image)
-                       (lambda () image-path))
+                       (lambda (&optional _session) image-path))
                       ((symbol-function 'codex-ide--session-for-current-project)
                        (lambda () session))
                       ((symbol-function 'codex-ide--ensure-session-for-current-project)
@@ -415,7 +417,7 @@
                  (params . ((turn . ((id . "turn-current"))))))))
             (should (= (length requests) 1))
             (should (equal (caar requests) "turn/start"))
-            (should-not (file-exists-p image-path))))))))
+            (should (file-exists-p image-path))))))))
 
 (ert-deftest codex-ide-insert-input-prompt-refreshes-pending-images-in-render-transaction ()
   (let* ((project-dir (codex-ide-test--make-temp-project))

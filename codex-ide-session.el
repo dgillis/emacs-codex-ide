@@ -164,6 +164,8 @@
         (stderr-process (and session (codex-ide-session-stderr-process session))))
     (when session
       (codex-ide-log-message session "Cleaning up session state"))
+    (when session
+      (codex-ide--delete-session-local-image-temp-files session))
     (when (process-live-p stderr-process)
       (delete-process stderr-process))
     (when session
@@ -215,6 +217,7 @@ When KILL-LOG-BUFFER is non-nil, also kill SESSION's log buffer."
 (defun codex-ide--cleanup-all-sessions ()
   "Terminate all active Codex sessions."
   (dolist (session codex-ide--sessions)
+    (codex-ide--delete-session-local-image-temp-files session)
     (when (process-live-p (codex-ide-session-process session))
       (delete-process (codex-ide-session-process session)))))
 

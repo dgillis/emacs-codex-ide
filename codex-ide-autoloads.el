@@ -403,6 +403,14 @@ while 1 would fully replace the background with the foreground color.")
 
 ;;; Generated autoloads from codex-ide-transcript.el
 
+(autoload 'codex-ide-delete-backward-or-remove-attached-image "codex-ide-transcript"
+"Delete backward, or remove the attached image token at point.
+
+(fn &optional ARG)" t)
+(autoload 'codex-ide-delete-forward-or-remove-attached-image "codex-ide-transcript"
+"Delete forward, or remove the attached image token at point.
+
+(fn &optional ARG)" t)
 (autoload 'codex-ide-prompt "codex-ide-transcript"
 "Prompt for a Codex message in the minibuffer and submit it from the Codex buffer." t)
 (autoload 'codex-ide-previous-prompt-history "codex-ide-transcript"
@@ -413,10 +421,6 @@ while 1 would fully replace the background with the foreground color.")
 "Jump to the previous user prompt line in the session buffer." t)
 (autoload 'codex-ide-next-prompt-line "codex-ide-transcript"
 "Jump to the next user prompt line in the session buffer." t)
-(autoload 'codex-ide-delete-backward-or-remove-attached-image "codex-ide-transcript"
-"Delete backward, or remove the last attached image at prompt end." t)
-(autoload 'codex-ide-delete-forward-or-remove-attached-image "codex-ide-transcript"
-"Delete forward, or remove the last attached image at prompt end." t)
 (autoload 'codex-ide-submit "codex-ide-transcript"
 "Submit the current in-buffer prompt to Codex." t)
 (autoload 'codex-ide-steer "codex-ide-transcript"
@@ -428,7 +432,7 @@ while 1 would fully replace the background with the foreground color.")
 
 ;;; Generated autoloads from codex-ide-context.el
 
-(register-definition-prefixes "codex-ide-context" '("codex-ide--"))
+(register-definition-prefixes "codex-ide-context" '("codex-ide-"))
 
 
 ;;; Generated autoloads from codex-ide-errors.el
