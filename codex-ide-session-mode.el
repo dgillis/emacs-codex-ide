@@ -66,6 +66,10 @@
 (define-key codex-ide-session-mode-map (kbd "<backtab>") #'codex-ide-session-mode-nav-backward)
 (define-key codex-ide-session-prompt-minor-mode-map (kbd "M-p") #'codex-ide-previous-prompt-history)
 (define-key codex-ide-session-prompt-minor-mode-map (kbd "M-n") #'codex-ide-next-prompt-history)
+(define-key codex-ide-session-prompt-minor-mode-map (kbd "DEL") #'codex-ide-delete-backward-or-remove-attached-image)
+(define-key codex-ide-session-prompt-minor-mode-map (kbd "<backspace>") #'codex-ide-delete-backward-or-remove-attached-image)
+(define-key codex-ide-session-prompt-minor-mode-map (kbd "<delete>") #'codex-ide-delete-forward-or-remove-attached-image)
+(define-key codex-ide-session-prompt-minor-mode-map (kbd "C-d") #'codex-ide-delete-forward-or-remove-attached-image)
 (dotimes (index 9)
   (define-key codex-ide-session-approval-minor-mode-map
               (number-to-string (1+ index))

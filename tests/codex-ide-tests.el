@@ -9227,6 +9227,7 @@
           (progn
             (dolist (file '("codex-ide.el"
                             "codex-ide-delete-session-thread.el"
+                            "codex-ide-images.el"
                             "codex-ide-mcp-bridge.el"
                             "codex-ide-transient.el"))
               (copy-file (expand-file-name file codex-ide-test--root-directory)
@@ -9244,6 +9245,10 @@
 		(should (string-match-p "(custom-autoload 'codex-ide-cli-path " contents))
 		(should (string-match-p "(autoload 'codex-ide " contents))
 		(should (string-match-p "(autoload 'codex-ide-delete-session-thread "
+					contents))
+		(should (string-match-p "(autoload 'codex-ide-submit-image "
+					contents))
+		(should (string-match-p "(autoload 'codex-ide-submit-clipboard-image "
 					contents))
 		(should (string-match-p "(autoload 'codex-ide-menu " contents))
 		(should (string-match-p "(autoload 'codex-ide-mcp-bridge-enable "

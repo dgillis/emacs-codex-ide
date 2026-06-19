@@ -101,6 +101,28 @@ When set to \"off\", Codex IDE leaves `serviceTier' unset."
   :group 'codex-ide)
 
 ;;;###autoload
+(defcustom codex-ide-image-detail "auto"
+  "Image detail setting used when submitting local image files."
+  :type '(choice (const "auto")
+                 (const "low")
+                 (const "high")
+                 (const "original"))
+  :safe (lambda (value)
+          (member value '("auto" "low" "high" "original")))
+  :group 'codex-ide)
+
+;;;###autoload
+(defcustom codex-ide-image-thumbnail-max-height 96
+  "Maximum height in pixels for local image thumbnail previews.
+Set to nil to disable thumbnail previews."
+  :type '(choice (const :tag "Disabled" nil)
+                 (integer :tag "Pixels"))
+  :safe (lambda (value)
+          (or (null value)
+              (and (integerp value) (> value 0))))
+  :group 'codex-ide)
+
+;;;###autoload
 (defcustom codex-ide-prompt-placeholder-text "Tell Codex what to do..."
   "Placeholder text displayed in an empty idle Codex prompt."
   :type 'string
@@ -294,6 +316,7 @@ thread-list limit."
 (require 'codex-ide-threads)
 (require 'codex-ide-usage)
 (require 'codex-ide-transcript)
+(require 'codex-ide-images)
 (require 'codex-ide-transient)
 (require 'codex-ide-mcp-bridge)
 (require 'codex-ide-session)

@@ -38,6 +38,15 @@ When set to \"off\", Codex IDE leaves `serviceTier' unset.")
 (defvar codex-ide-running-submit-action 'steer
 "Action used by `codex-ide-submit' while a Codex turn is running.")
 (custom-autoload 'codex-ide-running-submit-action "codex-ide" t)
+(defvar codex-ide-image-detail "auto"
+"Image detail setting used when submitting local image files.")
+(custom-autoload 'codex-ide-image-detail "codex-ide" t)
+(put 'codex-ide-image-detail 'safe-local-variable (lambda (value) (member value '("auto" "low" "high" "original"))))
+(defvar codex-ide-image-thumbnail-max-height 96
+"Maximum height in pixels for local image thumbnail previews.
+Set to nil to disable thumbnail previews.")
+(custom-autoload 'codex-ide-image-thumbnail-max-height "codex-ide" t)
+(put 'codex-ide-image-thumbnail-max-height 'safe-local-variable (lambda (value) (or (null value) (and (integerp value) (> value 0)))))
 (defvar codex-ide-prompt-placeholder-text "Tell Codex what to do..."
 "Placeholder text displayed in an empty idle Codex prompt.")
 (custom-autoload 'codex-ide-prompt-placeholder-text "codex-ide" t)
@@ -404,6 +413,10 @@ while 1 would fully replace the background with the foreground color.")
 "Jump to the previous user prompt line in the session buffer." t)
 (autoload 'codex-ide-next-prompt-line "codex-ide-transcript"
 "Jump to the next user prompt line in the session buffer." t)
+(autoload 'codex-ide-delete-backward-or-remove-attached-image "codex-ide-transcript"
+"Delete backward, or remove the last attached image at prompt end." t)
+(autoload 'codex-ide-delete-forward-or-remove-attached-image "codex-ide-transcript"
+"Delete forward, or remove the last attached image at prompt end." t)
 (autoload 'codex-ide-submit "codex-ide-transcript"
 "Submit the current in-buffer prompt to Codex." t)
 (autoload 'codex-ide-steer "codex-ide-transcript"
@@ -545,6 +558,17 @@ otherwise use the most recent completed turn.
 ;;; Generated autoloads from codex-ide-header.el
 
 (register-definition-prefixes "codex-ide-header" '("codex-ide-"))
+
+
+;;; Generated autoloads from codex-ide-images.el
+
+(autoload 'codex-ide-submit-image "codex-ide-images"
+"Attach local image file PATH to the current Codex prompt.
+
+(fn PATH)" t)
+(autoload 'codex-ide-submit-clipboard-image "codex-ide-images"
+"Attach the macOS clipboard image to the current Codex prompt." t)
+(register-definition-prefixes "codex-ide-images" '("codex-ide--"))
 
 
 ;;; End of scraped data

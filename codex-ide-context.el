@@ -26,6 +26,7 @@
 
 ;;; Code:
 
+(require 'seq)
 (require 'subr-x)
 (require 'codex-ide-core)
 
@@ -262,8 +263,33 @@ Return an alist containing either `(buffer . BUFFER)' or `(discarded . t)'."
       `((formatted . ,(codex-ide--format-discarded-buffer-context))
         (summary . ,codex-ide--discarded-buffer-context-message))))))
 
-(defun codex-ide--compose-turn-payload (prompt)
-  "Build prompt payload metadata for PROMPT in the current working directory."
+(defun codex-ide--local-image-input-item (path &optional detail)
+  "Return a `localImage' input item for PATH.
+
+DETAIL, when non-nil, is forwarded to the app-server image detail field."
+  `((type . "localImage")
+    (path . ,(expand-file-name path))
+    ,@(when (and (stringp detail)
+                 (not (string-empty-p detail)))
+        `((detail . ,detail)))))
+
+(defun codex-ide--local-image-input-items (paths &optional detail)
+  "Return `localImage' input items for PATHS.
+
+DETAIL, when non-nil, is applied to each image item."
+  (vconcat
+   (mapcar (lambda (path)
+             (codex-ide--local-image-input-item path detail))
+           (seq-filter (lambda (path)
+                         (and (stringp path)
+                              (not (string-empty-p path))))
+                       paths))))
+
+(cl-defun codex-ide--compose-turn-payload (prompt &key local-images image-detail)
+  "Build prompt payload metadata for PROMPT in the current working directory.
+
+LOCAL-IMAGES is a list of image file paths to include after the text input.
+IMAGE-DETAIL, when non-nil, is forwarded to each `localImage' item."
   (let* ((context-payload
           (when (codex-ide--emacs-context-policy-includes-p 'prompt)
             (codex-ide--context-payload-for-prompt)))
@@ -281,12 +307,22 @@ Return an alist containing either `(buffer . BUFFER)' or `(discarded . t)'."
                                    "\n\n")))
     `((context-summary . ,(alist-get 'summary context-payload))
       (included-session-context . ,(and session-prefix t))
-      (input . [((type . "text")
-                 (text . ,full-prompt))]))))
+      (input . ,(vconcat
+                 (vector `((type . "text")
+                           (text . ,full-prompt)))
+                 (codex-ide--local-image-input-items
+                  local-images
+                  image-detail))))))
 
-(defun codex-ide--compose-turn-input (prompt)
-  "Build `turn/start' input items for PROMPT."
-  (alist-get 'input (codex-ide--compose-turn-payload prompt)))
+(cl-defun codex-ide--compose-turn-input (prompt &key local-images image-detail)
+  "Build `turn/start' input items for PROMPT.
+
+LOCAL-IMAGES and IMAGE-DETAIL are forwarded to
+`codex-ide--compose-turn-payload'."
+  (alist-get 'input (codex-ide--compose-turn-payload
+                     prompt
+                     :local-images local-images
+                     :image-detail image-detail)))
 
 (defun codex-ide--strip-leading-context-block (text open-tag close-tag)
   "Remove a leading context block delimited by OPEN-TAG and CLOSE-TAG from TEXT."
