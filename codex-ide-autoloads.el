@@ -496,6 +496,11 @@ adds these bindings:
 
 * \\<codex-ide-session-prompt-minor-mode-map>\\[codex-ide-previous-prompt-history] and \\[codex-ide-next-prompt-history] move through prompt history.
 
+When the active prompt begins with a slash,
+`codex-ide-session-slash-command-minor-mode' adds this binding:
+
+* \\<codex-ide-session-slash-command-minor-mode-map>\\[codex-ide-slash-command-complete-or-submit] completes or submits the slash command.
+
 In addition to any hooks its parent mode `text-mode' might have run,
 this mode runs the hook `codex-ide-session-mode-hook', as the final or
 penultimate step during initialization." t)
@@ -532,11 +537,11 @@ target scope after reading both values.
 ;;; Generated autoloads from codex-ide-diff-view.el
 
 (autoload 'codex-ide-session-diff-open "codex-ide-diff-view"
-  "Open or reuse the canonical session diff buffer for SESSION.
+"Open or reuse the canonical session diff buffer for SESSION.
 
 (fn &optional SESSION)" t)
 (autoload 'codex-ide-diff-open-combined-turn-buffer "codex-ide-diff-view"
-  "Open the combined diff for SESSION TURN-ID in a standalone diff buffer.
+"Open the combined diff for SESSION TURN-ID in a standalone diff buffer.
 When called interactively with nil TURN-ID, use the last transcript turn at or
 above point.  Otherwise, when TURN-ID is nil, prefer the running turn and
 otherwise use the most recent completed turn.
@@ -581,6 +586,23 @@ otherwise use the most recent completed turn.
 "Attach the macOS clipboard image to the current Codex prompt." t)
 (register-definition-prefixes "codex-ide-images" '("codex-ide--"))
 
+
+
+;;; Generated autoloads from codex-ide-slash-command.el
+
+(autoload 'codex-ide-slash-command-set-model "codex-ide-slash-command"
+"Set the Codex model and reasoning effort for the current session.
+
+(fn &optional MODEL REASONING-EFFORT)" t)
+(autoload 'codex-ide-slash-command-set-reasoning-effort "codex-ide-slash-command"
+"Set the reasoning effort for the current session.
+
+(fn &optional VALUE)" t)
+(autoload 'codex-ide-slash-command-toggle-fast "codex-ide-slash-command"
+"Toggle fast mode for the current session." t)
+(autoload 'codex-ide-slash-command-complete-or-submit "codex-ide-slash-command"
+"Complete the active slash command or submit it when complete." t)
+(register-definition-prefixes "codex-ide-slash-command" '("codex-ide-slash-command"))
 
 ;;; End of scraped data
 

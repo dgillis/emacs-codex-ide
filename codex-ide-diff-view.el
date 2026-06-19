@@ -24,7 +24,7 @@
 (require 'subr-x)
 
 (declare-function codex-ide-display-buffer "codex-ide-window"
-                  (buffer &optional action))
+                  (buffer &optional action &rest args))
 (declare-function codex-ide--session-for-current-project "codex-ide-session" ())
 (declare-function codex-ide-session-buffer "codex-ide-core" (session))
 (declare-function codex-ide-session-current-turn-id "codex-ide-core" (session))
@@ -657,10 +657,13 @@ DIRECTORY is used to resolve relative diff paths."
                          (codex-ide-diff--line-index-at-point))))))
     (codex-ide-diff-goto-source diff-text line-index directory)))
 
-(defun codex-ide-diff-open-buffer (diff-text &optional buffer-name directory)
+(cl-defun codex-ide-diff-open-buffer
+    (diff-text &optional buffer-name directory &key (select nil select-specified-p))
   "Display DIFF-TEXT in a dedicated `codex-ide-diff-mode' buffer.
 When BUFFER-NAME is non-nil, reuse that buffer.
 DIRECTORY is used as the buffer's `default-directory' for source jumps.
+When SELECT is non-nil, select the displayed diff window.  When SELECT is
+omitted, use `codex-ide-display-buffer' default selection behavior.
 Return the created buffer."
   (unless (and (stringp diff-text)
                (not (string-empty-p (string-trim diff-text))))
@@ -677,9 +680,14 @@ Return the created buffer."
           (setq-local default-directory (file-name-as-directory directory)))
         (codex-ide-diff-mode)
         (codex-ide-diff--render-text diff-text display-text directory)))
-    (codex-ide-display-buffer
-     buffer
-     codex-ide--display-buffer-other-window-pop-up-action)
+    (if select-specified-p
+        (codex-ide-display-buffer
+         buffer
+         codex-ide--display-buffer-other-window-pop-up-action
+         :select select)
+      (codex-ide-display-buffer
+       buffer
+       codex-ide--display-buffer-other-window-pop-up-action))
     buffer))
 
 (defun codex-ide-session-diff--empty-message (_source _turn-id message)

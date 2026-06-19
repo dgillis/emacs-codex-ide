@@ -107,33 +107,33 @@
         (scheduled nil)
         (refreshed nil))
     (codex-ide-test-with-fixture project-dir
-      (codex-ide-test-with-fake-processes
-        (cl-letf (((symbol-function 'run-at-time)
-                   (lambda (seconds repeat function &rest args)
-                     (setq scheduled (list seconds repeat function args))
-                     'fake-usage-refresh-timer))
-                  ((symbol-function 'timerp)
-                   (lambda (timer)
-                     (eq timer 'fake-usage-refresh-timer)))
-                  ((symbol-function 'cancel-timer)
-                   (lambda (_timer) nil))
-                  ((symbol-function 'codex-ide-usage-refresh-rate-limits)
-                   (lambda (session)
-                     (setq refreshed session)))
-                  ((symbol-function 'codex-ide-log-message)
-                   (lambda (&rest _) nil)))
-          (let ((session (codex-ide--create-process-session)))
-            (codex-ide--schedule-usage-refresh session)
-            (should scheduled)
-            (should-not refreshed)
-            (should (= (nth 0 scheduled)
-                       codex-ide--deferred-usage-refresh-delay))
-            (apply (nth 2 scheduled) (nth 3 scheduled))
-            (should (eq refreshed session))
-            (should-not
-             (codex-ide--session-metadata-get
-              session
-              :deferred-usage-refresh-timer))))))))
+				 (codex-ide-test-with-fake-processes
+				  (cl-letf (((symbol-function 'run-at-time)
+					     (lambda (seconds repeat function &rest args)
+					       (setq scheduled (list seconds repeat function args))
+					       'fake-usage-refresh-timer))
+					    ((symbol-function 'timerp)
+					     (lambda (timer)
+					       (eq timer 'fake-usage-refresh-timer)))
+					    ((symbol-function 'cancel-timer)
+					     (lambda (_timer) nil))
+					    ((symbol-function 'codex-ide-usage-refresh-rate-limits)
+					     (lambda (session)
+					       (setq refreshed session)))
+					    ((symbol-function 'codex-ide-log-message)
+					     (lambda (&rest _) nil)))
+				    (let ((session (codex-ide--create-process-session)))
+				      (codex-ide--schedule-usage-refresh session)
+				      (should scheduled)
+				      (should-not refreshed)
+				      (should (= (nth 0 scheduled)
+						 codex-ide--deferred-usage-refresh-delay))
+				      (apply (nth 2 scheduled) (nth 3 scheduled))
+				      (should (eq refreshed session))
+				      (should-not
+				       (codex-ide--session-metadata-get
+					session
+					:deferred-usage-refresh-timer))))))))
 
 (ert-deftest codex-ide-toggle-logging-enabled-flips-state ()
   (let ((codex-ide-logging-enabled nil))
@@ -705,8 +705,8 @@
            (marker-position hidden-end)
            '(invisible codex-ide-test-owned)))
         (codex-ide--with-transcript-render-transaction
-            (session (current-buffer))
-          nil)
+         (session (current-buffer))
+         nil)
         (unwind-protect
             (should (text-property-any
                      (marker-position hidden-start)
@@ -745,8 +745,8 @@
            '(invisible codex-ide-renderer-markdown-deferred
                        codex-ide-markdown-deferred t)))
         (codex-ide--with-transcript-render-transaction
-            (session (current-buffer))
-          nil)
+         (session (current-buffer))
+         nil)
         (should-not (text-property-any
                      list-start
                      prompt-start
@@ -771,8 +771,8 @@
       (codex-ide--set-queued-prompts session '("queued prompt"))
       (should-not (string-match-p "Queued turns:" (buffer-string)))
       (codex-ide--with-transcript-render-transaction
-          (session (current-buffer))
-        nil)
+       (session (current-buffer))
+       nil)
       (should-not (string-match-p "Queued turns:" (buffer-string)))
       (should-not (codex-ide--running-input-list-valid-p session))
       (should (equal (codex-ide--current-input session)
@@ -805,8 +805,8 @@
               :active-input-boundary-marker)))
         (set-marker active-boundary (marker-position boundary))
         (codex-ide--with-transcript-render-transaction
-            (session (current-buffer))
-          nil)
+         (session (current-buffer))
+         nil)
         (should (= (marker-position active-boundary)
                    (marker-position running-end)))))))
 
@@ -825,8 +825,8 @@
         (should (string-suffix-p "> draft" (buffer-string)))
         (setq buffer-undo-list nil)
         (codex-ide--with-transcript-render-transaction
-            (session (current-buffer))
-          nil)
+         (session (current-buffer))
+         nil)
         (should (string-suffix-p "> draft\n\n" (buffer-string)))
         (should-not buffer-undo-list)))))
 
@@ -865,8 +865,8 @@
         (should (overlayp overlay))
         (should (overlay-get overlay 'invisible))
         (codex-ide--with-transcript-render-transaction
-            (session (current-buffer))
-          nil)
+         (session (current-buffer))
+         nil)
         (should (overlay-get overlay 'invisible))
         (should (overlay-get overlay :folded))))))
 
@@ -905,17 +905,17 @@
                              codex-ide-markdown-deferred t)))))
           (with-current-buffer outer-buffer
             (codex-ide--with-transcript-render-transaction
-                (outer-session outer-buffer)
-              (with-current-buffer inner-buffer
-                (codex-ide--with-transcript-render-transaction
-                    (inner-session inner-buffer)
-                  nil))
-              (with-current-buffer inner-buffer
-                (should-not (text-property-any
-                             (point-min)
-                             (point-max)
-                             'codex-ide-markdown-deferred
-                             t))))))
+             (outer-session outer-buffer)
+             (with-current-buffer inner-buffer
+               (codex-ide--with-transcript-render-transaction
+                (inner-session inner-buffer)
+                nil))
+             (with-current-buffer inner-buffer
+               (should-not (text-property-any
+                            (point-min)
+                            (point-max)
+                            'codex-ide-markdown-deferred
+                            t))))))
       (when (buffer-live-p outer-buffer)
         (kill-buffer outer-buffer))
       (when (buffer-live-p inner-buffer)
@@ -5253,14 +5253,14 @@
 						       (windowDurationMins . 10080)))
 					 (planType . "prolite")))
 				      (codex-ide--session-metadata-put
-					       session :token-usage
-					       '((total . ((totalTokens . 305500)))
-						 (modelContextWindow . 258400)
-						 (last . ((totalTokens . 43112)
-							  (inputTokens . 42800)
-							  (cachedInputTokens . 26100)
-							  (outputTokens . 244)
-							  (reasoningOutputTokens . 68)))))
+				       session :token-usage
+				       '((total . ((totalTokens . 305500)))
+					 (modelContextWindow . 258400)
+					 (last . ((totalTokens . 43112)
+						  (inputTokens . 42800)
+						  (cachedInputTokens . 26100)
+						  (outputTokens . 244)
+						  (reasoningOutputTokens . 68)))))
 				      (with-current-buffer (find-file-noselect file-path)
 					(setq-local default-directory (file-name-as-directory project-dir))
 					(rename-buffer "focused-source-buffer" t)
@@ -5272,8 +5272,8 @@
 					(codex-ide--update-header-line session)
 					(should
 					 (equal
-						  (format-mode-line header-line-format)
-						  " Focus: focused-source-buffer | Model: gpt-5.4 (medium) | Quota: 15%/5h 3%/wk (prolite) | Context: 43.1k/258.4k (305.5k total)"))))))))
+					  (format-mode-line header-line-format)
+					  " Focus: focused-source-buffer | Model: gpt-5.4 (medium) | Quota: 15%/5h 3%/wk (prolite) | Context: 43.1k/258.4k (305.5k total)"))))))))
 
   (ert-deftest codex-ide-header-line-shows-compact-rate-limit-resets ()
     (let* ((project-dir (codex-ide-test--make-temp-project))
@@ -5286,8 +5286,8 @@
 				      (codex-ide--session-metadata-put
 				       session :rate-limits
 				       `((primary . ((usedPercent . 20)
-						      (windowDurationMins . 300)
-						      (resetsAt . ,today-reset)))
+						     (windowDurationMins . 300)
+						     (resetsAt . ,today-reset)))
 					 (secondary . ((usedPercent . 3)
 						       (windowDurationMins . 10080)
 						       (resetsAt . ,future-reset)))
@@ -6420,7 +6420,7 @@
 					      ((symbol-function 'codex-ide-display-buffer)
 					       (lambda (_buffer &optional _action) (selected-window)))
 					      ((symbol-function 'codex-ide-diff-open-buffer)
-					       (lambda (text &optional buffer-name _directory)
+					       (lambda (text &optional buffer-name _directory &rest _args)
 						 (setq opened-diff text)
 						 (setq opened-diff-buffer-name buffer-name)
 						 nil))
@@ -6759,7 +6759,7 @@
 				    (setf (codex-ide-session-current-turn-id session) "turn-file-change"
 					  (codex-ide-session-status session) "running")
 				    (cl-letf (((symbol-function 'codex-ide-diff-open-buffer)
-					       (lambda (text &optional buffer-name _directory)
+					       (lambda (text &optional buffer-name _directory &rest _args)
 						 (setq opened-diff text)
 						 (setq opened-diff-buffer-name buffer-name)
 						 nil))
@@ -6812,7 +6812,7 @@
 				    (setf (codex-ide-session-current-turn-id session) "turn-file-change"
 					  (codex-ide-session-status session) "running")
 				    (cl-letf (((symbol-function 'codex-ide-diff-open-buffer)
-					       (lambda (text &optional buffer-name _directory)
+					       (lambda (text &optional buffer-name _directory &rest _args)
 						 (setq opened-diff text)
 						 (setq opened-diff-buffer-name buffer-name)
 						 nil))
@@ -6847,6 +6847,7 @@
 				  (let* ((session (codex-ide--create-process-session))
 					 (opened-diff nil)
 					 (opened-diff-buffer-name nil)
+					 (opened-diff-args nil)
 					 (expected-diff
 					  (string-join
 					   '("diff --git a/foo.txt b/foo.txt"
@@ -6875,9 +6876,10 @@
 					      ((symbol-function 'codex-ide-display-buffer)
 					       (lambda (_buffer &optional _action) (selected-window)))
 					      ((symbol-function 'codex-ide-diff-open-buffer)
-					       (lambda (text &optional buffer-name _directory)
+					       (lambda (text &optional buffer-name _directory &rest args)
 						 (setq opened-diff text)
 						 (setq opened-diff-buffer-name buffer-name)
+						 (setq opened-diff-args args)
 						 nil))
 					      ((symbol-function 'message)
 					       (lambda (&rest _) nil)))
@@ -6897,7 +6899,8 @@
 				    (should (equal opened-diff expected-diff))
 				    (should (equal opened-diff-buffer-name
 						   (codex-ide-diff-buffer-name-for-session
-						    (codex-ide-session-buffer session)))))))))
+						    (codex-ide-session-buffer session))))
+				    (should (equal opened-diff-args '(:select nil))))))))
 
 (ert-deftest codex-ide-file-change-approval-auto-open-keeps-buttons-out-of-diff-buffer ()
   (let ((project-dir (codex-ide-test--make-temp-project))
@@ -6927,7 +6930,7 @@
 						   (lambda (&rest _)
 						     (selected-window)))
 						  ((symbol-function 'codex-ide-display-buffer)
-						   (lambda (buffer &optional _action)
+						   (lambda (buffer &optional _action &rest _args)
 						     ;; Simulate the auto-open path switching the current
 						     ;; buffer while approval rendering is still active.
 						     (when (equal (buffer-name buffer) diff-buffer-name)
@@ -7000,7 +7003,7 @@
 					      ((symbol-function 'codex-ide-display-buffer)
 					       (lambda (_buffer &optional _action) (selected-window)))
 					      ((symbol-function 'codex-ide-diff-open-buffer)
-					       (lambda (_text &optional _buffer-name _directory)
+					       (lambda (_text &optional _buffer-name _directory &rest _args)
 						 nil))
 					      ((symbol-function 'message)
 					       (lambda (&rest _) nil)))
@@ -7060,7 +7063,7 @@
 				     session
 				     "nested-command"
 				     '(:type "commandExecution"
-				       :item-result-label "command output"))
+					     :item-result-label "command output"))
 				    (with-current-buffer (codex-ide-session-buffer session)
 				      (let ((inhibit-read-only t)
 					    (boundary (codex-ide--active-input-boundary-marker
@@ -7068,12 +7071,12 @@
 					(goto-char boundary)
 					(codex-ide-renderer-insert-read-only "Parent block\n")
 					(codex-ide--with-local-transcript-insertion
-					  (setq render-context
-						codex-ide--transcript-render-context)
-					  (codex-ide--ensure-item-result-block
-					   session
-					   "nested-command")
-					  (codex-ide-renderer-insert-read-only "[after]\n")))
+					 (setq render-context
+					       codex-ide--transcript-render-context)
+					 (codex-ide--ensure-item-result-block
+					  session
+					  "nested-command")
+					 (codex-ide-renderer-insert-read-only "[after]\n")))
 				      (should (codex-ide-transcript-render-context-p
 					       render-context))
 				      (should
@@ -7122,7 +7125,7 @@
 					       (lambda (&rest _)
 						 (ert-fail "hidden approval buffer should not be displayed")))
 					      ((symbol-function 'codex-ide-diff-open-buffer)
-					       (lambda (text &optional buffer-name _directory)
+					       (lambda (text &optional buffer-name _directory &rest _args)
 						 (setq opened-diff text)
 						 (setq opened-diff-buffer-name buffer-name)
 						 nil))
@@ -7181,7 +7184,7 @@
 					      ((symbol-function 'codex-ide-display-buffer)
 					       (lambda (_buffer &optional _action) (selected-window)))
 					      ((symbol-function 'codex-ide-diff-open-buffer)
-					       (lambda (text &optional buffer-name _directory)
+					       (lambda (text &optional buffer-name _directory &rest _args)
 						 (setq opened-diff text)
 						 (setq opened-diff-buffer-name buffer-name)
 						 nil))

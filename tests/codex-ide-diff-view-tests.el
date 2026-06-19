@@ -69,6 +69,30 @@
       (when (buffer-live-p diff-buffer)
         (kill-buffer diff-buffer)))))
 
+(ert-deftest codex-ide-diff-open-buffer-can-display-without-selecting-window ()
+  (let ((diff-buffer nil))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (let* ((origin-window (selected-window))
+                 (target-window (split-window-right)))
+            (select-window origin-window)
+            (cl-letf (((symbol-function 'display-buffer)
+                       (lambda (buffer _action)
+                         (set-window-buffer target-window buffer)
+                         target-window)))
+              (setq diff-buffer
+                    (codex-ide-diff-open-buffer
+                     "diff --git a/foo.txt b/foo.txt\n@@ -1 +1 @@\n-old\n+new"
+                     nil
+                     default-directory
+                     :select nil))
+              (should (buffer-live-p diff-buffer))
+              (should (eq (selected-window) origin-window))
+              (should (eq (window-buffer target-window) diff-buffer)))))
+      (when (buffer-live-p diff-buffer)
+        (kill-buffer diff-buffer)))))
+
 (ert-deftest codex-ide-diff-open-buffer-binds-return-to-source-jump ()
   (let ((display-call nil)
         diff-buffer)
