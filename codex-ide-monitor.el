@@ -25,6 +25,25 @@
   "Return live sessions with live session buffers."
   (codex-ide--session-buffer-sessions))
 
+(defun codex-ide-monitor--recent-sessions (&optional sessions)
+  "Return SESSIONS sorted by most recent activity first."
+  (mapcar
+   #'cdr
+   (sort (cl-loop for session in (or sessions (codex-ide-monitor--live-sessions))
+                  for index from 0
+                  collect (cons index session))
+         (lambda (left right)
+           (let ((left-time (codex-ide--session-activity-time (cdr left)))
+                 (right-time (codex-ide--session-activity-time (cdr right))))
+             (if (= left-time right-time)
+                 (< (car left) (car right))
+               (> left-time right-time)))))))
+
+(defun codex-ide-monitor--default-sessions ()
+  "Return the default unmarked monitor sessions."
+  (seq-take (codex-ide-monitor--recent-sessions)
+            (1+ codex-ide-monitor--default-rail-sessions)))
+
 (defun codex-ide-monitor--focused-session (&optional sessions)
   "Return the monitor-focused session from SESSIONS."
   (let* ((sessions (or sessions (codex-ide-monitor--live-sessions)))
@@ -102,9 +121,10 @@
 (defun codex-ide-monitor-layout (&optional focused-session)
   "Display live Codex sessions in a main window plus compact right rail."
   (interactive)
-  (let* ((sessions (codex-ide-monitor--live-sessions))
-         (focused (or focused-session
-                      (codex-ide-monitor--focused-session sessions))))
+  (let* ((sessions (codex-ide-monitor--default-sessions))
+         (focused (if (memq focused-session sessions)
+                      focused-session
+                    (car sessions))))
     (unless focused
       (user-error "No live Codex sessions to monitor"))
     (codex-ide-monitor--display-sessions
