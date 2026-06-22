@@ -114,6 +114,80 @@ same order."
                    (with-current-buffer (codex-ide-session-buffer session-c)
                      (point-max))))))))
 
+(ert-deftest codex-ide-monitor-tail-window-bottom-aligns-buffer-end ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-monitor-tail-window*")))
+      (unwind-protect
+          (let ((window (selected-window))
+                near-end-start)
+            (with-current-buffer buffer
+              (erase-buffer)
+              (dotimes (line 80)
+                (insert (format "line %02d\n" line))))
+            (set-window-buffer window buffer)
+            (with-current-buffer buffer
+              (setq near-end-start
+                    (save-excursion
+                      (goto-char (point-max))
+                      (forward-line -3)
+                      (point)))
+              (set-window-start window near-end-start t)
+              (set-window-point window (point-max)))
+            (codex-ide-monitor--tail-window window)
+            (redisplay t)
+            (with-current-buffer buffer
+              (should (= (window-point window) (point-max)))
+              (should (>= (window-end window t) (point-max)))
+              (should (< (window-start window) near-end-start))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest codex-ide-monitor-tail-window-resumes-tail-following ()
+  (codex-ide-monitor-test-with-sessions (session-a)
+    (save-window-excursion
+      (delete-other-windows)
+      (let ((window (selected-window))
+            tail-point)
+        (with-current-buffer (codex-ide-session-buffer session-a)
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (dotimes (line 80)
+              (insert (format "line %02d\n" line)))
+            (codex-ide--insert-input-prompt session-a nil))
+          (setq tail-point (codex-ide--input-end-position session-a))
+          (setq-local codex-ide-session-mode--last-point (point-min)
+                      codex-ide-session-mode--last-window-start (point-min)))
+        (set-window-buffer window (codex-ide-session-buffer session-a))
+        (set-window-parameter window 'codex-ide-tail-follow-suspended t)
+        (codex-ide-monitor--tail-window window)
+        (redisplay t)
+        (should-not
+         (window-parameter window 'codex-ide-tail-follow-suspended))
+        (with-current-buffer (codex-ide-session-buffer session-a)
+          (should (= (window-point window) tail-point))
+          (should (= codex-ide-session-mode--last-point tail-point))
+          (should (= codex-ide-session-mode--last-window-start
+                     (window-start window))))))))
+
+(ert-deftest codex-ide-monitor-layout-tails-main-after-final-split-size ()
+  (codex-ide-monitor-test-with-sessions (session-a session-b)
+    (save-window-excursion
+      (delete-other-windows)
+      (let ((full-width (window-total-width (selected-window)))
+            main-tail-width)
+        (cl-letf* ((original-tail-window
+                    (symbol-function 'codex-ide-monitor--tail-window))
+                   ((symbol-function 'codex-ide-monitor--tail-window)
+                    (lambda (window)
+                      (when (eq (window-buffer window)
+                                (codex-ide-session-buffer session-a))
+                        (setq main-tail-width (window-total-width window)))
+                      (funcall original-tail-window window))))
+          (codex-ide-monitor-layout session-a))
+        (should main-tail-width)
+        (should (< main-tail-width full-width))))))
+
 (ert-deftest codex-ide-monitor-layout-splits-rail-windows-evenly ()
   (codex-ide-monitor-test-with-sessions (session-a session-b session-c session-d)
     (setf (codex-ide-session-created-at session-a) 40

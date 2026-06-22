@@ -12,6 +12,11 @@
 (require 'seq)
 (require 'codex-ide-core)
 
+(declare-function codex-ide--transcript-tail-point-position "codex-ide-transcript" ())
+
+(defvar codex-ide-session-mode--last-point)
+(defvar codex-ide-session-mode--last-window-start)
+
 (defconst codex-ide-monitor--default-rail-sessions 3
   "Default number of unmarked live Codex sessions shown in the monitor rail.")
 
@@ -57,10 +62,22 @@
             codex-ide-monitor--default-rail-sessions))
 
 (defun codex-ide-monitor--tail-window (window)
-  "Move WINDOW to the end of its buffer."
+  "Move WINDOW to the end of its buffer and bottom-align the tail."
   (when (window-live-p window)
-    (with-current-buffer (window-buffer window)
-      (set-window-point window (point-max)))))
+    (save-selected-window
+      (select-window window)
+      (with-current-buffer (window-buffer window)
+        (goto-char
+         (if (fboundp 'codex-ide--transcript-tail-point-position)
+             (codex-ide--transcript-tail-point-position)
+           (point-max)))
+        (set-window-point window (point))
+        (recenter -1)
+        (set-window-parameter window 'codex-ide-tail-follow-suspended nil)
+        (when (local-variable-p 'codex-ide-session-mode--last-point)
+          (setq-local codex-ide-session-mode--last-point (point)
+                      codex-ide-session-mode--last-window-start
+                      (window-start window)))))))
 
 (defun codex-ide-monitor--split-rail (window count)
   "Split WINDOW into COUNT stacked rail windows and return them top to bottom."
@@ -101,21 +118,21 @@
                          codex-ide-monitor--session-scope-frame-parameter
                          session-scope)
     (delete-other-windows)
-    (set-window-buffer (selected-window) main-buffer)
-    (codex-ide-monitor--tail-window (selected-window))
-    (when rail-sessions
-      (let* ((main-window (selected-window))
-             (rail-root (split-window main-window nil 'right))
-             (rail-windows (codex-ide-monitor--split-rail
-                            rail-root
-                            (length rail-sessions))))
-        (cl-mapc
-         (lambda (window session)
-           (set-window-buffer window (codex-ide-session-buffer session))
-           (codex-ide-monitor--tail-window window))
-         rail-windows
-         rail-sessions)
-        (select-window main-window)))))
+    (let ((main-window (selected-window)))
+      (set-window-buffer main-window main-buffer)
+      (when rail-sessions
+        (let* ((rail-root (split-window main-window nil 'right))
+               (rail-windows (codex-ide-monitor--split-rail
+                              rail-root
+                              (length rail-sessions))))
+          (cl-mapc
+           (lambda (window session)
+             (set-window-buffer window (codex-ide-session-buffer session))
+             (codex-ide-monitor--tail-window window))
+           rail-windows
+           rail-sessions)))
+      (codex-ide-monitor--tail-window main-window)
+      (select-window main-window))))
 
 ;;;###autoload
 (defun codex-ide-monitor-layout (&optional focused-session)
