@@ -1269,7 +1269,17 @@
                  (point-min)))
       (should (= (marker-position
                   (codex-ide-transcript-render-context-end-marker context))
-                 (point-max))))))
+                 (point-max)))
+      (goto-char (point-min))
+      (search-forward "$ just test")
+      (should (eq (get-text-property
+                   (match-beginning 0)
+                   codex-ide-transcript-detail-kind-property)
+                  codex-ide-transcript-item-detail-kind))
+      (should (eq (get-text-property
+                   (line-end-position)
+                   codex-ide-transcript-detail-kind-property)
+                  codex-ide-transcript-item-detail-kind)))))
 
 (ert-deftest codex-ide-reasoning-summary-binds-render-transaction ()
   (with-temp-buffer
@@ -1739,7 +1749,13 @@
         (should (string-match-p
                  (regexp-quote
                   (format "cwd: %s" (abbreviate-file-name command-dir)))
-                 (buffer-string)))))))
+                 (buffer-string)))
+        (goto-char (point-min))
+        (search-forward "cwd:")
+        (should (eq (get-text-property
+                     (match-beginning 0)
+                     codex-ide-transcript-detail-kind-property)
+                    codex-ide-transcript-item-detail-kind))))))
 
 (ert-deftest codex-ide-running-input-stays-below-streamed-agent-deltas ()
   (with-temp-buffer
@@ -5758,7 +5774,14 @@
 						   text))
 					  (should (string-match-p
 						   (regexp-quote (format "  └ %s" secondary-query))
-						   text)))))))))
+						   text))
+                                          (goto-char (point-min))
+                                          (search-forward primary-query)
+                                          (should
+                                           (eq (get-text-property
+                                                (match-beginning 0)
+                                                codex-ide-transcript-detail-kind-property)
+                                               codex-ide-transcript-item-detail-kind)))))))))
 
   (ert-deftest codex-ide-web-search-completion-details-stay-with-original-item ()
     (with-temp-buffer

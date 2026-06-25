@@ -109,6 +109,14 @@
 (defvar codex-ide--current-agent-item-type nil
   "Item type associated with the agent transcript text being inserted.")
 
+(defconst codex-ide-transcript-detail-kind-property
+  'codex-ide-transcript-detail-kind
+  "Text property identifying semantic transcript detail regions.")
+
+(defconst codex-ide-transcript-item-detail-kind
+  'item-detail
+  "Detail kind used for collapsible item detail rows.")
+
 (defvar codex-ide--preserve-transcript-window-follow-anchor t
   "When non-nil, transcript window restoration may keep following the anchor.
 
@@ -315,6 +323,12 @@ record the resulting end position with
      (list codex-ide-log-marker-property codex-ide--current-transcript-log-marker))
    (when (stringp codex-ide--current-agent-item-type)
      (list codex-ide-agent-item-type-property codex-ide--current-agent-item-type))))
+
+(defun codex-ide--item-detail-text-properties (&optional properties)
+  "Return text PROPERTIES with semantic item-detail metadata appended."
+  (append properties
+          (list codex-ide-transcript-detail-kind-property
+                codex-ide-transcript-item-detail-kind)))
 
 (defun codex-ide--freeze-region (start end)
   "Make the region from START to END read-only."
@@ -973,6 +987,26 @@ When FACE is non-nil, use it for the inserted line."
    text
    face
    (append properties (codex-ide--current-agent-text-properties))))
+
+(defun codex-ide--append-item-detail-text (buffer text &optional face properties)
+  "Append semantic item detail TEXT to BUFFER.
+FACE defaults to `codex-ide-item-detail-face'."
+  (codex-ide--append-agent-text
+   buffer
+   text
+   (or face 'codex-ide-item-detail-face)
+   (codex-ide--item-detail-text-properties properties)))
+
+(defun codex-ide--insert-item-detail-text-at-marker
+    (buffer marker text &optional face properties)
+  "Insert semantic item detail TEXT in BUFFER at MARKER.
+Move MARKER after the inserted text."
+  (codex-ide--insert-agent-text-at-marker
+   buffer
+   marker
+   text
+   (or face 'codex-ide-item-detail-face)
+   (codex-ide--item-detail-text-properties properties)))
 
 (defun codex-ide--insert-agent-text-at-marker
     (buffer marker text &optional face properties)
@@ -3568,15 +3602,11 @@ Return the rendered detail line strings."
       (let ((text (mapconcat #'codex-ide--item-detail-line lines "")))
         (if (and (markerp insertion-marker)
                  (eq (marker-buffer insertion-marker) buffer))
-            (codex-ide--insert-agent-text-at-marker
+            (codex-ide--insert-item-detail-text-at-marker
              buffer
              insertion-marker
-             text
-             'codex-ide-item-detail-face)
-          (codex-ide--append-agent-text
-           buffer
-           text
-           'codex-ide-item-detail-face))))
+             text)
+          (codex-ide--append-item-detail-text buffer text))))
     lines))
 
 (defun codex-ide--append-shell-command-detail (buffer command)
@@ -3605,7 +3635,8 @@ Return the rendered detail line strings."
                  (cdr
                   (codex-ide-renderer-insert-shell-command-detail
                    command
-                   (codex-ide--current-agent-text-properties))))
+                   (append (codex-ide--item-detail-text-properties)
+                           (codex-ide--current-agent-text-properties)))))
            (codex-ide--finish-transcript-append
             buffer
             insertion-position
@@ -4125,15 +4156,28 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
                         'font-lock-face 'codex-ide-item-detail-face
                         'rear-nonsticky t
                         'front-sticky t))
-               (add-text-properties start (point) props)
-               (insert (propertize " " 'face 'codex-ide-item-detail-face))
+               (add-text-properties
+                start
+                (point)
+                (codex-ide--item-detail-text-properties props))
+               (insert
+                (propertize
+                 " "
+                 'face 'codex-ide-item-detail-face
+                 codex-ide-transcript-detail-kind-property
+                 codex-ide-transcript-item-detail-kind))
                (codex-ide-renderer-insert-action-button
                 button-label
                 callback
                 help-echo
                 (codex-ide-nav-button-keymap)
-                props)
-               (insert (propertize "\n" 'face 'codex-ide-item-detail-face))
+                (codex-ide--item-detail-text-properties props))
+               (insert
+                (propertize
+                 "\n"
+                 'face 'codex-ide-item-detail-face
+                 codex-ide-transcript-detail-kind-property
+                 codex-ide-transcript-item-detail-kind))
                (setq range (cons start (point)))
                (codex-ide--freeze-region start (point))
                (codex-ide--finish-transcript-append
@@ -4154,7 +4198,7 @@ When COMPLETION is non-nil, render completion-specific state details."
         ((append-detail
            (text face)
            (let ((range
-                  (codex-ide--append-agent-text
+                  (codex-ide--append-item-detail-text
                    buffer
                    (codex-ide--item-detail-line text)
                    (or face 'codex-ide-item-detail-face))))
@@ -4216,45 +4260,40 @@ When COMPLETION is non-nil, render completion-specific state details."
           (codex-ide--display-command-string (alist-get 'command item))))
        (when-let* ((cwd (alist-get 'cwd item))
                    ((codex-ide--command-cwd-detail-visible-p session cwd)))
-         (codex-ide--append-agent-text
+         (codex-ide--append-item-detail-text
           buffer
           (codex-ide--item-detail-line
-           (format "cwd: %s" (abbreviate-file-name cwd)))
-          'codex-ide-item-detail-face)))
+           (format "cwd: %s" (abbreviate-file-name cwd))))))
       ("webSearch"
        (codex-ide--render-web-search-details session item))
       ("mcpToolCall"
        (when-let* ((arguments (alist-get 'arguments item)))
-         (codex-ide--append-agent-text
+         (codex-ide--append-item-detail-text
           buffer
           (codex-ide--item-detail-line
-           (format "args: %s" (json-encode arguments)))
-          'codex-ide-item-detail-face)))
+           (format "args: %s" (json-encode arguments))))))
       ("dynamicToolCall"
        (when-let* ((arguments (alist-get 'arguments item)))
-         (codex-ide--append-agent-text
+         (codex-ide--append-item-detail-text
           buffer
           (codex-ide--item-detail-line
-           (format "args: %s" (json-encode arguments)))
-          'codex-ide-item-detail-face)))
+           (format "args: %s" (json-encode arguments))))))
       ("collabAgentToolCall"
        (codex-ide--render-collab-agent-details buffer item nil session
                                                (alist-get 'id item)))
       ("fileChange"
        (dolist (change (or (alist-get 'changes item) '()))
-         (codex-ide--append-agent-text
+         (codex-ide--append-item-detail-text
           buffer
           (codex-ide--item-detail-line
            (format "%s %s"
                    (or (alist-get 'kind change) "change")
-                   (or (alist-get 'path change) "unknown")))
-          'codex-ide-item-detail-face)))
+                   (or (alist-get 'path change) "unknown"))))))
       ("imageView"
        (when-let* ((path (alist-get 'path item)))
-         (codex-ide--append-agent-text
+         (codex-ide--append-item-detail-text
           buffer
-          (codex-ide--item-detail-line path)
-          'codex-ide-item-detail-face))))))
+          (codex-ide--item-detail-line path)))))))
 
 (defun codex-ide--render-item-start (&optional session item)
   "Render a newly started ITEM for SESSION."
@@ -4478,14 +4517,13 @@ When COMPLETION is non-nil, render completion-specific state details."
              (when-let* ((hit-count (or (codex-ide--count-search-output-hits
                                          output-text)
 					(and (equal exit-code 1) 0))))
-               (codex-ide--append-agent-text
+               (codex-ide--append-item-detail-text
                 buffer
                 (codex-ide--item-detail-line
-                 (codex-ide--format-hit-count hit-count))
-                'codex-ide-item-detail-face))
+                 (codex-ide--format-hit-count hit-count))))
              (when (and (equal status "failed")
                         (not (equal exit-code 1)))
-               (codex-ide--append-agent-text
+               (codex-ide--append-item-detail-text
                 buffer
                 (codex-ide--item-detail-line
                  (format "failed%s"
@@ -4494,7 +4532,7 @@ When COMPLETION is non-nil, render completion-specific state details."
                            "")))
                 'error)))
             ((equal status "failed")
-             (codex-ide--append-agent-text
+             (codex-ide--append-item-detail-text
               buffer
               (codex-ide--item-detail-line
                (format "failed%s"
@@ -4503,7 +4541,7 @@ When COMPLETION is non-nil, render completion-specific state details."
 			 "")))
               'error))
             ((equal status "declined")
-             (codex-ide--append-agent-text
+             (codex-ide--append-item-detail-text
               buffer
               (codex-ide--item-detail-line "declined")
               'warning)))))
@@ -4520,7 +4558,7 @@ When COMPLETION is non-nil, render completion-specific state details."
                :result-display-text display-text)))
            (codex-ide--complete-item-result-block session item-id result-text))
          (when-let* ((error-info (alist-get 'error item)))
-           (codex-ide--append-agent-text
+           (codex-ide--append-item-detail-text
             buffer
             (codex-ide--item-detail-line
              (format "error: %s"
@@ -4528,7 +4566,7 @@ When COMPLETION is non-nil, render completion-specific state details."
             'error)))
         ("dynamicToolCall"
          (when (eq (alist-get 'success item) :json-false)
-           (codex-ide--append-agent-text
+           (codex-ide--append-item-detail-text
             buffer
             (codex-ide--item-detail-line "tool call failed")
             'error)))
@@ -4600,7 +4638,7 @@ When COMPLETION is non-nil, render completion-specific state details."
                 streamed-diff)))))
         ("exitedReviewMode"
          (when-let* ((review (alist-get 'review item)))
-           (codex-ide--append-agent-text
+           (codex-ide--append-item-detail-text
             buffer
             (codex-ide--item-detail-block review)
             'codex-ide-item-detail-face)))))
@@ -4766,10 +4804,9 @@ Return non-nil when BUFFER is a Codex transcript and the reveal was handled."
     (codex-ide--append-to-buffer buffer (format "\n%s\n" summary) (or face 'error))
     (unless (string-empty-p detail)
       (let ((codex-ide--current-agent-item-type "error"))
-        (codex-ide--append-agent-text
+        (codex-ide--append-item-detail-text
          buffer
-         (codex-ide--item-detail-line detail)
-         'codex-ide-item-detail-face)))
+         (codex-ide--item-detail-line detail))))
     (when guidance
       (codex-ide--append-to-buffer buffer (format "%s\n" guidance) (or face 'error)))
     classification))
@@ -6723,10 +6760,9 @@ LOCAL-IMAGES and IMAGE-DETAIL are forwarded to the queued turn payload."
   "Append slash command detail TEXT to SESSION's transcript."
   (when (and (stringp text)
              (not (string-empty-p text)))
-    (codex-ide--append-agent-text
+    (codex-ide--append-item-detail-text
      (codex-ide-session-buffer session)
-     (codex-ide--item-detail-line text)
-     'codex-ide-item-detail-face)))
+     (codex-ide--item-detail-line text))))
 
 (defun codex-ide--append-slash-command-start (session entry)
   "Append a slash command start block for ENTRY to SESSION's transcript."
@@ -6761,7 +6797,8 @@ LOCAL-IMAGES and IMAGE-DETAIL are forwarded to the queued turn payload."
                        (codex-ide--item-detail-line
                         (symbol-name
                          (codex-ide-slash-command-entry-command entry)))
-                       'codex-ide-item-detail-face)))
+                       'codex-ide-item-detail-face
+                       (codex-ide--item-detail-text-properties))))
                  (codex-ide--finish-transcript-append
                   buffer
                   inserted-at
