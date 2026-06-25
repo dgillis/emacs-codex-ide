@@ -475,6 +475,13 @@ while 1 would fully replace the background with the foreground color.")
 "Move point to the next focal point in a Codex session buffer." t)
 (autoload 'codex-ide-session-mode-nav-backward "codex-ide-session-mode"
 "Move point to the previous focal point in a Codex session buffer." t)
+(autoload 'codex-ide-session-transcript-set-detail-level "codex-ide-session-mode"
+"Set the current session transcript detail LEVEL.
+Interactively, prompt for LEVEL.  LEVEL must be `standard' or `compact'.
+
+(fn LEVEL)" t)
+(autoload 'codex-ide-session-transcript-toggle-detail-level "codex-ide-session-mode"
+"Toggle the current session transcript between standard and compact detail." t)
 (autoload 'codex-ide-session-mode "codex-ide-session-mode"
 "Major mode for Codex app-server session buffers.
 
@@ -485,6 +492,8 @@ while 1 would fully replace the background with the foreground color.")
 * \\[codex-ide-session-diff-open] opens the session diff buffer.
 
 * \\[codex-ide-apply-config-preset] prompts for and applies a config preset.
+
+* \\[codex-ide-session-transcript-toggle-detail-level] toggles standard/compact transcript detail.
 
 * \\[codex-ide-previous-prompt-line] and \\[codex-ide-next-prompt-line] move between prompt lines.
 
