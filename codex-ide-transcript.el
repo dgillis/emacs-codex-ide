@@ -724,6 +724,28 @@ list should be created or deleted, or whether an approval is pending."
         (codex-ide--input-end-position session)
       (point-max))))
 
+(defun codex-ide--bottom-align-transcript-window (window position)
+  "Bottom-align WINDOW around transcript POSITION."
+  (when (and (window-live-p window)
+             (eq (window-buffer window) (current-buffer)))
+    (save-selected-window
+      (select-window window)
+      (goto-char position)
+      (set-window-point window position)
+      (recenter -1))))
+
+(defun codex-ide--bottom-align-following-transcript-windows (&optional position)
+  "Bottom-align visible transcript windows that still follow POSITION."
+  (let ((position (or position (codex-ide--transcript-tail-point-position))))
+    (dolist (window (get-buffer-window-list (current-buffer) nil t))
+      (when (and (not (window-parameter
+                       window
+                       'codex-ide-tail-follow-suspended))
+                 (codex-ide--transcript-window-follows-anchor-p
+                  window
+                  position))
+        (codex-ide--bottom-align-transcript-window window position)))))
+
 (defun codex-ide--input-edit-point-position (point-pos)
   "Return POINT-POS when it is an active input edit position.
 When point is at the active input end, return nil so transcript tail following
@@ -765,10 +787,13 @@ can keep using the current tail position."
                      (marker-buffer point-marker))
             (let ((point-pos (marker-position point-marker)))
               (if follow-anchor
-	          (set-window-point
-                   window
-                   (or (codex-ide--input-edit-point-position point-pos)
-                       tail-pos))
+                  (let ((input-edit-pos
+                         (codex-ide--input-edit-point-position point-pos)))
+                    (set-window-point window (or input-edit-pos tail-pos))
+                    (unless input-edit-pos
+                      (codex-ide--bottom-align-transcript-window
+                       window
+                       tail-pos)))
 	        (when (and (markerp start-marker)
 	                   (marker-buffer start-marker))
 	          (set-window-start window (marker-position start-marker) t))
@@ -2398,7 +2423,8 @@ When METADATA-LINE is non-nil, insert it beneath the submitted prompt."
             (goto-char (point-max))
             (codex-ide--insert-input-prompt session)
             (unless quiet
-              (codex-ide--update-header-line session)))))
+              (codex-ide--update-header-line session))
+            (codex-ide--bottom-align-following-transcript-windows))))
         (codex-ide--discard-buffer-undo-history)))))
 
 (defun codex-ide--shell-command-string (command)

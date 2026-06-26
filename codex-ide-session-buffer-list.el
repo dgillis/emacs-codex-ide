@@ -10,6 +10,11 @@
 (require 'codex-ide)
 (require 'codex-ide-session-list)
 
+(autoload 'codex-ide-monitor-layout-for-sessions
+  "codex-ide-monitor" nil nil)
+(autoload 'codex-ide-monitor-layout
+  "codex-ide-monitor" nil t)
+
 (defvar codex-ide-session-buffer-list-mode-map
   (make-sparse-keymap)
   "Keymap for `codex-ide-session-buffer-list-mode'.")
@@ -22,10 +27,46 @@
 (define-key codex-ide-session-buffer-list-mode-map
             (kbd "l")
             #'codex-ide-session-buffer-list-redisplay)
+(define-key codex-ide-session-buffer-list-mode-map
+            (kbd "m")
+            #'codex-ide-session-buffer-list-mark)
+(define-key codex-ide-session-buffer-list-mode-map
+            (kbd "u")
+            #'codex-ide-session-buffer-list-unmark)
+(define-key codex-ide-session-buffer-list-mode-map
+            (kbd "U")
+            #'codex-ide-session-buffer-list-unmark-all)
+(define-key codex-ide-session-buffer-list-mode-map
+            (kbd "M")
+            #'codex-ide-session-buffer-list-monitor-marked-or-all)
 
 (define-derived-mode codex-ide-session-buffer-list-mode codex-ide-session-list-mode
   "Codex-Buffers"
   "Mode for listing live Codex session buffers.")
+
+(defvar codex-ide-session-buffer-list--marked-sessions nil
+  "Live Codex sessions marked for monitor layout display.")
+
+(defvar-local codex-ide-session-buffer-list--thread-metadata-cache nil
+  "Cached thread metadata for the current live session buffer list.")
+
+(defvar-local codex-ide-session-buffer-list--suppress-thread-metadata-refresh nil
+  "Whether list redisplay should reuse cached thread metadata.")
+
+(defun codex-ide-session-buffer-list--marked-live-sessions ()
+  "Return marked sessions that still have live session buffers."
+  (let ((live-sessions (codex-ide--session-buffer-sessions)))
+    (setq codex-ide-session-buffer-list--marked-sessions
+          (seq-filter
+           (lambda (session)
+             (memq session live-sessions))
+           codex-ide-session-buffer-list--marked-sessions))))
+
+(defun codex-ide-session-buffer-list--mark-cell (session)
+  "Return the monitor mark display cell for SESSION."
+  (if (memq session (codex-ide-session-buffer-list--marked-live-sessions))
+      (codex-ide-session-list-cell "*" 'codex-ide-session-list-status-face)
+    ""))
 
 (defun codex-ide-session-buffer-list--last-prompt-text (session)
   "Return the last non-empty prompt text from SESSION's live buffer."
@@ -66,19 +107,22 @@
   "Return a hash table of thread metadata for SESSIONS.
 
 Keys are cons cells of the form `(DIRECTORY . THREAD-ID)'."
-  (let ((metadata (make-hash-table :test #'equal))
-        (loaded-directories (make-hash-table :test #'equal)))
-    (dolist (session sessions)
-      (let ((directory (codex-ide-session-directory session)))
-        (unless (gethash directory loaded-directories)
-          (puthash directory t loaded-directories)
-          (condition-case nil
-              (dolist (thread (codex-ide--thread-list-data session))
-                (puthash (cons directory (alist-get 'id thread))
-                         thread
-                         metadata))
-            (error nil)))))
-    metadata))
+  (if codex-ide-session-buffer-list--suppress-thread-metadata-refresh
+      (or codex-ide-session-buffer-list--thread-metadata-cache
+          (make-hash-table :test #'equal))
+    (let ((metadata (make-hash-table :test #'equal))
+          (loaded-directories (make-hash-table :test #'equal)))
+      (dolist (session sessions)
+        (let ((directory (codex-ide-session-directory session)))
+          (unless (gethash directory loaded-directories)
+            (puthash directory t loaded-directories)
+            (condition-case nil
+                (dolist (thread (codex-ide--thread-list-data session))
+                  (puthash (cons directory (alist-get 'id thread))
+                           thread
+                           metadata))
+              (error nil)))))
+      (setq codex-ide-session-buffer-list--thread-metadata-cache metadata))))
 
 (defun codex-ide-session-buffer-list--entries ()
   "Return tabulated entries for live Codex session buffers."
@@ -104,7 +148,8 @@ Keys are cons cells of the form `(DIRECTORY . THREAD-ID)'."
                 (status (codex-ide-renderer-status-label
                          (codex-ide-session-status session))))
            (list session
-                 (vector (codex-ide-session-list-cell
+                 (vector (codex-ide-session-buffer-list--mark-cell session)
+                         (codex-ide-session-list-cell
                           (buffer-name buffer)
                           'codex-ide-session-list-primary-face)
                          (codex-ide-session-list-cell
@@ -122,6 +167,74 @@ Keys are cons cells of the form `(DIRECTORY . THREAD-ID)'."
   "Visit SESSION's buffer."
   (when (buffer-live-p (codex-ide-session-buffer session))
     (codex-ide--show-session-buffer session)))
+
+(defun codex-ide-session-buffer-list--update-marked-sessions (sessions marked)
+  "Set whether SESSIONS are MARKED for monitor layout display."
+  (dolist (session sessions)
+    (setq codex-ide-session-buffer-list--marked-sessions
+          (delq session codex-ide-session-buffer-list--marked-sessions))
+    (when marked
+      (setq codex-ide-session-buffer-list--marked-sessions
+            (append codex-ide-session-buffer-list--marked-sessions
+                    (list session)))))
+  (codex-ide-session-buffer-list--marked-live-sessions)
+  (let ((codex-ide-session-buffer-list--suppress-thread-metadata-refresh t))
+    (tabulated-list-print t)))
+
+(defun codex-ide-session-buffer-list--focused-marked-session (marked-sessions)
+  "Return the current focused session when it is in MARKED-SESSIONS."
+  (let ((current-session
+         (if (derived-mode-p 'codex-ide-session-buffer-list-mode)
+             (tabulated-list-get-id)
+           (codex-ide--session-for-current-buffer))))
+    (and (memq current-session marked-sessions)
+         current-session)))
+
+(defun codex-ide-session-buffer-list-mark ()
+  "Mark the selected session buffer rows for monitor layout display."
+  (interactive)
+  (codex-ide-session-buffer-list--update-marked-sessions
+   (codex-ide-session-list-selected-ids)
+   t))
+
+(defun codex-ide-session-buffer-list-unmark ()
+  "Remove monitor marks from the selected session buffer rows."
+  (interactive)
+  (codex-ide-session-buffer-list--update-marked-sessions
+   (codex-ide-session-list-selected-ids)
+   nil))
+
+(defun codex-ide-session-buffer-list-unmark-all ()
+  "Remove every monitor mark from live session buffer rows."
+  (interactive)
+  (setq codex-ide-session-buffer-list--marked-sessions nil)
+  (let ((codex-ide-session-buffer-list--suppress-thread-metadata-refresh t))
+    (tabulated-list-print t)))
+
+(defun codex-ide-session-buffer-list-monitor-marked ()
+  "Open a monitor layout for the marked live session buffer rows."
+  (interactive)
+  (let* ((marked-sessions
+          (codex-ide-session-buffer-list--marked-live-sessions))
+         (focused-session
+          (codex-ide-session-buffer-list--focused-marked-session
+           marked-sessions)))
+    (unless marked-sessions
+      (user-error "No marked Codex session buffers to monitor"))
+    (codex-ide-monitor-layout-for-sessions marked-sessions focused-session)))
+
+;;;###autoload
+(defun codex-ide-session-buffer-list-monitor-marked-or-all ()
+  "Open a monitor layout for marked sessions, or recent live sessions."
+  (interactive)
+  (let ((marked-sessions
+         (codex-ide-session-buffer-list--marked-live-sessions)))
+    (if marked-sessions
+        (codex-ide-monitor-layout-for-sessions
+         marked-sessions
+         (codex-ide-session-buffer-list--focused-marked-session
+          marked-sessions))
+      (codex-ide-monitor-layout))))
 
 (defun codex-ide-session-buffer-list-delete-buffer ()
   "Kill the session buffer for the row at point or every row in the active region."
@@ -157,7 +270,8 @@ Keys are cons cells of the form `(DIRECTORY . THREAD-ID)'."
          (codex-ide-session-list--setup
           "*Codex Session Buffers*"
           #'codex-ide-session-buffer-list-mode
-          [("Buffer" 28 t)
+          [("Mark" 4 nil)
+           ("Buffer" 28 t)
            ("Status" 14 t)
            ("Updated" 16 t)
            ("Preview" 48 t)]

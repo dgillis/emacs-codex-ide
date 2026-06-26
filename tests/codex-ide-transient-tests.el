@@ -68,6 +68,16 @@
   (should (transient-get-suffix 'codex-ide-menu "i"))
   (should (transient-get-suffix 'codex-ide-menu "I"))
   (should (transient-get-suffix 'codex-ide-menu "l"))
+  (should (transient-get-suffix 'codex-ide-menu "M"))
+  (should (fboundp 'codex-ide-session-buffer-list-monitor-marked-or-all))
+  (should (eq (codex-ide-test--transient-suffix-prop
+               (transient-get-suffix 'codex-ide-menu "M")
+               :command)
+              #'codex-ide-session-buffer-list-monitor-marked-or-all))
+  (should (equal (codex-ide-test--transient-suffix-prop
+                  (transient-get-suffix 'codex-ide-menu "M")
+                  :description)
+                 "Monitor sessions"))
   (should (equal (codex-ide-test--transient-suffix-prop
                   (transient-get-suffix 'codex-ide-menu "D")
                   :description)

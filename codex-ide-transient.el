@@ -37,6 +37,9 @@
 
 (autoload 'codex-ide-session-buffer-list "codex-ide-session-buffer-list"
   "Show a tabulated list of live Codex session buffers." t)
+(autoload 'codex-ide-session-buffer-list-monitor-marked-or-all
+  "codex-ide-session-buffer-list"
+  "Open a monitor layout for marked sessions, or recent live sessions." t)
 (autoload 'codex-ide-status "codex-ide-status-mode"
   "Show the Codex status buffer for the current project." t)
 (autoload 'codex-ide-session-diff-open "codex-ide-diff-view"
@@ -466,6 +469,7 @@
 			  ["Manage"
 			   ("m" "Manage sessions" codex-ide-status)
 			   ("l" "Live session buffers" codex-ide-session-buffer-list)
+			   ("M" "Monitor sessions" codex-ide-session-buffer-list-monitor-marked-or-all)
 			   ("D" "Session diff (live/transcript/pinned)" codex-ide-session-diff-open)]
 			  ["Submenus"
 			   ("C" "Agent configuration" codex-ide-agent-config-menu)

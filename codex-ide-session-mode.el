@@ -40,6 +40,12 @@
   "codex-ide-diff-view" nil t)
 (autoload 'codex-ide-apply-config-preset
   "codex-ide-transient" nil t)
+(autoload 'codex-ide-monitor-promote-rail-session-1
+  "codex-ide-monitor" nil t)
+(autoload 'codex-ide-monitor-promote-rail-session-2
+  "codex-ide-monitor" nil t)
+(autoload 'codex-ide-monitor-promote-rail-session-3
+  "codex-ide-monitor" nil t)
 
 (defvar codex-ide-session-enable-visual-line-mode)
 (defvar corfu-mode)
@@ -85,6 +91,9 @@
 (define-key codex-ide-session-mode-map (kbd "C-c C-k") #'codex-ide-interrupt)
 (define-key codex-ide-session-mode-map (kbd "C-c C-p") #'codex-ide-apply-config-preset)
 (define-key codex-ide-session-mode-map (kbd "C-c C-v") #'codex-ide-session-transcript-toggle-detail-level)
+(define-key codex-ide-session-mode-map (kbd "C-c 1") #'codex-ide-monitor-promote-rail-session-1)
+(define-key codex-ide-session-mode-map (kbd "C-c 2") #'codex-ide-monitor-promote-rail-session-2)
+(define-key codex-ide-session-mode-map (kbd "C-c 3") #'codex-ide-monitor-promote-rail-session-3)
 (define-key codex-ide-session-mode-map (kbd "C-M-p") #'codex-ide-previous-prompt-line)
 (define-key codex-ide-session-mode-map (kbd "C-M-n") #'codex-ide-next-prompt-line)
 (define-key codex-ide-session-mode-map (kbd "TAB") #'codex-ide-session-mode-nav-forward)
