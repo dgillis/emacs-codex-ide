@@ -1692,6 +1692,44 @@
                      "Working..."))
       (should (codex-ide--input-prompt-active-p session)))))
 
+(ert-deftest codex-ide-begin-turn-display-bottom-aligns-followed-input ()
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((buffer (get-buffer-create " *codex-ide-begin-turn-bottom-align*")))
+      (unwind-protect
+          (let ((window (selected-window)))
+            (with-current-buffer buffer
+              (erase-buffer)
+              (dotimes (line 120)
+                (insert (format "line %02d\n" line)))
+              (codex-ide-session-mode)
+              (let ((session (make-codex-ide-session
+                              :buffer buffer
+                              :status "idle"
+                              :item-states (make-hash-table :test 'equal))))
+                (setq-local codex-ide--session session)
+                (codex-ide--insert-input-prompt session nil)
+                (insert "submitted prompt")))
+            (set-window-buffer window buffer)
+            (with-current-buffer buffer
+              (let* ((session codex-ide--session)
+                     (tail-pos (codex-ide--transcript-tail-point-position))
+                     (middle-start
+                      (save-excursion
+                        (goto-char tail-pos)
+                        (forward-line (- (/ (window-body-height window) 2)))
+                        (point))))
+                (set-window-start window middle-start t)
+                (set-window-point window tail-pos)
+                (redisplay t)
+                (should (codex-ide--transcript-window-follows-anchor-p
+                         window tail-pos))
+                (codex-ide--begin-turn-display session)
+                (redisplay t)
+                (should (< (window-start window) middle-start)))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
 (ert-deftest codex-ide-running-input-stays-below-streamed-items ()
   (with-temp-buffer
     (codex-ide-session-mode)

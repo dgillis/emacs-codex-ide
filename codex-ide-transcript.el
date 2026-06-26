@@ -733,6 +733,18 @@ list should be created or deleted, or whether an approval is pending."
       (set-window-point window position)
       (recenter -1))))
 
+(defun codex-ide--bottom-align-following-transcript-windows (&optional position)
+  "Bottom-align visible transcript windows that still follow POSITION."
+  (let ((position (or position (codex-ide--transcript-tail-point-position))))
+    (dolist (window (get-buffer-window-list (current-buffer) nil t))
+      (when (and (not (window-parameter
+                       window
+                       'codex-ide-tail-follow-suspended))
+                 (codex-ide--transcript-window-follows-anchor-p
+                  window
+                  position))
+        (codex-ide--bottom-align-transcript-window window position)))))
+
 (defun codex-ide--input-edit-point-position (point-pos)
   "Return POINT-POS when it is an active input edit position.
 When point is at the active input end, return nil so transcript tail following
@@ -2406,7 +2418,8 @@ When METADATA-LINE is non-nil, insert it beneath the submitted prompt."
             (goto-char (point-max))
             (codex-ide--insert-input-prompt session)
             (unless quiet
-              (codex-ide--update-header-line session)))))
+              (codex-ide--update-header-line session))
+            (codex-ide--bottom-align-following-transcript-windows))))
         (codex-ide--discard-buffer-undo-history)))))
 
 (defun codex-ide--shell-command-string (command)
