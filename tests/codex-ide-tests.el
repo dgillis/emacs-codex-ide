@@ -7836,6 +7836,172 @@
       (will-retry . nil)
       (turn-id . "turn-1")))))
 
+(ert-deftest codex-ide-restore-thread-read-transcript-restores-command-output-lazily ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (session nil)
+         (thread-read
+          `((thread . ((id . "thread-restore-command-lazy")
+                       (turns . (((id . "turn-1")
+                                  (items . (((type . "userMessage")
+                                             (content . (((type . "text")
+                                                          (text . "Run a command")))))
+                                            ((type . "commandExecution")
+                                             (id . "item-command-lazy")
+                                             (command . "printf 'hello\\nworld\\n'")
+                                             (cwd . ,project-dir)
+                                             (aggregatedOutput . "hello\nworld\n")
+                                             (exitCode . 0)
+                                             (status . "completed"))))))))))))
+    (codex-ide-test-with-fixture
+     project-dir
+     (codex-ide-test-with-fake-processes
+      (setq session (codex-ide--create-process-session))
+      (should (codex-ide--restore-thread-read-transcript session thread-read))
+      (with-current-buffer (codex-ide-session-buffer session)
+        (let ((buffer-text (buffer-string)))
+          (should (string-match-p "\\* Ran command" buffer-text))
+          (should
+           (string-match-p
+            "output: 2 lines \\[expand\\]"
+            buffer-text))
+          (should-not (string-match-p "    hello" buffer-text))
+          (should-not (string-match-p "    world" buffer-text)))
+        (goto-char (point-min))
+        (search-forward "output: 2 lines [expand]")
+        (let ((overlay (get-char-property
+                        (match-beginning 0)
+                        codex-ide-item-result-overlay-property)))
+          (should (overlayp overlay))
+          (should (overlay-get overlay 'invisible))
+          (should-not (overlay-get overlay :display-text))
+          (should (equal (overlay-get overlay :result-full-text)
+                         "hello\nworld\n"))
+          (codex-ide-toggle-item-result-at-point (match-beginning 0))
+          (should (stringp (overlay-get overlay :display-text)))
+          (should (string-match-p
+                   "    hello\n    world"
+                   (buffer-string)))))))))
+
+(ert-deftest codex-ide-restore-thread-read-transcript-renders-command-start-with-fast-path ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (session nil)
+         (thread-read
+          `((thread . ((id . "thread-restore-command-start-fast")
+                       (turns . (((id . "turn-1")
+                                  (items . (((type . "userMessage")
+                                             (content . (((type . "text")
+                                                          (text . "Run a command")))))
+                                            ((type . "commandExecution")
+                                             (id . "item-command-fast")
+                                             (command . "printf 'hello\\n'")
+                                             (cwd . ,project-dir)
+                                             (aggregatedOutput . "hello\n")
+                                             (exitCode . 0)
+                                             (status . "completed"))))))))))))
+    (codex-ide-test-with-fixture
+     project-dir
+     (codex-ide-test-with-fake-processes
+      (setq session (codex-ide--create-process-session))
+      (cl-letf (((symbol-function 'codex-ide--render-item-start)
+                 (lambda (_session item)
+                   (when (equal (alist-get 'type item) "commandExecution")
+                     (ert-fail "restored command should not use live item start renderer")))))
+        (should (codex-ide--restore-thread-read-transcript session thread-read)))
+      (with-current-buffer (codex-ide-session-buffer session)
+        (let ((buffer-text (buffer-string)))
+          (should (string-match-p "\\* Ran command" buffer-text))
+          (should (string-match-p "printf 'hello\\\\n'" buffer-text))
+          (should (string-match-p "output: 1 line \\[expand\\]" buffer-text))))))))
+
+(ert-deftest codex-ide-restore-thread-read-transcript-command-fast-path-clears-pending-output ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (session nil)
+         (thread-read
+          `((thread . ((id . "thread-restore-command-pending")
+                       (turns . (((id . "turn-1")
+                                  (items . (((type . "commandExecution")
+                                             (id . "item-command-pending")
+                                             (command . "printf 'hello\\n'")
+                                             (cwd . ,project-dir)
+                                             (aggregatedOutput . "hello\n")
+                                             (exitCode . 0)
+                                             (status . "completed"))))))))))))
+    (codex-ide-test-with-fixture
+     project-dir
+     (codex-ide-test-with-fake-processes
+      (setq session (codex-ide--create-process-session))
+      (should (codex-ide--restore-thread-read-transcript session thread-read))
+      (with-current-buffer (codex-ide-session-buffer session)
+        (should (string-match-p "\\* Ran command" (buffer-string)))
+        (should-not (equal (codex-ide-test--input-placeholder-text session)
+                           "Working...")))))))
+
+(ert-deftest codex-ide-restore-thread-read-transcript-inhibits-redisplay-while-replaying ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (session nil)
+         (captured-inhibit-redisplay nil)
+         (thread-read
+          '((thread . ((id . "thread-restore-inhibit-redisplay")
+                       (turns . (((id . "turn-1")
+                                  (items . (((type . "userMessage")
+                                             (content . (((type . "text")
+                                                          (text . "Prompt")))))))))))))))
+    (codex-ide-test-with-fixture
+     project-dir
+     (codex-ide-test-with-fake-processes
+      (setq session (codex-ide--create-process-session))
+      (cl-letf (((symbol-function 'codex-ide--replay-thread-read-turn)
+                 (lambda (_session _turn)
+                   (setq captured-inhibit-redisplay inhibit-redisplay)
+                   t)))
+        (should (codex-ide--restore-thread-read-transcript session thread-read)))
+      (should captured-inhibit-redisplay)))))
+
+(ert-deftest codex-ide-restore-thread-read-transcript-restores-mcp-result-lazily ()
+  (let* ((project-dir (codex-ide-test--make-temp-project))
+         (session nil)
+         (thread-read
+          `((thread . ((id . "thread-restore-mcp-lazy")
+                       (turns . (((id . "turn-1")
+                                  (items . (((type . "userMessage")
+                                             (content . (((type . "text")
+                                                          (text . "Read from MCP")))))
+                                            ((type . "mcpToolCall")
+                                             (id . "item-mcp-lazy")
+                                             (server . "emacs")
+                                             (tool . "read_buffer")
+                                             (result . ((text . "alpha\nbeta\n")))
+                                             (status . "completed"))))))))))))
+    (codex-ide-test-with-fixture
+     project-dir
+     (codex-ide-test-with-fake-processes
+      (setq session (codex-ide--create-process-session))
+      (should (codex-ide--restore-thread-read-transcript session thread-read))
+      (with-current-buffer (codex-ide-session-buffer session)
+        (let ((buffer-text (buffer-string)))
+          (should (string-match-p "\\* Called emacs/read_buffer" buffer-text))
+          (should
+           (string-match-p
+            "result: 2 lines \\[expand\\]"
+            buffer-text))
+          (should-not (string-match-p "    alpha" buffer-text))
+          (should-not (string-match-p "    beta" buffer-text)))
+        (goto-char (point-min))
+        (search-forward "result: 2 lines [expand]")
+        (let ((overlay (get-char-property
+                        (match-beginning 0)
+                        codex-ide-item-result-overlay-property)))
+          (should (overlayp overlay))
+          (should (overlay-get overlay 'invisible))
+          (should-not (overlay-get overlay :display-text))
+          (should (equal (overlay-get overlay :result-full-text)
+                         "alpha\nbeta\n"))
+          (codex-ide-toggle-item-result-at-point (match-beginning 0))
+          (should (stringp (overlay-get overlay :display-text)))
+          (should (string-match-p
+                   "    alpha\n    beta"
+                   (buffer-string)))))))))
+
 (ert-deftest codex-ide-agent-text-carries-log-marker-property ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
@@ -8014,7 +8180,7 @@
                                                (id . "item-command-1")
                                                (command . "printf 'hello\\n'")
                                                (cwd . ,project-dir)
-                                               (aggregatedOutput . "hello\n")
+                                               (aggregatedOutput . "hello\nworld\n")
                                                (exitCode . 0)
                                                (status . "completed"))
                                               ((type . "agentMessage")
@@ -8028,9 +8194,29 @@
 				      (let ((buffer-text (buffer-string)))
 					(should (string-match-p "\\* Ran command" buffer-text))
 					(should (string-match-p "printf 'hello\\\\n'" buffer-text))
-					(should (string-match-p "output: 1 line" buffer-text))
-					(should (string-match-p "    hello" buffer-text))
-					(should (string-match-p "Command finished\\." buffer-text))))))))
+					(should
+					 (string-match-p
+					  "output: 2 lines \\[expand\\]"
+					  buffer-text))
+					(should-not (string-match-p "    hello" buffer-text))
+					(should-not (string-match-p "    world" buffer-text))
+					(should (string-match-p "Command finished\\." buffer-text)))
+				      (goto-char (point-min))
+				      (search-forward "output: 2 lines [expand]")
+				      (let ((overlay (get-char-property
+						      (match-beginning 0)
+						      codex-ide-item-result-overlay-property)))
+					(should (overlayp overlay))
+					(should (overlay-get overlay 'invisible))
+					(should-not (overlay-get overlay :display-text))
+					(should (equal (overlay-get overlay :result-full-text)
+						       "hello\nworld\n"))
+					(codex-ide-toggle-item-result-at-point
+					 (match-beginning 0))
+					(should (stringp (overlay-get overlay :display-text)))
+					(should (string-match-p
+						 "    hello\n    world"
+						 (buffer-string)))))))))
 
   (ert-deftest codex-ide-restore-thread-read-transcript-replays-file-change-diff ()
     (let* ((project-dir (codex-ide-test--make-temp-project))
@@ -8220,7 +8406,11 @@
 				    (with-current-buffer (codex-ide-session-buffer session)
 				      (let ((buffer-text (buffer-string)))
 					(should (string-match-p "\\* Ran command" buffer-text))
-					(should (string-match-p "    hello" buffer-text))
+					(should
+					 (string-match-p
+					  "output: 1 line \\[expand\\]"
+					  buffer-text))
+					(should-not (string-match-p "    hello" buffer-text))
 					(should-not (string-match-p "Chunk ID:" buffer-text))
 					(should-not (string-match-p "Original token count:" buffer-text))
 					(should (string-match-p
@@ -8242,11 +8432,27 @@
 					(should
 					 (< (string-match-p "First\\." buffer-text)
 					    (string-match-p "\\* Ran command" buffer-text)
-					    (string-match-p "    hello" buffer-text)
+					    (string-match-p "output: 1 line" buffer-text)
 					    (string-match-p "Second\\." buffer-text)
 					    (string-match-p "\\* Prepared 1 file change" buffer-text)
 					    (string-match-p "--- a/foo\\.txt" buffer-text)
-					    (string-match-p "Done\\." buffer-text)))))))))
+					    (string-match-p "Done\\." buffer-text))))
+				      (goto-char (point-min))
+				      (search-forward "output: 1 line [expand]")
+				      (let ((overlay (get-char-property
+						      (match-beginning 0)
+						      codex-ide-item-result-overlay-property)))
+					(should (overlayp overlay))
+					(should (overlay-get overlay 'invisible))
+					(should-not (overlay-get overlay :display-text))
+					(should (equal (overlay-get overlay :result-full-text)
+						       "hello\n"))
+					(codex-ide-toggle-item-result-at-point
+					 (match-beginning 0))
+					(should (stringp (overlay-get overlay :display-text)))
+					(should (string-match-p
+						 "    hello"
+						 (buffer-string)))))))))
 
   (ert-deftest codex-ide-restore-thread-read-transcript-replays-item-based-turns ()
     (let* ((project-dir (codex-ide-test--make-temp-project))

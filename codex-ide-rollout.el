@@ -145,76 +145,173 @@ an \"Output:\" line.  Return a plist with :output and, when available, :exit-cod
      (setf (alist-get 'status item) "completed")))
   item)
 
-(defun codex-ide-rollout-turn-render-items (path)
-  "Return renderable per-turn items read from rollout JSONL PATH."
+(defun codex-ide-rollout--turn-boundary-line-p (line boundary-type)
+  "Return non-nil when LINE is an event message for BOUNDARY-TYPE."
+  (and (string-match-p "\"type\":\"event_msg\"" line)
+       (string-match-p
+        (format "\"type\":\"%s\"" (regexp-quote boundary-type))
+        line)))
+
+(defconst codex-ide-rollout--recent-turn-initial-bytes
+  (* 96 1024 1024)
+  "Initial tail size used when reading limited rollout turns.")
+
+(defun codex-ide-rollout--recent-turn-lines-in-current-buffer (limit)
+  "Return (LINES . COUNT) for the most recent LIMIT completed turns."
+  (let ((turns nil)
+        (current-lines nil)
+        (collecting nil)
+        (count 0))
+    (goto-char (point-max))
+    (while (and (< count limit)
+                (> (point) (point-min)))
+      (forward-line -1)
+      (let ((line (buffer-substring-no-properties
+                   (line-beginning-position)
+                   (line-end-position))))
+        (cond
+         ((and (not collecting)
+               (codex-ide-rollout--turn-boundary-line-p
+                line
+                "task_complete"))
+          (setq collecting t
+                current-lines (list line)))
+         (collecting
+          (push line current-lines)
+          (when (codex-ide-rollout--turn-boundary-line-p
+                 line
+                 "task_started")
+            (push current-lines turns)
+            (setq current-lines nil
+                  collecting nil
+                  count (1+ count)))))))
+    (cons (apply #'append turns) count)))
+
+(defun codex-ide-rollout--drop-partial-leading-line ()
+  "Drop the first partial line from a tail chunk."
+  (goto-char (point-min))
+  (unless (eobp)
+    (delete-region
+     (point-min)
+     (min (point-max)
+          (save-excursion
+            (forward-line 1)
+            (point))))))
+
+(defun codex-ide-rollout--recent-turn-lines (path limit)
+  "Return raw JSONL lines for the most recent LIMIT completed turns in PATH."
+  (when (and (integerp limit) (> limit 0))
+    (let* ((file-size (file-attribute-size (file-attributes path)))
+           (chunk-size (min file-size
+                            codex-ide-rollout--recent-turn-initial-bytes))
+           lines
+           count)
+      (while (and (or (null count) (< count limit))
+                  (< chunk-size file-size))
+        (with-temp-buffer
+          (let ((start (max 0 (- file-size chunk-size))))
+            (let ((coding-system-for-read 'utf-8-unix))
+              (insert-file-contents path nil start file-size))
+            (when (> start 0)
+              (codex-ide-rollout--drop-partial-leading-line)))
+          (let ((result
+                 (codex-ide-rollout--recent-turn-lines-in-current-buffer
+                  limit)))
+            (setq lines (car result)
+                  count (cdr result))))
+        (when (< count limit)
+          (setq chunk-size (min file-size (* chunk-size 2)))))
+      (when (or (null count) (< count limit))
+        (with-temp-buffer
+          (let ((coding-system-for-read 'utf-8-unix))
+            (insert-file-contents path))
+          (let ((result
+                 (codex-ide-rollout--recent-turn-lines-in-current-buffer
+                  limit)))
+            (setq lines (car result)
+                  count (cdr result)))))
+      lines)))
+
+(defun codex-ide-rollout--turn-render-items-from-current-buffer ()
+  "Return renderable per-turn items from the current JSONL buffer."
+  (let ((turns nil)
+        (current-items nil)
+        (current-active nil)
+        (items-by-call-id (make-hash-table :test 'equal)))
+    (condition-case nil
+        (progn
+          (goto-char (point-min))
+          (while (not (eobp))
+            (let* ((line (buffer-substring-no-properties
+                          (line-beginning-position)
+                          (line-end-position)))
+                   (entry (codex-ide-rollout--json-read-string-safe line))
+                   (entry-type (alist-get 'type entry))
+                   (payload (alist-get 'payload entry))
+                   (payload-type (and (listp payload)
+                                      (alist-get 'type payload))))
+              (cond
+               ((and (equal entry-type "event_msg")
+                     (equal payload-type "task_started"))
+                (setq current-items nil)
+                (setq current-active t)
+                (clrhash items-by-call-id))
+               ((and (equal entry-type "event_msg")
+                     (equal payload-type "task_complete"))
+                (when current-active
+                  (push (nreverse current-items) turns))
+                (setq current-items nil)
+                (setq current-active nil)
+                (clrhash items-by-call-id))
+               ((and current-active
+                     (equal entry-type "response_item")
+                     (equal payload-type "message"))
+                (when-let* ((item (codex-ide-rollout--message-item payload)))
+                  (push item current-items)))
+               ((and current-active
+                     (equal entry-type "response_item")
+                     (equal payload-type "function_call"))
+                (let ((item (codex-ide-rollout--function-call-item payload)))
+                  (when item
+                    (push item current-items)
+                    (when-let* ((call-id (alist-get 'id item)))
+                      (puthash call-id item items-by-call-id)))))
+               ((and current-active
+                     (equal entry-type "response_item")
+                     (equal payload-type "custom_tool_call"))
+                (let ((item (codex-ide-rollout--custom-tool-call-item payload)))
+                  (when item
+                    (push item current-items)
+                    (when-let* ((call-id (alist-get 'id item)))
+                      (puthash call-id item items-by-call-id)))))
+               ((and current-active
+                     (equal entry-type "response_item")
+                     (member payload-type '("function_call_output"
+                                            "custom_tool_call_output")))
+                (when-let* ((call-id (codex-ide-rollout--alist-get-any
+                                      '(call_id call-id callId) payload))
+                            (item (gethash call-id items-by-call-id)))
+                  (codex-ide-rollout--complete-call-item
+                   item
+                   (or (codex-ide-rollout--alist-get-any
+                        '(output result) payload)
+                       ""))))))
+            (forward-line 1)))
+      (error nil))
+    (nreverse turns)))
+
+(defun codex-ide-rollout-turn-render-items (path &optional limit)
+  "Return renderable per-turn items read from rollout JSONL PATH.
+When LIMIT is a positive integer, only parse the most recent LIMIT completed
+turns."
   (when (and (stringp path)
              (file-readable-p path))
-    (let ((turns nil)
-          (current-items nil)
-          (current-active nil)
-          (items-by-call-id (make-hash-table :test 'equal)))
-      (condition-case nil
-          (with-temp-buffer
-            (insert-file-contents path)
-            (goto-char (point-min))
-            (while (not (eobp))
-              (let* ((line (buffer-substring-no-properties
-                            (line-beginning-position)
-                            (line-end-position)))
-                     (entry (codex-ide-rollout--json-read-string-safe line))
-                     (entry-type (alist-get 'type entry))
-                     (payload (alist-get 'payload entry))
-                     (payload-type (and (listp payload)
-                                        (alist-get 'type payload))))
-                (cond
-                 ((and (equal entry-type "event_msg")
-                       (equal payload-type "task_started"))
-                  (setq current-items nil)
-                  (setq current-active t)
-                  (clrhash items-by-call-id))
-                 ((and (equal entry-type "event_msg")
-                       (equal payload-type "task_complete"))
-                  (when current-active
-                    (push (nreverse current-items) turns))
-                  (setq current-items nil)
-                  (setq current-active nil)
-                  (clrhash items-by-call-id))
-                 ((and current-active
-                       (equal entry-type "response_item")
-                       (equal payload-type "message"))
-                  (when-let* ((item (codex-ide-rollout--message-item payload)))
-                    (push item current-items)))
-                 ((and current-active
-                       (equal entry-type "response_item")
-                       (equal payload-type "function_call"))
-                  (let ((item (codex-ide-rollout--function-call-item payload)))
-                    (when item
-                      (push item current-items)
-                      (when-let* ((call-id (alist-get 'id item)))
-                        (puthash call-id item items-by-call-id)))))
-                 ((and current-active
-                       (equal entry-type "response_item")
-                       (equal payload-type "custom_tool_call"))
-                  (let ((item (codex-ide-rollout--custom-tool-call-item payload)))
-                    (when item
-                      (push item current-items)
-                      (when-let* ((call-id (alist-get 'id item)))
-                        (puthash call-id item items-by-call-id)))))
-                 ((and current-active
-                       (equal entry-type "response_item")
-                       (member payload-type '("function_call_output"
-                                              "custom_tool_call_output")))
-                  (when-let* ((call-id (codex-ide-rollout--alist-get-any
-                                        '(call_id call-id callId) payload))
-                              (item (gethash call-id items-by-call-id)))
-                    (codex-ide-rollout--complete-call-item
-                     item
-                     (or (codex-ide-rollout--alist-get-any
-                          '(output result) payload)
-                         ""))))))
-              (forward-line 1)))
-        (error nil))
-      (nreverse turns))))
+    (with-temp-buffer
+      (if (and (integerp limit) (> limit 0))
+          (dolist (line (codex-ide-rollout--recent-turn-lines path limit))
+            (insert line "\n"))
+        (insert-file-contents path))
+      (codex-ide-rollout--turn-render-items-from-current-buffer))))
 
 (provide 'codex-ide-rollout)
 

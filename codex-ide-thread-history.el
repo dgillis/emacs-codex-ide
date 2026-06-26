@@ -70,29 +70,38 @@
       (setf (alist-get 'items copy) merged)
       copy)))
 
-(defun codex-ide--thread-read-with-rollout-render-items (thread-read)
-  "Return THREAD-READ augmented with renderable rollout storage items."
-  (let* ((thread (alist-get 'thread thread-read))
-         (path (alist-get 'path thread))
-         (rollout-turns (codex-ide-rollout-turn-render-items path)))
-    (if (not rollout-turns)
-        thread-read
-      (let* ((copy (copy-tree thread-read))
-             (copy-thread (alist-get 'thread copy))
-             (turns (append (codex-ide--thread-read-turns copy) nil))
-             (rollout-turns
-              (nthcdr (max 0 (- (length rollout-turns) (length turns)))
-                      rollout-turns))
-             (merged-turns
-              (cl-loop for turn in turns
-                       for rollout-items in rollout-turns
-                       collect (codex-ide--merge-restored-turn-items
-                                turn
-                                rollout-items))))
-        (if (alist-get 'turns copy)
-            (setf (alist-get 'turns copy) merged-turns)
-          (setf (alist-get 'turns copy-thread) merged-turns))
-        copy))))
+(defun codex-ide--thread-read-with-rollout-render-items (thread-read &optional limit)
+  "Return THREAD-READ augmented with renderable rollout storage items.
+When LIMIT is non-nil, request only that many recent rollout turns."
+  (if (and (integerp limit) (<= limit 0))
+      thread-read
+    (let* ((thread (alist-get 'thread thread-read))
+           (path (alist-get 'path thread))
+           (rollout-turns (codex-ide-rollout-turn-render-items path limit)))
+      (if (not rollout-turns)
+          thread-read
+        (let* ((copy (copy-tree thread-read))
+               (copy-thread (alist-get 'thread copy))
+               (turns (append (codex-ide--thread-read-turns copy) nil))
+               (rollout-turns
+                (nthcdr (max 0 (- (length rollout-turns) (length turns)))
+                        rollout-turns))
+               (turns
+                (if (and (integerp limit)
+                         (> limit 0)
+                         (> (length turns) (length rollout-turns)))
+                    (last turns (length rollout-turns))
+                  turns))
+               (merged-turns
+                (cl-loop for turn in turns
+                         for rollout-items in rollout-turns
+                         collect (codex-ide--merge-restored-turn-items
+                                  turn
+                                  rollout-items))))
+          (if (alist-get 'turns copy)
+              (setf (alist-get 'turns copy) merged-turns)
+            (setf (alist-get 'turns copy-thread) merged-turns))
+          copy)))))
 
 (provide 'codex-ide-thread-history)
 

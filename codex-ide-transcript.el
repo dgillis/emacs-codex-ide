@@ -3035,6 +3035,59 @@ continuation point after BODY.  Otherwise restore RESTORE-POINT or move to
         (codex-ide--item-result-overlay-full-text overlay)
         "")))
 
+(defun codex-ide--item-result-display-source-text (overlay full-text)
+  "Return the source text used for OVERLAY's inline display body."
+  (pcase (overlay-get overlay :item-type)
+    ("mcpToolCall"
+     (codex-ide--mcp-result-display-text full-text))
+    (_ full-text)))
+
+(defun codex-ide--materialize-item-result-display-text (overlay)
+  "Compute and cache OVERLAY's inline display text on demand."
+  (let* ((full-text (or (codex-ide--item-result-text overlay) ""))
+         (display-output-text
+          (codex-ide--item-result-display-source-text overlay full-text))
+         (visible-range
+          (codex-ide--command-output-render-range display-output-text))
+         (visible-output
+          (substring display-output-text
+                     (car visible-range)
+                     (cdr visible-range)))
+         (truncated (> (car visible-range) 0))
+         (display-text
+          (or (codex-ide--format-command-output-text visible-output truncated)
+              (and truncated
+                   (codex-ide--command-output-truncation-notice))
+              "")))
+    (overlay-put overlay :display-text display-text)
+    (overlay-put overlay :result-full-text full-text)
+    (overlay-put overlay :lazy-display-text nil)
+    (overlay-put overlay :line-count
+                 (codex-ide--command-output-line-count display-output-text))
+    (overlay-put overlay :visible-line-count
+                 (codex-ide--command-output-line-count visible-output))
+    (overlay-put overlay :truncated truncated)
+    (overlay-put overlay :body-properties
+                 (or (overlay-get overlay :body-properties)
+                     (codex-ide--current-agent-text-properties)))
+    (when-let* ((session (overlay-get overlay :session))
+                (item-id (overlay-get overlay :item-id))
+                (state (codex-ide--item-state session item-id)))
+      (setq state (plist-put state :result-full-text full-text))
+      (setq state (plist-put state :result-display-text display-output-text))
+      (codex-ide--put-item-state session item-id state))
+    display-text))
+
+(defun codex-ide--item-result-display-text (overlay)
+  "Return OVERLAY's inline display text, materializing lazy text if needed."
+  (let ((display-text (overlay-get overlay :display-text)))
+    (cond
+     ((and (overlay-get overlay :lazy-display-text)
+           (not (stringp display-text)))
+      (codex-ide--materialize-item-result-display-text overlay))
+     ((stringp display-text) display-text)
+     (t ""))))
+
 (defun codex-ide--item-result-buffer-name (overlay)
   "Return the buffer name for full item result OVERLAY."
   (let* ((session (overlay-get overlay :session))
@@ -3103,10 +3156,12 @@ Return non-nil when OVERLAY was toggled."
           (codex-ide--preserve-transcript-window-follow-anchor nil))
       (overlay-put overlay :folded folded)
       (overlay-put overlay 'invisible (and folded t))
-      (codex-ide--set-item-result-header overlay)
-      (codex-ide--set-item-result-body
-       overlay
-       (or (overlay-get overlay :display-text) ""))
+      (let ((display-text
+             (if folded
+                 (or (overlay-get overlay :display-text) "")
+               (codex-ide--item-result-display-text overlay))))
+        (codex-ide--set-item-result-header overlay)
+        (codex-ide--set-item-result-body overlay display-text))
       t)))
 
 (defun codex-ide-open-item-result-at-point (&optional pos)
@@ -3555,6 +3610,34 @@ full text needed by open buttons must live on the overlay as
      item-id
      (or (codex-ide--command-output-state-full-text state) output)))
   (codex-ide--complete-item-result-block session item-id output))
+
+(defun codex-ide--complete-restored-item-result-block-lazily
+    (session item-id output)
+  "Restore ITEM-ID's completed result without rendering OUTPUT inline."
+  (when (and (stringp output)
+             (not (string-empty-p output)))
+    (let* ((state (copy-tree (or (codex-ide--item-state session item-id) '())))
+           (line-count (codex-ide--command-output-line-count output)))
+      (setq state (plist-put state :result-full-text output))
+      (setq state (plist-put state :result-display-text nil))
+      (setq state (plist-put state :item-result-initial-folded t))
+      (codex-ide--put-item-state session item-id state)
+      (when-let* ((overlay (codex-ide--ensure-item-result-block session item-id)))
+        (overlay-put overlay :result-full-text output)
+        (overlay-put overlay :display-text nil)
+        (overlay-put overlay :lazy-display-text t)
+        (overlay-put overlay :line-count line-count)
+        (overlay-put overlay :visible-line-count line-count)
+        (overlay-put overlay :truncated nil)
+        (overlay-put overlay :complete t)
+        (overlay-put overlay :folded t)
+        (overlay-put overlay 'invisible t)
+        (overlay-put overlay :body-properties
+                     (codex-ide--current-agent-text-properties))
+        (codex-ide--set-item-result-header overlay)
+        (codex-ide--set-item-result-body overlay "")
+        (codex-ide--ensure-active-input-prompt-spacing session)
+        overlay))))
 
 (defun codex-ide--item-result-overlay-at-point (&optional pos)
   "Return the item result overlay at POS, or nil."
@@ -4613,44 +4696,11 @@ When COMPLETION is non-nil, render completion-specific state details."
         ("agentMessage"
          (codex-ide--render-current-agent-message-markdown session item-id t))
         ("commandExecution"
-         (let* ((search-request (plist-get state :search-request))
-                (output-text (or (codex-ide--command-output-state-full-text state)
-                                 (alist-get 'aggregatedOutput item)))
-                (exit-code (alist-get 'exitCode item)))
+         (let ((output-text (or (codex-ide--command-output-state-full-text state)
+                                (alist-get 'aggregatedOutput item))))
            (codex-ide--complete-command-output-block session item-id output-text)
-           (cond
-            (search-request
-             (when-let* ((hit-count (or (codex-ide--count-search-output-hits
-                                         output-text)
-					(and (equal exit-code 1) 0))))
-               (codex-ide--append-item-detail-text
-                buffer
-                (codex-ide--item-detail-line
-                 (codex-ide--format-hit-count hit-count))))
-             (when (and (equal status "failed")
-                        (not (equal exit-code 1)))
-               (codex-ide--append-item-detail-text
-                buffer
-                (codex-ide--item-detail-line
-                 (format "failed%s"
-                         (if exit-code
-                             (format " with exit code %s" exit-code)
-                           "")))
-                'error)))
-            ((equal status "failed")
-             (codex-ide--append-item-detail-text
-              buffer
-              (codex-ide--item-detail-line
-               (format "failed%s"
-                       (if exit-code
-                           (format " with exit code %s" exit-code)
-			 "")))
-              'error))
-            ((equal status "declined")
-             (codex-ide--append-item-detail-text
-              buffer
-              (codex-ide--item-detail-line "declined")
-              'warning)))))
+           (codex-ide--render-command-completion-details
+            session item output-text)))
         ("mcpToolCall"
          (when-let* ((result-text (codex-ide--mcp-result-text item)))
            (let ((state (or (codex-ide--item-state session item-id) '()))
@@ -5018,16 +5068,265 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
         (codex-ide--render-item-completion session item))
       t)))
 
+(defun codex-ide--render-command-completion-details
+    (session item output-text)
+  "Render command ITEM completion details for SESSION."
+  (let* ((buffer (codex-ide-session-buffer session))
+         (item-id (alist-get 'id item))
+         (state (codex-ide--item-state session item-id))
+         (search-request (plist-get state :search-request))
+         (exit-code (alist-get 'exitCode item))
+         (status (alist-get 'status item)))
+    (cond
+     (search-request
+      (when-let* ((hit-count (or (codex-ide--count-search-output-hits
+                                  (or output-text ""))
+                                 (and (equal exit-code 1) 0))))
+        (codex-ide--append-item-detail-text
+         buffer
+         (codex-ide--item-detail-line
+          (codex-ide--format-hit-count hit-count))
+         'codex-ide-item-detail-face))
+      (when (and (equal status "failed")
+                 (not (equal exit-code 1)))
+        (codex-ide--append-item-detail-text
+         buffer
+         (codex-ide--item-detail-line
+          (format "failed%s"
+                  (if exit-code
+                      (format " with exit code %s" exit-code)
+                    "")))
+         'error)))
+     ((equal status "failed")
+      (codex-ide--append-item-detail-text
+       buffer
+       (codex-ide--item-detail-line
+        (format "failed%s"
+                (if exit-code
+                    (format " with exit code %s" exit-code)
+                  "")))
+       'error))
+     ((equal status "declined")
+      (codex-ide--append-item-detail-text
+       buffer
+       (codex-ide--item-detail-line "declined")
+       'warning)))))
+
+(defun codex-ide--render-restored-command-completion (session item)
+  "Render restored command ITEM completion for SESSION lazily."
+  (let* ((item-id (alist-get 'id item))
+         (output-text (alist-get 'aggregatedOutput item))
+         (codex-ide--current-agent-item-type "commandExecution"))
+    (codex-ide--complete-restored-item-result-block-lazily
+     session item-id output-text)
+    (codex-ide--render-command-completion-details
+     session item output-text)
+    (codex-ide--clear-item-state session item-id)
+    t))
+
+(defun codex-ide--render-restored-mcp-completion (session item)
+  "Render restored MCP ITEM completion for SESSION lazily."
+  (let* ((item-id (alist-get 'id item))
+         (result-text (codex-ide--mcp-result-text item))
+         (error-info (alist-get 'error item))
+         (codex-ide--current-agent-item-type "mcpToolCall"))
+    (codex-ide--complete-restored-item-result-block-lazily
+     session item-id result-text)
+    (when error-info
+      (codex-ide--append-agent-text
+       (codex-ide-session-buffer session)
+       (codex-ide--item-detail-line
+        (format "error: %s"
+                (or (alist-get 'message error-info) error-info)))
+       'error))
+    (codex-ide--clear-item-state session item-id)
+    t))
+
+(defun codex-ide--render-restored-item-completion (session item)
+  "Render restored ITEM completion for SESSION when a lazy path exists."
+  (pcase (alist-get 'type item)
+    ("commandExecution"
+     (codex-ide--render-restored-command-completion session item))
+    ("mcpToolCall"
+     (codex-ide--render-restored-mcp-completion session item))
+    (_ nil)))
+
+(defun codex-ide--restored-command-analysis (command)
+  "Return cached restored rendering analysis for COMMAND."
+  (let* ((display-command (codex-ide--display-command-string command))
+         (argv (or (codex-ide--split-shell-words display-command)
+                   (codex-ide--command-argv command)))
+         (sed-request (codex-ide--sed-print-request argv))
+         read-summary
+         search-request
+         search-summary)
+    (setq read-summary
+          (cond
+           ((and sed-request
+                 (= (length (nth 2 sed-request)) 1))
+            (codex-ide--read-lines-summary
+             (car (nth 2 sed-request))
+             (nth 0 sed-request)
+             (nth 1 sed-request)))
+           ((and (stringp display-command)
+                 (string-match-p "|" display-command))
+            (let ((parts (codex-ide--split-shell-pipeline display-command)))
+              (when (= (length parts) 2)
+                (let* ((left (codex-ide--split-shell-words (car parts)))
+                       (right (codex-ide--split-shell-words (cadr parts)))
+                       (file (codex-ide--nl-command-file left))
+                       (request (codex-ide--sed-print-request right)))
+                  (when (and file request (null (nth 2 request)))
+                    (codex-ide--read-lines-summary
+                     file
+                     (nth 0 request)
+                     (nth 1 request)))))))))
+    (setq search-request (codex-ide--rg-search-request argv))
+    (setq search-summary
+          (when search-request
+            (codex-ide--search-summary
+             (car search-request)
+             (cadr search-request))))
+    (list :display-command display-command
+          :argv argv
+          :read-summary read-summary
+          :search-request search-request
+          :search-summary search-summary
+          :summary (or read-summary search-summary "Ran command"))))
+
+(defun codex-ide--restored-command-start-details (session item analysis)
+  "Return restored command ITEM start detail entries for SESSION.
+ANALYSIS is from `codex-ide--restored-command-analysis'.
+Each entry is either (:shell COMMAND) or (:detail TEXT)."
+  (let ((details nil))
+    (unless (or (plist-get analysis :read-summary)
+                (plist-get analysis :search-summary))
+      (when-let* ((display-command (plist-get analysis :display-command))
+                  ((not (string-empty-p display-command))))
+        (push (list :shell display-command) details)))
+    (when-let* ((cwd (alist-get 'cwd item))
+                ((codex-ide--command-cwd-detail-visible-p session cwd)))
+      (push (list :detail (format "cwd: %s" (abbreviate-file-name cwd)))
+            details))
+    (nreverse details)))
+
+(defun codex-ide--insert-restored-command-start-block
+    (session summary details)
+  "Insert restored command SUMMARY and DETAILS for SESSION in one transaction."
+  (let ((buffer (codex-ide-session-buffer session)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (let* ((restore-point (codex-ide--input-point-marker session))
+               (moving (and (= (point) (point-max)) (not restore-point)))
+               (active-boundary (codex-ide--active-input-boundary-marker buffer))
+               (insertion-position
+                (codex-ide--transcript-insertion-position buffer))
+               (advance-active-boundary
+                (and active-boundary
+                     (= insertion-position (marker-position active-boundary))))
+               (properties (codex-ide--current-agent-text-properties))
+               block-range)
+          (codex-ide--with-transcript-render-transaction-at
+              (session buffer insertion-position)
+            (codex-ide--maybe-save-transcript-position
+                insertion-position
+              (codex-ide-renderer-append-to-buffer
+               ""
+               :insertion-point insertion-position
+               :restore-point restore-point
+               :preserve-point t
+               :move-point-to-end moving
+               :after-insert
+               (lambda (_start _end inserted-at)
+                 (goto-char inserted-at)
+                 (codex-ide-renderer-insert-output-spacing)
+                 (let ((start (point)))
+                   (codex-ide-renderer-insert-read-only
+                    (format "* %s\n" summary)
+                    'codex-ide-item-summary-face
+                    properties)
+                   (dolist (detail details)
+                     (pcase detail
+                       (`(:shell ,command)
+                        ;; Restored history skips shell fontification here:
+                        ;; large resumes often contain thousands of commands,
+                        ;; and syntax-highlighting each historical command is
+                        ;; pure display work.
+                        (codex-ide-renderer-insert-read-only
+                         (format "  $ %s\n" command)
+                         'codex-ide-item-detail-face
+                         properties))
+                       (`(:detail ,text)
+                        (codex-ide-renderer-insert-read-only
+                         (codex-ide--item-detail-line text)
+                         'codex-ide-item-detail-face
+                         properties))))
+                   (setq block-range (cons start (point))))
+                 (codex-ide--finish-transcript-append
+                  buffer
+                  inserted-at
+                  (cdr block-range)
+                  active-boundary
+                  advance-active-boundary
+                  session)))))
+          block-range)))))
+
+(defun codex-ide--render-restored-command-start (session item)
+  "Render restored command ITEM start for SESSION using the restore fast path."
+  (let* ((buffer (codex-ide-session-buffer session))
+         (item-id (alist-get 'id item))
+         (item-type (alist-get 'type item))
+         (command (alist-get 'command item))
+         (analysis (codex-ide--restored-command-analysis command))
+         (summary (plist-get analysis :summary))
+         (details (codex-ide--restored-command-start-details
+                   session item analysis))
+         (existing-state (copy-sequence
+                          (or (codex-ide--item-state session item-id) '())))
+         anchor-marker)
+    (when summary
+      (let ((codex-ide--current-agent-item-type item-type))
+        (unless (codex-ide-session-output-prefix-inserted session)
+          (codex-ide--begin-turn-display session nil t))
+        (codex-ide--clear-pending-output-indicator session)
+        (when-let* ((range (codex-ide--insert-restored-command-start-block
+                            session summary details)))
+          (setq anchor-marker
+                (with-current-buffer buffer
+                  (copy-marker (cdr range))))
+          (let ((state existing-state))
+            (setq state (plist-put state :type item-type))
+            (setq state (plist-put state :item item))
+            (setq state (plist-put state :summary summary))
+            (setq state
+                  (plist-put
+                   state
+                   :search-request
+                   (plist-get analysis :search-request)))
+            (setq state (plist-put state :details-rendered t))
+            (setq state (plist-put state :item-result-anchor-marker
+                                   anchor-marker))
+            (setq state (plist-put state :item-result-label "output"))
+            (setq state (plist-put state :command-output-anchor-marker
+                                   anchor-marker))
+            (setq state (plist-put state :saw-output nil))
+            (codex-ide--put-item-state session item-id state))
+          t)))))
+
 (defun codex-ide--replay-stored-render-item (session item)
   "Replay stored non-message ITEM into SESSION using live item render primitives."
   (let* ((item (codex-ide--normalized-stored-render-item item))
          (item-type (alist-get 'type item))
          (item-id (alist-get 'id item)))
-    (when (codex-ide--summarize-item-start item)
+    (when (or (equal item-type "commandExecution")
+              (codex-ide--summarize-item-start item))
       (when (equal item-type "fileChange")
         (codex-ide--put-current-turn-file-change session item-id item))
-      (codex-ide--render-item-start session item)
-      (codex-ide--render-item-completion session item)
+      (if (equal item-type "commandExecution")
+          (codex-ide--render-restored-command-start session item)
+        (codex-ide--render-item-start session item))
+      (or (codex-ide--render-restored-item-completion session item)
+          (codex-ide--render-item-completion session item))
       t)))
 
 (defun codex-ide--replay-thread-read-turn (session turn)
@@ -5075,32 +5374,36 @@ Signal an error when THREAD-READ lacks replayable transcript items."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
-  (setq thread-read (codex-ide--thread-read-with-rollout-render-items thread-read))
-  (codex-ide--session-metadata-put session :turn-start-index nil)
-  (codex-ide--set-pending-turn-start-marker session nil)
   (let* ((limit (max 0 codex-ide-resume-summary-turn-limit))
+         (thread-read
+          (codex-ide--thread-read-with-rollout-render-items
+           thread-read
+           limit))
          (turns (append (codex-ide--thread-read-turns thread-read) nil))
          (recent-turns (cond
                         ((<= limit 0) nil)
                         ((> (length turns) limit) (last turns limit))
                         (t turns)))
          (restored nil))
+    (codex-ide--session-metadata-put session :turn-start-index nil)
+    (codex-ide--set-pending-turn-start-marker session nil)
     (unless recent-turns
       (error "Stored thread has no replayable turns"))
-    (dolist (turn recent-turns restored)
-      (setq restored
-            (or (codex-ide--replay-thread-read-turn session turn)
-                restored)))
-    (unless restored
-      (error
-       (concat
-        "Stored thread transcript could not be replayed. "
-        "Expected replayable userMessage/agentMessage turn items.")))
-    (when restored
-      (codex-ide--set-restored-thread-read session thread-read)
-      (codex-ide--append-to-buffer (codex-ide-session-buffer session) "\n")
-      (codex-ide--append-restored-transcript-separator
-       (codex-ide-session-buffer session)))
+    (let ((inhibit-redisplay t))
+      (dolist (turn recent-turns restored)
+        (setq restored
+              (or (codex-ide--replay-thread-read-turn session turn)
+                  restored)))
+      (unless restored
+        (error
+         (concat
+          "Stored thread transcript could not be replayed. "
+          "Expected replayable userMessage/agentMessage turn items.")))
+      (when restored
+        (codex-ide--set-restored-thread-read session thread-read)
+        (codex-ide--append-to-buffer (codex-ide-session-buffer session) "\n")
+        (codex-ide--append-restored-transcript-separator
+         (codex-ide-session-buffer session))))
     (setf (codex-ide-session-current-turn-id session) nil
           (codex-ide-session-current-message-item-id session) nil
           (codex-ide-session-current-message-prefix-inserted session) nil

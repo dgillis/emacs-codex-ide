@@ -114,6 +114,54 @@
       (when (file-exists-p path)
         (delete-file path)))))
 
+(ert-deftest codex-ide-rollout-turn-render-items-limits-to-recent-turns ()
+  (let ((path (make-temp-file "codex-ide-rollout-" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (dotimes (index 3)
+              (dolist (entry
+                       `(((type . "event_msg")
+                          (payload . ((type . "task_started"))))
+                         ((type . "response_item")
+                          (payload . ((type . "message")
+                                      (role . "assistant")
+                                      (content . (((type . "output_text")
+                                                   (text . ,(format "Turn %d" index))))))))
+                         ((type . "event_msg")
+                          (payload . ((type . "task_complete"))))))
+                (insert (json-encode entry) "\n"))))
+          (let ((turns (codex-ide-rollout-turn-render-items path 2)))
+            (should (= (length turns) 2))
+            (should (equal (mapcar (lambda (turn)
+                                     (alist-get 'text (car turn)))
+                                   turns)
+                           '("Turn 1" "Turn 2")))))
+      (when (file-exists-p path)
+        (delete-file path)))))
+
+(ert-deftest codex-ide-rollout-turn-render-items-decodes-limited-utf-8 ()
+  (let ((path (make-temp-file "codex-ide-rollout-" nil ".jsonl")))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (dolist (entry
+                     '(((type . "event_msg")
+                        (payload . ((type . "task_started"))))
+                       ((type . "response_item")
+                        (payload . ((type . "message")
+                                    (role . "assistant")
+                                    (content . (((type . "output_text")
+                                                 (text . "restored café")))))))
+                       ((type . "event_msg")
+                        (payload . ((type . "task_complete"))))))
+              (insert (json-encode entry) "\n")))
+          (let* ((turns (codex-ide-rollout-turn-render-items path 1))
+                 (item (caar turns)))
+            (should (equal (alist-get 'text item) "restored café"))))
+      (when (file-exists-p path)
+        (delete-file path)))))
+
 (provide 'codex-ide-rollout-tests)
 
 ;;; codex-ide-rollout-tests.el ends here
