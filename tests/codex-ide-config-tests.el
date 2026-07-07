@@ -579,9 +579,11 @@
 						     (approvalPolicy . "never")
 						     (sandbox . "read-only")
 						     (personality . "friendly")
+						     (config
+						      (model_reasoning_effort
+						       . "medium"))
 						     (model . "gpt-5.4-mini")
-						     (serviceTier . "priority")
-						     (effort . "medium")))))))))
+						     (serviceTier . "priority")))))))))
 
 (ert-deftest codex-ide-submit-uses-session-aware-turn-config ()
   (let ((project-dir (codex-ide-test--make-temp-project))

@@ -142,9 +142,18 @@
                                        (params . ,params)))
     id))
 
+(defun codex-ide--thread-config (&optional session)
+  "Build app-server config overrides for thread start/resume in SESSION."
+  (delq nil
+        `(,@(when-let* ((effort
+                         (codex-ide-config-effective-reasoning-effort
+                          session)))
+              `((model_reasoning_effort . ,effort))))))
+
 (defun codex-ide--thread-start-params (&optional session)
   "Build `thread/start` params for SESSION's current working directory."
-  (let ((working-dir (codex-ide--get-working-directory)))
+  (let ((working-dir (codex-ide--get-working-directory))
+        (config (codex-ide--thread-config session)))
     (delq nil
           `((cwd . ,working-dir)
             (approvalPolicy . ,(codex-ide-config-effective-value
@@ -152,13 +161,13 @@
                                 session))
             (sandbox . ,(codex-ide-config-effective-value 'sandbox-mode session))
             (personality . ,(codex-ide-config-effective-value 'personality session))
+            ,@(when config
+                `((config . ,config)))
             ,@(when-let* ((model (codex-ide-config-effective-value 'model session)))
                 `((model . ,model)))
             ,@(when-let* ((service-tier
                            (codex-ide--fast-service-tier session)))
-                `((serviceTier . ,service-tier)))
-            (effort . ,(codex-ide-config-effective-reasoning-effort
-                        session))))))
+                `((serviceTier . ,service-tier)))))))
 
 (defun codex-ide--turn-start-sandbox-policy (&optional session)
   "Build a `sandboxPolicy` object for `turn/start` from SESSION settings."
@@ -178,7 +187,8 @@
 
 (defun codex-ide--thread-resume-params (thread-id &optional session)
   "Build `thread/resume` params for THREAD-ID in SESSION's current working directory."
-  (let ((working-dir (codex-ide--get-working-directory)))
+  (let ((working-dir (codex-ide--get-working-directory))
+        (config (codex-ide--thread-config session)))
     (delq nil
           `((threadId . ,thread-id)
             (cwd . ,working-dir)
@@ -187,13 +197,13 @@
                                 session))
             (sandbox . ,(codex-ide-config-effective-value 'sandbox-mode session))
             (personality . ,(codex-ide-config-effective-value 'personality session))
+            ,@(when config
+                `((config . ,config)))
             ,@(when-let* ((model (codex-ide-config-effective-value 'model session)))
                 `((model . ,model)))
             ,@(when-let* ((service-tier
                            (codex-ide--fast-service-tier session)))
-                `((serviceTier . ,service-tier)))
-            (effort . ,(codex-ide-config-effective-reasoning-effort
-                        session))))))
+                `((serviceTier . ,service-tier)))))))
 
 (defun codex-ide--thread-read-params (thread-id &optional include-turns)
   "Build `thread/read` params for THREAD-ID."
