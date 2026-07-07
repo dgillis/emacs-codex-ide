@@ -6457,12 +6457,13 @@ compatibility with older app-server payloads and global notifications."
            (codex-ide--begin-turn-display session)))
 	("item/started"
 	 (when-let* ((item (alist-get 'item params)))
-           (when (codex-ide--remember-or-request-model-name session item)
-             (codex-ide--update-header-line session))
-           (codex-ide--check-reported-turn-config
-            session
-            "item/started"
-            item)
+           (when (codex-ide--item-reports-turn-config-p item)
+             (when (codex-ide--remember-or-request-model-name session item)
+               (codex-ide--update-header-line session))
+             (codex-ide--check-reported-turn-config
+              session
+              "item/started"
+              item))
            (codex-ide-log-message
             session
             "Item started: %s (%s)"
@@ -6552,12 +6553,13 @@ compatibility with older app-server payloads and global notifications."
 	 (codex-ide--render-reasoning-delta session params))
 	("item/completed"
 	 (when-let* ((item (alist-get 'item params)))
-           (when (codex-ide--remember-or-request-model-name session item)
-             (codex-ide--update-header-line session))
-           (codex-ide--check-reported-turn-config
-            session
-            "item/completed"
-            item)
+           (when (codex-ide--item-reports-turn-config-p item)
+             (when (codex-ide--remember-or-request-model-name session item)
+               (codex-ide--update-header-line session))
+             (codex-ide--check-reported-turn-config
+              session
+              "item/completed"
+              item))
            (codex-ide-log-message
             session
             "Item completed: %s (%s, status=%s)"
@@ -6855,6 +6857,10 @@ the mismatch warning only reflects meaningful behavior changes."
                         (not (equal normalized-submitted normalized-reported)))
                (list key submitted-value reported-value))))
          submitted)))
+
+(defun codex-ide--item-reports-turn-config-p (item)
+  "Return non-nil when ITEM fields describe the parent turn config."
+  (not (equal (alist-get 'type item) "collabAgentToolCall")))
 
 (defun codex-ide--format-turn-config-mismatches (mismatches)
   "Return a compact user-facing string for config MISMATCHES."

@@ -5281,20 +5281,28 @@
           (codex-ide-reasoning-effort "medium"))
       (codex-ide-test-with-fixture project-dir
 				   (codex-ide-test-with-fake-processes
-				    (let ((session (codex-ide--create-process-session)))
-				      (codex-ide-config-set-session-value
-				       'reasoning-effort
-				       "high"
-				       session)
-				      (should (equal (alist-get 'effort
-								(codex-ide--thread-start-params
-								 session))
-						     "high"))
-				      (should (equal (alist-get 'effort
-								(codex-ide--thread-resume-params
-								 "thread-1"
-								 session))
-						     "high")))))))
+					    (let ((session (codex-ide--create-process-session)))
+					      (codex-ide-config-set-session-value
+					       'reasoning-effort
+					       "high"
+					       session)
+					      (let ((start-params
+						     (codex-ide--thread-start-params
+						      session))
+						    (resume-params
+						     (codex-ide--thread-resume-params
+						      "thread-1"
+						      session)))
+						(should-not (alist-get 'effort start-params))
+						(should-not (alist-get 'effort resume-params))
+						(should
+						 (equal (alist-get 'config start-params)
+							'((model_reasoning_effort
+							   . "high"))))
+						(should
+						 (equal (alist-get 'config resume-params)
+							'((model_reasoning_effort
+							   . "high"))))))))))
 
   (ert-deftest codex-ide-thread-start-and-resume-include-session-aware-fast ()
     (let ((project-dir (codex-ide-test--make-temp-project))
@@ -5426,6 +5434,53 @@
 						  "Config mismatch after thread/settings/updated"
 						  text))
 					       logs)))))))
+
+  (ert-deftest codex-ide-collab-agent-config-does-not-trigger-parent-mismatch ()
+    (let ((project-dir (codex-ide-test--make-temp-project))
+          (codex-ide-model "gpt-5.5")
+          (codex-ide-reasoning-effort "xhigh")
+          (messages nil))
+      (codex-ide-test-with-fixture project-dir
+				   (codex-ide-test-with-fake-processes
+				    (let ((session (codex-ide--create-process-session)))
+				      (setf (codex-ide-session-thread-id session)
+					    "thread-collab-parent")
+				      (codex-ide--session-metadata-put
+				       session
+				       :model-name
+				       "gpt-5.5")
+				      (with-current-buffer (codex-ide-session-buffer session)
+					(codex-ide--insert-input-prompt session "Delegate this")
+					(cl-letf (((symbol-function 'codex-ide--request-sync)
+						   (lambda (&rest _) nil)))
+					  (codex-ide--submit-prompt)))
+				      (cl-letf (((symbol-function 'message)
+						 (lambda (format-string &rest args)
+						   (push (apply #'format format-string args)
+							 messages))))
+					(dolist (method '("item/started" "item/completed"))
+					  (codex-ide--handle-notification
+					   session
+					   `((method . ,method)
+					     (params
+					      . ((threadId . "thread-collab-parent")
+						 (item
+						  . ((id . "call-subagent")
+						     (type . "collabAgentToolCall")
+						     (tool . "spawnAgent")
+						     (status . "inProgress")
+						     (receiverThreadIds . [])
+						     (model . "gpt-5.4-mini")
+						     (reasoningEffort . "medium"))))))))))
+				      (should-not
+				       (seq-some
+					(lambda (text)
+					  (string-match-p
+					   "Codex config mismatch:"
+					   text))
+					messages))
+				      (should (equal (codex-ide--server-model-name session)
+						     "gpt-5.5"))))))
 
   (ert-deftest codex-ide-reported-config-match-uses-submitted-snapshot ()
     (let ((project-dir (codex-ide-test--make-temp-project))
