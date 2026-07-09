@@ -82,6 +82,16 @@
      (error . ((code . ,code)
                (message . ,message))))))
 
+(defun codex-ide--format-jsonrpc-error (err)
+  "Return a readable error string for JSON-RPC ERR."
+  (let ((message (alist-get 'message err))
+        (code (alist-get 'code err)))
+    (cond
+     ((and message code)
+      (format "%s (code %s)" message code))
+     (message message)
+     (t (codex-ide--stringify-error-payload err)))))
+
 (defun codex-ide--request-sync (&optional session method params)
   "Send METHOD with PARAMS to SESSION and wait for the response."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
@@ -114,8 +124,7 @@
       (codex-ide-log-message session "Request %s (id=%s) failed: %S" method id err)
       (error "Codex app-server request %s failed: %s"
              method
-             (or (alist-get 'message err)
-                 (codex-ide--stringify-error-payload err))))
+             (codex-ide--format-jsonrpc-error err)))
      ((not done)
       (codex-ide-log-message session "Request %s (id=%s) timed out" method id)
       (error "Timed out waiting for %s" method))
