@@ -358,13 +358,23 @@
 				    (should (equal captured-prompt
 						   "Approval policy (effective = on-request, default = untrusted): ")))))))
 
-(ert-deftest codex-ide-config-read-value-requires-listed-choices ()
+(ert-deftest codex-ide-config-format-value-prompt-preserves-config-default ()
+  (let ((codex-ide-reasoning-effort "high"))
+    (should
+     (equal
+      (codex-ide-config-format-value-prompt
+       'reasoning-effort "Reasoning effort")
+      "Reasoning effort (default = high): "))))
+
+(ert-deftest codex-ide-config-read-value-falls-back-to-known-reasoning-efforts ()
   (let ((collection nil)
         (require-match nil)
         (prompt nil)
         (default :unset)
         (recorded-extra-properties nil))
-    (cl-letf (((symbol-function 'completing-read)
+    (cl-letf (((symbol-function 'codex-ide--reasoning-effort-options)
+               (lambda (&rest _) nil))
+              ((symbol-function 'completing-read)
                (lambda (captured-prompt choices _predicate match
 					&optional _initial-input _hist def)
                  (setq prompt captured-prompt
@@ -385,10 +395,39 @@
     (should (eq (plist-get recorded-extra-properties :cycle-sort-function)
                 'identity))))
 
+(ert-deftest codex-ide-config-read-value-uses-model-reasoning-efforts-and-default ()
+  (let ((called nil))
+    (cl-letf (((symbol-function 'codex-ide--reasoning-effort-options)
+               (lambda (model &optional session)
+                 (should (equal model "gpt-5.6-sol"))
+                 (should-not session)
+                 '(:choices ("low" "medium" "high" "xhigh" "max" "ultra")
+			    :default "low")))
+              ((symbol-function 'completing-read)
+               (lambda (prompt collection predicate require-match
+                               &optional initial-input hist def inherit-input-method)
+                 (setq called (list prompt collection predicate require-match
+                                    initial-input hist def inherit-input-method
+                                    completion-extra-properties))
+                 def)))
+      (should (equal (codex-ide-config-read-value
+                      'reasoning-effort nil "gpt-5.6-sol")
+                     "low")))
+    (should (equal (nth 0 called)
+                   "Reasoning effort (default = low): "))
+    (should (equal (nth 1 called)
+                   '("low" "medium" "high" "xhigh" "max" "ultra")))
+    (should (nth 3 called))
+    (should (equal (nth 6 called) "low"))
+    (should (eq (plist-get (nth 8 called) :display-sort-function)
+                'identity))
+    (should (eq (plist-get (nth 8 called) :cycle-sort-function)
+                'identity))))
+
 (ert-deftest codex-ide-config-read-value-uses-dynamic-choices-for-model ()
   (let ((called nil))
     (cl-letf (((symbol-function 'codex-ide--available-model-names)
-               (lambda ()
+               (lambda (&rest _)
                  '("gpt-5.4" "gpt-5.4-mini")))
               ((symbol-function 'completing-read)
                (lambda (prompt collection predicate require-match
@@ -432,7 +471,7 @@
 
 (ert-deftest codex-ide-config-read-value-allows-clearing-model ()
   (cl-letf (((symbol-function 'codex-ide--available-model-names)
-             (lambda ()
+             (lambda (&rest _)
                '("gpt-5.4" "gpt-5.4-mini")))
             ((symbol-function 'completing-read)
              (lambda (&rest _) "<empty>")))
@@ -440,7 +479,7 @@
 
 (ert-deftest codex-ide-config-read-value-allows-custom-model-entry ()
   (cl-letf (((symbol-function 'codex-ide--available-model-names)
-             (lambda ()
+             (lambda (&rest _)
                '("gpt-5.4" "gpt-5.4-mini")))
             ((symbol-function 'completing-read)
              (lambda (&rest _) "Other..."))
@@ -453,7 +492,7 @@
 
 (ert-deftest codex-ide-config-read-value-falls-back-to-freeform-when-model-list-unavailable ()
   (cl-letf (((symbol-function 'codex-ide--available-model-names)
-             (lambda () nil))
+             (lambda (&rest _) nil))
             ((symbol-function 'read-string)
              (lambda (prompt initial-input)
                (should (equal prompt "Custom model: "))
@@ -466,7 +505,7 @@
         (codex-ide-config-history nil)
         (codex-ide-model "gpt-5.4")
         (codex-ide-reasoning-effort "medium")
-        (keys nil)
+        (reads nil)
         (scope-session nil)
         (message-text nil))
     (codex-ide-test-with-fixture project-dir
@@ -476,8 +515,8 @@
                                         (codex-ide-session-buffer session)
                                       (cl-letf (((symbol-function
                                                   'codex-ide-config-read-value)
-						 (lambda (key &optional _session)
-                                                   (push key keys)
+						 (lambda (key &optional _session context)
+                                                   (push (list key context) reads)
                                                    (pcase key
                                                      ('model "gpt-5.4-mini")
                                                      ('reasoning-effort "high"))))
@@ -493,8 +532,9 @@
                                                                 format-string
                                                                 args)))))
 					(codex-ide-set-model-and-reasoning-effort)))
-                                    (should (equal (nreverse keys)
-                                                   '(model reasoning-effort)))
+				    (should (equal (nreverse reads)
+						   '((model nil)
+						     (reasoning-effort "gpt-5.4-mini"))))
                                     (should (eq scope-session session))
                                     (should (equal codex-ide-model "gpt-5.4"))
                                     (should (equal codex-ide-reasoning-effort
@@ -513,10 +553,51 @@
                                              (regexp-quote
                                               "model set to gpt-5.4-mini")
                                              message-text))
-                                    (should (string-match-p
-                                             (regexp-quote
-                                              "reasoning effort set to high")
-                                             message-text)))))))
+					    (should (string-match-p
+						     (regexp-quote
+						      "reasoning effort set to high")
+						     message-text)))))))
+
+(ert-deftest codex-ide-set-model-and-reasoning-effort-reuses-model-list ()
+  (let ((codex-ide-model "gpt-5.4")
+        (codex-ide-reasoning-effort "medium")
+        (fetch-count 0))
+    (cl-letf (((symbol-function 'codex-ide--ensure-cli)
+               (lambda () t))
+              ((symbol-function 'codex-ide--cleanup-dead-sessions)
+               (lambda () nil))
+              ((symbol-function 'codex-ide--ensure-active-buffer-tracking)
+               (lambda () nil))
+              ((symbol-function 'codex-ide--get-working-directory)
+               (lambda () "/tmp/codex-ide-model-picker/"))
+              ((symbol-function 'codex-ide--query-session-for-thread-selection)
+               (lambda (&optional _directory) 'query-session))
+              ((symbol-function 'codex-ide--list-models)
+               (lambda (&optional _session)
+                 (setq fetch-count (1+ fetch-count))
+                 '(((id . "gpt-5.6-sol")
+                    (model . "gpt-5.6-sol")
+                    (supportedReasoningEfforts
+                     . (((reasoningEffort . "low"))
+                        ((reasoningEffort . "medium"))
+                        ((reasoningEffort . "high"))
+                        ((reasoningEffort . "xhigh"))
+                        ((reasoningEffort . "max"))
+                        ((reasoningEffort . "ultra"))))
+                    (defaultReasoningEffort . "low")
+                    (isDefault . t)))))
+              ((symbol-function 'completing-read)
+               (lambda (prompt &rest _)
+                 (if (string-prefix-p "Model " prompt)
+                     "gpt-5.6-sol"
+                   "low")))
+              ((symbol-function 'message)
+               (lambda (&rest _) nil)))
+      (codex-ide-set-model-and-reasoning-effort
+       nil nil 'future-sessions))
+    (should (= fetch-count 1))
+    (should (equal codex-ide-model "gpt-5.6-sol"))
+    (should (equal codex-ide-reasoning-effort "low"))))
 
 (ert-deftest codex-ide-set-model-and-reasoning-effort-can-clear-model ()
   (let ((codex-ide-model "gpt-5.4")
@@ -526,12 +607,64 @@
     (should-not codex-ide-model)
     (should (equal codex-ide-reasoning-effort "low"))))
 
+(ert-deftest codex-ide-set-model-and-reasoning-effort-can-use-default-model-this-session ()
+  (let ((codex-ide-model "gpt-5.4")
+        (codex-ide-reasoning-effort "medium")
+        (session (make-codex-ide-session)))
+    (cl-letf (((symbol-function 'codex-ide-config--refresh-session)
+               (lambda (&rest _) nil))
+              ((symbol-function 'message)
+               (lambda (&rest _) nil)))
+      (codex-ide-set-model-and-reasoning-effort
+       "" "low" 'this-session session))
+    (should (codex-ide-config--session-value-bound-p 'model session))
+    (should-not (codex-ide-config-effective-value 'model session))
+    (should (equal (codex-ide-config-effective-value
+                    'reasoning-effort session)
+                   "low"))
+    (should (equal codex-ide-model "gpt-5.4"))))
+
+(ert-deftest codex-ide-config-clear-session-value-preserves-default-model-override ()
+  (let ((codex-ide-model "gpt-5.4")
+        (session (make-codex-ide-session)))
+    (codex-ide-config-set-session-value 'model nil session)
+    (codex-ide-config-set-session-value 'reasoning-effort "high" session)
+    (codex-ide-config-clear-session-value 'reasoning-effort session)
+    (should (codex-ide-config--session-value-bound-p 'model session))
+    (should-not (codex-ide-config-effective-value 'model session))
+    (should-not (codex-ide-config--session-value-bound-p
+                 'reasoning-effort session))))
+
+(ert-deftest codex-ide-set-model-and-reasoning-effort-uses-default-model-metadata-when-clearing ()
+  (let ((codex-ide-model "gpt-5.4")
+        (codex-ide-reasoning-effort "medium")
+        (reads nil))
+    (cl-letf (((symbol-function 'codex-ide-config-read-value)
+               (lambda (key &optional _session context)
+                 (push (list key context) reads)
+                 (pcase key
+                   ('model "")
+                   ('reasoning-effort "low"))))
+              ((symbol-function 'message)
+               (lambda (&rest _) nil)))
+      (codex-ide-set-model-and-reasoning-effort
+       nil nil 'future-sessions))
+    (should (equal (nreverse reads)
+                   '((model nil) (reasoning-effort ""))))
+    (should-not codex-ide-model)
+    (should (equal codex-ide-reasoning-effort "low"))))
+
 (ert-deftest codex-ide-config-applies-to-live-session-p-flags-turn-scoped-settings ()
   (should (codex-ide-config-applies-to-live-session-p 'approval-policy))
   (should (codex-ide-config-applies-to-live-session-p 'sandbox-mode))
   (should (codex-ide-config-applies-to-live-session-p 'fast))
   (should (codex-ide-config-applies-to-live-session-p 'reasoning-effort))
   (should (codex-ide-config-applies-to-live-session-p 'personality)))
+
+(ert-deftest codex-ide-reasoning-effort-safe-local-values-include-max-and-ultra ()
+  (let ((predicate (get 'codex-ide-reasoning-effort 'safe-local-variable)))
+    (should (funcall predicate "max"))
+    (should (funcall predicate "ultra"))))
 
 (ert-deftest codex-ide-config-format-apply-message-omits-live-session-restart-note-for-turn-scoped-settings ()
   (should

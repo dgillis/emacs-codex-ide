@@ -88,9 +88,12 @@ When set to \"off\", Codex IDE leaves `serviceTier' unset."
                  (const "low")
                  (const "medium")
                  (const "high")
-                 (const "xhigh"))
+                 (const "xhigh")
+                 (const "max")
+                 (const "ultra"))
   :safe (lambda (value)
-          (member value '("none" "minimal" "low" "medium" "high" "xhigh")))
+          (member value '("none" "minimal" "low" "medium" "high" "xhigh"
+                          "max" "ultra")))
   :group 'codex-ide)
 
 ;;;###autoload

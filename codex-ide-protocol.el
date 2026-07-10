@@ -42,6 +42,8 @@
 
 (defvar codex-ide-request-timeout)
 (defvar codex-ide-model)
+(defvar codex-ide--model-list-interaction-cache nil
+  "Model entries cached for the duration of one combined picker interaction.")
 (defvar codex-ide-fast)
 (defvar codex-ide-approval-policy)
 (defvar codex-ide-sandbox-mode)
@@ -517,26 +519,115 @@ SORT-KEY is nil, sort by `updated_at'."
   "Request SESSION's server-derived model name once, without blocking."
   (codex-ide--request-server-model-name session))
 
-(defun codex-ide--available-model-names ()
-  "Return visible model names for the current workspace, or nil on failure."
-  (condition-case nil
-      (progn
-        (unless (codex-ide--ensure-cli)
-          (error "Codex CLI not available"))
-        (codex-ide--cleanup-dead-sessions)
-        (codex-ide--ensure-active-buffer-tracking)
-        (let* ((working-dir (codex-ide--get-working-directory))
-               (session (or (codex-ide--query-session-for-thread-selection working-dir)
-                            (codex-ide--ensure-query-session-for-thread-selection
-                             working-dir)))
-               (models (codex-ide--list-models session)))
-          (delete-dups
-           (delq nil
-                 (mapcar (lambda (model)
-                           (or (alist-get 'model model)
-                               (alist-get 'id model)))
-                        models)))))
-    (error nil)))
+(defun codex-ide--available-models (&optional session)
+  "Return visible model entries for SESSION's workspace, or nil on failure."
+  (let* ((working-dir
+          (condition-case nil
+              (or (and session (codex-ide-session-directory session))
+                  (codex-ide--get-working-directory))
+            (error nil)))
+         (cache codex-ide--model-list-interaction-cache)
+         (missing (make-symbol "missing"))
+         (cached (if (hash-table-p cache)
+                     (gethash working-dir cache missing)
+                   missing)))
+    (cond
+     ((null working-dir)
+      nil)
+     ((not (eq cached missing))
+      cached)
+     (t
+      (let ((models
+             (condition-case nil
+                 (progn
+                   (unless (codex-ide--ensure-cli)
+                     (error "Codex CLI not available"))
+                   (codex-ide--cleanup-dead-sessions)
+                   (codex-ide--ensure-active-buffer-tracking)
+                   (let ((query-session
+                          (or (codex-ide--query-session-for-thread-selection
+                               working-dir)
+                              (codex-ide--ensure-query-session-for-thread-selection
+                               working-dir))))
+                     (codex-ide--list-models query-session)))
+               (error nil))))
+        (when (hash-table-p cache)
+          (puthash working-dir models cache))
+        models)))))
+
+(defun codex-ide--model-entry-name (entry)
+  "Return the model name from app-server model ENTRY."
+  (when (proper-list-p entry)
+    (let ((name (or (alist-get 'model entry)
+                    (alist-get 'id entry))))
+      (and (stringp name)
+           (not (string-empty-p name))
+           name))))
+
+(defun codex-ide--available-model-names (&optional _context session)
+  "Return visible model names for SESSION's workspace, or nil on failure."
+  (delete-dups
+   (delq nil
+         (mapcar #'codex-ide--model-entry-name
+                 (codex-ide--available-models session)))))
+
+(defun codex-ide--model-entry (models model &optional session)
+  "Return MODEL's entry from MODELS, or the effective default for SESSION."
+  (let* ((explicit-default-p
+          (or (and (stringp model) (string-empty-p model))
+	      (and (null model)
+                   session
+                   (codex-ide-config--session-value-bound-p 'model session)
+                   (null (codex-ide-config-session-value 'model session)))))
+         (configured-model
+          (and (not explicit-default-p)
+	       (codex-ide-config-effective-value 'model session)))
+         (server-model
+          (and (not explicit-default-p)
+	       session
+	       (codex-ide--server-model-name session)))
+         (server-model
+          (and (stringp server-model)
+	       (not (string-empty-p server-model))
+	       (not (equal server-model "unknown"))
+	       server-model))
+         (model (and (not explicit-default-p)
+                     (or model configured-model server-model))))
+    (if (and (stringp model) (not (string-empty-p model)))
+        (seq-find (lambda (entry)
+                    (equal (codex-ide--model-entry-name entry) model))
+                  models)
+      (seq-find (lambda (entry)
+                  (and (codex-ide--model-entry-name entry)
+                       (eq (alist-get 'isDefault entry) t)))
+                models))))
+
+(defun codex-ide--reasoning-effort-name (entry)
+  "Return the reasoning effort name from metadata ENTRY, or nil if invalid."
+  (when (proper-list-p entry)
+    (let ((name (alist-get 'reasoningEffort entry)))
+      (and (stringp name)
+           (not (string-empty-p name))
+           name))))
+
+(defun codex-ide--reasoning-effort-options (&optional model session)
+  "Return reasoning effort choices and default for MODEL in SESSION.
+Return nil when app-server does not provide usable model metadata."
+  (when-let* ((models (codex-ide--available-models session))
+	      (entry (codex-ide--model-entry models model session))
+	      (efforts (alist-get 'supportedReasoningEfforts entry))
+	      ((or (proper-list-p efforts) (vectorp efforts)))
+	      ((> (length efforts) 0))
+	      ((seq-every-p #'codex-ide--reasoning-effort-name efforts))
+	      (choices
+	       (delete-dups
+                (mapcar #'codex-ide--reasoning-effort-name
+                        (append efforts nil))))
+	      (default (alist-get 'defaultReasoningEffort entry))
+	      ((and (stringp default)
+                    (not (string-empty-p default))
+                    (member default choices))))
+    (list :choices choices :default default)))
 
 (defun codex-ide--fast-service-tier (&optional session)
   "Return the app-server service tier implied by SESSION's Fast setting."
@@ -555,8 +646,8 @@ SORT-KEY is nil, sort by `updated_at'."
      (if (alist-get 'error message) " with error" ""))
     (when pending
       (funcall pending
-               (alist-get 'result message)
-               (alist-get 'error message)))))
+	       (alist-get 'result message)
+	       (alist-get 'error message)))))
 
 (provide 'codex-ide-protocol)
 

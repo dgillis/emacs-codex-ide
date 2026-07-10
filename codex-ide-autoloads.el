@@ -34,7 +34,7 @@ When set to \"off\", Codex IDE leaves `serviceTier' unset.")
 (defvar codex-ide-reasoning-effort "medium"
 "Reasoning effort sent for new or resumed threads and later turns.")
 (custom-autoload 'codex-ide-reasoning-effort "codex-ide" t)
-(put 'codex-ide-reasoning-effort 'safe-local-variable (lambda (value) (member value '("none" "minimal" "low" "medium" "high" "xhigh"))))
+(put 'codex-ide-reasoning-effort 'safe-local-variable (lambda (value) (member value '("none" "minimal" "low" "medium" "high" "xhigh" "max" "ultra"))))
 (defvar codex-ide-running-submit-action 'steer
 "Action used by `codex-ide-submit' while a Codex turn is running.")
 (custom-autoload 'codex-ide-running-submit-action "codex-ide" t)
