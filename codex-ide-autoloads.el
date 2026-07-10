@@ -452,6 +452,8 @@ while 1 would fully replace the background with the foreground color.")
 
 ;;; Generated autoloads from codex-ide-session.el
 
+(autoload 'codex-ide-agent-picker "codex-ide-session"
+"Select and open a thread in the current Codex agent tree." t)
 (autoload 'codex-ide "codex-ide-session"
 "Start Codex for the current project or directory." t)
 (autoload 'codex-ide-continue "codex-ide-session"
