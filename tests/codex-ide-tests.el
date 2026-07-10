@@ -3110,6 +3110,45 @@
         (should (string-match-p "  └ receivers: alpha" text))
         (should (string-match-p "  └ agent alpha: pendingInit" text))))))
 
+(ert-deftest codex-ide-collab-agent-spawn-renders-effective-config-on-completion ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let ((session (make-codex-ide-session
+                    :directory default-directory
+                    :buffer (current-buffer)
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (codex-ide--render-item-start
+       session
+       (list (cons 'id "call-1")
+             (cons 'type "collabAgentToolCall")
+             (cons 'tool "spawnAgent")
+             (cons 'status "inProgress")
+             (cons 'receiverThreadIds nil)
+             (cons 'model "gpt-5.6-terra")
+             (cons 'reasoningEffort "medium")))
+      (should-not (string-match-p "  └ config:" (buffer-string)))
+      (codex-ide--render-item-completion
+       session
+       (list (cons 'id "call-1")
+             (cons 'type "collabAgentToolCall")
+             (cons 'tool "spawnAgent")
+             (cons 'status "completed")
+             (cons 'receiverThreadIds ["thread-alpha"])
+             (cons 'model "gpt-5.6-sol")
+             (cons 'reasoningEffort "high")
+             (cons 'agentsStates
+                   (list
+                    (cons "thread-alpha"
+                          (list (cons 'status "pendingInit")
+                                (cons 'message nil)))))))
+      (should (string-match-p
+               "  └ config: gpt-5\\.6-sol (high)"
+               (buffer-string))))))
+
 (ert-deftest codex-ide-collab-agent-wait-renders-agent-state-summary ()
   (with-temp-buffer
     (codex-ide-session-mode)
