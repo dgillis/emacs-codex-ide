@@ -19,9 +19,13 @@
 (require 'codex-ide-core)
 
 (declare-function codex-ide--update-header-line "codex-ide-header" (&optional session))
-(declare-function codex-ide--available-model-names "codex-ide-protocol" ())
+(declare-function codex-ide--available-model-names "codex-ide-protocol"
+                  (&optional context session))
+(declare-function codex-ide--reasoning-effort-options "codex-ide-protocol"
+                  (&optional model session))
 
 (defvar codex-ide-model)
+(defvar codex-ide--model-list-interaction-cache)
 (defvar codex-ide-fast)
 (defvar codex-ide-reasoning-effort)
 (defvar codex-ide-approval-policy)
@@ -75,6 +79,7 @@
      :choices-function codex-ide--available-model-names
      :allow-custom t
      :allow-empty t
+     :nil-is-value t
      :custom-prompt "Custom model: "
      :global-var codex-ide-model
      :applies-to-live-session t
@@ -89,7 +94,8 @@
     (reasoning-effort
      :label "reasoning effort"
      :prompt "Reasoning effort"
-     :choices ("none" "minimal" "low" "medium" "high" "xhigh")
+     :choices-function codex-ide--reasoning-effort-options
+     :fallback-choices ("none" "minimal" "low" "medium" "high" "xhigh")
      :global-var codex-ide-reasoning-effort
      :applies-to-live-session t
      :protocol-key effort))
@@ -160,6 +166,10 @@ keys are left unchanged when applying the preset.")
   "Return the dynamic choices function for config KEY, if any."
   (plist-get (codex-ide-config--descriptor key) :choices-function))
 
+(defun codex-ide-config--fallback-choices (key)
+  "Return fallback completion choices for config KEY, if any."
+  (plist-get (codex-ide-config--descriptor key) :fallback-choices))
+
 (defun codex-ide-config--allow-custom-p (key)
   "Return non-nil when config KEY supports arbitrary values."
   (plist-get (codex-ide-config--descriptor key) :allow-custom))
@@ -171,6 +181,10 @@ keys are left unchanged when applying the preset.")
 (defun codex-ide-config--custom-prompt (key)
   "Return the freeform input prompt for config KEY, if any."
   (plist-get (codex-ide-config--descriptor key) :custom-prompt))
+
+(defun codex-ide-config--nil-is-value-p (key)
+  "Return non-nil when nil is an explicit config value for KEY."
+  (plist-get (codex-ide-config--descriptor key) :nil-is-value))
 
 (defun codex-ide-config--global-var (key)
   "Return the default variable symbol for config KEY."
@@ -514,10 +528,9 @@ The return value is (BOUND VALUE)."
     (error "No Codex session available"))
   (let ((overrides (copy-sequence (or (codex-ide-config--session-overrides session)
                                       '()))))
-    (setq overrides (plist-put overrides key nil))
     (let ((normalized nil))
       (while overrides
-        (when (cadr overrides)
+        (unless (eq (car overrides) key)
           (setq normalized
                 (plist-put normalized (car overrides) (cadr overrides))))
         (setq overrides (cddr overrides)))
@@ -539,7 +552,7 @@ The return value is (BOUND VALUE)."
   (setq session (or session (codex-ide--get-default-session-for-current-buffer)))
   (unless session
     (error "No Codex session available"))
-  (if value
+  (if (or value (codex-ide-config--nil-is-value-p key))
       (codex-ide-config-set-session-value key value session)
     (codex-ide-config-clear-session-value key session))
   (codex-ide-config--refresh-session session key)
@@ -551,7 +564,7 @@ The return value is (BOUND VALUE)."
   (let ((count 0))
     (dolist (session (codex-ide-config--live-sessions))
       (setq count (1+ count))
-      (if value
+      (if (or value (codex-ide-config--nil-is-value-p key))
           (codex-ide-config-set-session-value key value session)
         (codex-ide-config-clear-session-value key session))
       (codex-ide-config--refresh-session session key))
@@ -756,27 +769,47 @@ without prompting."
                          (caar codex-ide-config--scope-choices-outside-session))
         codex-ide-config--scope-choices-outside-session))))))
 
-(defun codex-ide-config--resolve-choices (key)
-  "Return available completion choices for config KEY."
-  (or (codex-ide-config--choices key)
-      (when-let* ((fn (codex-ide-config--choices-function key)))
-        (funcall fn))))
+(defun codex-ide-config--resolve-input (key &optional context session)
+  "Return interactive input metadata for config KEY.
+CONTEXT is passed to dynamic choice functions together with SESSION."
+  (if-let* ((choices (codex-ide-config--choices key)))
+      (list :choices choices)
+    (let* ((fn (codex-ide-config--choices-function key))
+           (resolved (and fn (funcall fn context session))))
+      (cond
+       ((and (listp resolved) (keywordp (car resolved)))
+        resolved)
+       (resolved
+        (list :choices resolved))
+       (t
+        (list :choices (codex-ide-config--fallback-choices key)))))))
 
-(defun codex-ide-config-read-value (key &optional session)
+(defun codex-ide-config-read-value (key &optional session context)
   "Read an interactive value for config KEY.
 Descriptors may provide static choices, dynamic choices, custom input, and
 explicit clearing semantics.  SESSION defaults to the session associated with
-the current buffer."
+the current buffer.  CONTEXT supplies a value selected earlier in a combined
+prompt, such as the model used to resolve reasoning effort choices."
   (let* ((session (or session (codex-ide--session-for-current-buffer)))
-         (choices (codex-ide-config--resolve-choices key))
+         (input (codex-ide-config--resolve-input key context session))
+         (choices (plist-get input :choices))
          (allow-custom (codex-ide-config--allow-custom-p key))
          (allow-empty (codex-ide-config--allow-empty-p key))
-         (default (or (symbol-value (codex-ide-config--global-var key))
-                      ""))
+         (configured-default
+          (or (symbol-value (codex-ide-config--global-var key)) ""))
+         (input-default-bound-p
+          (codex-ide-config--plist-member-p input :default))
+         (input-default (and input-default-bound-p
+                             (plist-get input :default)))
+         (prompt-default
+          (if input-default-bound-p
+              input-default
+            (symbol-value (codex-ide-config--global-var key))))
          (prompt (codex-ide-config-format-value-prompt
                   key
                   (codex-ide-config--prompt key)
-                  session))
+                  session
+                  prompt-default))
          (completion-extra-properties
           codex-ide-config--completion-extra-properties))
     (cond
@@ -786,19 +819,23 @@ the current buffer."
                                  choices
                                  (when allow-custom
                                    (list codex-ide-config--other-choice))))
-             (choice (completing-read prompt collection nil t)))
+             (completion-default (and input-default
+                                      (member input-default collection)
+                                      input-default))
+             (choice (completing-read
+                      prompt collection nil t nil nil completion-default)))
         (cond
          ((equal choice codex-ide-config--empty-choice)
           "")
          ((equal choice codex-ide-config--other-choice)
           (read-string (or (codex-ide-config--custom-prompt key)
                            (format "%s: " (codex-ide-config--prompt key)))
-                       default))
+                       configured-default))
          (t
           choice))))
      (allow-custom
       (read-string (or (codex-ide-config--custom-prompt key) prompt)
-                   default))
+                   configured-default))
      (t
       (error "Config %S does not define interactive input semantics" key)))))
 
@@ -817,28 +854,32 @@ SESSION defaults to the session associated with the current buffer."
   "Prompt for a Codex model, then prompt for reasoning effort, and apply both.
 When MODEL is an empty string, clear the configured model.  SESSION defaults to
 the session associated with the current buffer.  Interactively, prompt for the
-target scope after reading both values."
+  target scope after reading both values."
   (interactive)
-  (let* ((session (or session (codex-ide--session-for-current-buffer)))
-         (model (or model (codex-ide-config-read-value 'model session)))
-         (model (and model
-                     (not (string-empty-p model))
-                     model))
-         (reasoning-effort
-          (or reasoning-effort
-              (codex-ide-config-read-value 'reasoning-effort session)))
-         (scope (or scope (codex-ide-config-read-scope session)))
-         (count (codex-ide-config-apply-values
-                 (list 'model model
-                       'reasoning-effort reasoning-effort)
-                 scope
-                 session)))
-    (message "%s"
-             (codex-ide-config-format-apply-values-message
-              (list 'model model
-                    'reasoning-effort reasoning-effort)
-              scope
-              count))))
+  (let ((codex-ide--model-list-interaction-cache
+         (make-hash-table :test #'equal)))
+    (let* ((session (or session (codex-ide--session-for-current-buffer)))
+           (model-choice
+            (or model (codex-ide-config-read-value 'model session)))
+           (model (and model-choice
+                       (not (string-empty-p model-choice))
+                       model-choice))
+           (reasoning-effort
+            (or reasoning-effort
+                (codex-ide-config-read-value
+                 'reasoning-effort session model-choice)))
+           (scope (or scope (codex-ide-config-read-scope session)))
+           (count (codex-ide-config-apply-values
+                   (list 'model model
+                         'reasoning-effort reasoning-effort)
+                   scope
+                   session)))
+      (message "%s"
+               (codex-ide-config-format-apply-values-message
+                (list 'model model
+                      'reasoning-effort reasoning-effort)
+                scope
+                count)))))
 
 (defun codex-ide-config-format-apply-values-message (values scope count)
   "Return a user-facing message for config VALUES applied with SCOPE to COUNT.
@@ -902,10 +943,13 @@ VALUES is a plist keyed by Codex config keys."
                scope-text))
      live-session-note)))
 
-(defun codex-ide-config-format-value-prompt (key base-prompt &optional session)
+(defun codex-ide-config-format-value-prompt
+    (key base-prompt &optional session default)
   "Return BASE-PROMPT annotated with effective and default values for KEY.
-When SESSION is nil, annotate the prompt with only the default value."
-  (let ((default (symbol-value (codex-ide-config--global-var key))))
+When SESSION is nil, annotate the prompt with only DEFAULT.  DEFAULT falls
+back to KEY's configured global value when omitted."
+  (let ((default (or default
+                     (symbol-value (codex-ide-config--global-var key)))))
     (if session
         (format "%s (effective = %s, default = %s): "
                 base-prompt
