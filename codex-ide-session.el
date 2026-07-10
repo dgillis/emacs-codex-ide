@@ -465,6 +465,22 @@ protocol requests such as thread listing."
       (codex-ide--schedule-usage-refresh session)
       session)))
 
+;;;###autoload
+(defun codex-ide-agent-picker ()
+  "Select and open a thread in the current Codex agent tree."
+  (interactive)
+  (let* ((session (or (codex-ide--get-default-session-for-current-buffer)
+                      (user-error "No Codex session available")))
+         (current-thread-id (codex-ide-session-thread-id session)))
+    (unless (and (stringp current-thread-id)
+                 (not (string-empty-p current-thread-id)))
+      (user-error "Current Codex session has no thread"))
+    (let* ((thread (codex-ide--pick-agent-thread session current-thread-id))
+           (thread-id (alist-get 'id thread))
+           (directory (or (alist-get 'cwd thread)
+                          (codex-ide-session-directory session))))
+      (codex-ide--show-or-resume-thread thread-id directory))))
+
 (defun codex-ide--resume-thread-into-session (session thread-id action)
   "Attach SESSION to THREAD-ID and optionally replay prior transcript."
   (unless session

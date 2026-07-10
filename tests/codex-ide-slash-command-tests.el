@@ -34,7 +34,11 @@
 
 (ert-deftest codex-ide-slash-command-default-registry-contains-session-commands ()
   (should (equal (codex-ide-slash-command-names)
-                 '("buffers" "diff" "fast" "loop" "model" "reasoning" "sessions")))
+                 '("agent" "buffers" "diff" "fast" "loop" "model" "reasoning"
+                   "sessions" "subagents")))
+  (should (eq (codex-ide-slash-command-entry-command
+               (codex-ide-slash-command-lookup "agent"))
+              'codex-ide-agent-picker))
   (should (eq (codex-ide-slash-command-entry-command
                (codex-ide-slash-command-lookup "loop"))
               'codex-ide-loop-jump-or-create))
@@ -50,11 +54,27 @@
   (should (eq (codex-ide-slash-command-entry-command
                (codex-ide-slash-command-lookup "sessions"))
               'codex-ide-status))
+  (should (eq (codex-ide-slash-command-entry-command
+               (codex-ide-slash-command-lookup "subagents"))
+              'codex-ide-agent-picker))
   (should-not (codex-ide-slash-command-lookup "menu"))
   (should-not (codex-ide-slash-command-lookup "config"))
   (should-not (codex-ide-slash-command-lookup "status"))
   (should-not (codex-ide-slash-command-lookup "reset"))
   (should-not (codex-ide-slash-command-lookup "stop")))
+
+(ert-deftest codex-ide-slash-command-reload-adds-agent-commands-to-old-defaults ()
+  (let ((codex-ide-slash-commands
+         '(("buffers" ignore "List buffers.")
+           ("diff" ignore "Show diff.")
+           ("sessions" ignore "List sessions."))))
+    (codex-ide-slash-command--ensure-core-agent-entries)
+    (should (eq (codex-ide-slash-command-entry-command
+                 (codex-ide-slash-command-lookup "agent"))
+                'codex-ide-agent-picker))
+    (should (eq (codex-ide-slash-command-entry-command
+                 (codex-ide-slash-command-lookup "subagents"))
+                'codex-ide-agent-picker))))
 
 (ert-deftest codex-ide-slash-command-dispatches-known-command ()
   (let ((codex-ide-slash-commands
