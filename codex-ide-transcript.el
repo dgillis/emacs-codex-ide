@@ -4396,6 +4396,20 @@ When COMPLETION is non-nil, render completion-specific state details."
        (format "receivers: %s"
                (codex-ide--collab-agent-receiver-summary item))
        nil)
+      (when (and completion
+                 (equal (alist-get 'tool item) "spawnAgent"))
+        (let ((model (alist-get 'model item))
+              (effort (alist-get 'reasoningEffort item)))
+          (when (and (stringp model)
+                     (not (string-empty-p (string-trim model))))
+            (append-detail
+             (format "config: %s%s"
+                     model
+                     (if (and (stringp effort)
+                              (not (string-empty-p (string-trim effort))))
+                         (format " (%s)" effort)
+                       ""))
+             nil))))
       (when-let* ((prompt (and (not completion)
                                (codex-ide--collab-agent-prompt-summary
                                 (alist-get 'prompt item)))))
