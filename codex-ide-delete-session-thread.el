@@ -11,14 +11,17 @@
 
 ;;; Commentary:
 
-;; Internal deletion support for removing persisted Codex threads by reaching
-;; into the current CODEX_HOME storage layout.  This is intentionally isolated
-;; from the rest of codex-ide because it depends on Codex implementation
-;; details rather than a supported app-server API.
+;; Thread deletion support.  Prefer the public app-server `thread/delete` RPC
+;; and keep the old storage deletion path only as a compatibility fallback for
+;; older app-server builds that do not expose that method.
 
 ;;; Code:
 
 (require 'subr-x)
+
+(declare-function codex-ide--ensure-query-session-for-thread-selection
+                  "codex-ide-session"
+                  (&optional directory))
 
 (defun codex-ide--session-for-thread-id-any (thread-id)
   "Return any live session tracking THREAD-ID."
@@ -70,9 +73,14 @@
     (delete-file rollout-file)
     (codex-ide--delete-empty-session-directories rollout-file)))
 
-(defun codex-ide--delete-live-thread-session (session)
-  "Tear down SESSION so its thread can be deleted from storage."
-  (when (and session
+(defun codex-ide--delete-live-thread-session (session &optional skip-unsubscribe)
+  "Tear down SESSION after its thread has been deleted.
+
+When SKIP-UNSUBSCRIBE is nil, first ask app-server to unsubscribe the thread.
+This is kept for storage-fallback deletion where app-server did not already
+delete the thread."
+  (when (and (not skip-unsubscribe)
+             session
              (codex-ide-session-thread-id session))
     (codex-ide-log-message
      session
@@ -90,19 +98,64 @@
         (let ((kill-buffer-query-functions nil))
           (kill-buffer buffer))))))
 
+(defun codex-ide--thread-delete-request-session (thread-id)
+  "Return an app-server session suitable for deleting THREAD-ID."
+  (or (codex-ide--session-for-thread-id-any thread-id)
+      (codex-ide--ensure-query-session-for-thread-selection default-directory)))
+
+(defun codex-ide--thread-delete-unsupported-error-p (error)
+  "Return non-nil when ERROR means app-server lacks `thread/delete'."
+  (let ((message (downcase (error-message-string error))))
+    (or (string-match-p "method not found" message)
+        (string-match-p "unknown method" message)
+        (and (string-match-p "unknown variant" message)
+             (string-match-p "thread/delete" message))
+        (string-match-p "method .*thread/delete.*not.*found" message)
+        (string-match-p "-32601" message))))
+
+(defun codex-ide--delete-thread-via-app-server (thread-id)
+  "Delete THREAD-ID through app-server.
+
+Return non-nil when the public API handled deletion.  Return nil only when the
+connected app-server reports that `thread/delete' is unsupported."
+  (let ((session (codex-ide--thread-delete-request-session thread-id)))
+    (condition-case err
+        (progn
+          (codex-ide--request-sync
+           session
+           "thread/delete"
+           `((threadId . ,thread-id)))
+          t)
+      (error
+       (unless (codex-ide--thread-delete-unsupported-error-p err)
+         (signal (car err) (cdr err)))
+       (codex-ide-log-message
+        session
+        "Falling back to storage deletion for %s because thread/delete is unsupported: %s"
+        thread-id
+        (error-message-string err))
+       nil))))
+
+(defun codex-ide--delete-thread-via-storage-fallback (thread-id session)
+  "Delete THREAD-ID through the legacy storage fallback."
+  (let ((rollout-path (codex-ide--thread-rollout-path thread-id)))
+    (unless rollout-path
+      (user-error "No stored Codex thread found for %s" thread-id))
+    (when session
+      (codex-ide--delete-live-thread-session session))
+    (codex-ide--delete-thread-storage rollout-path)))
+
 ;;;###autoload
 (defun codex-ide-delete-session-thread (thread-id &optional skip-confirmation)
   "Delete Codex THREAD-ID from the active `CODEX_HOME`.
 
-This command relies on current Codex internal storage details under
-`CODEX_HOME`, specifically the persisted rollout files under the sessions
-directory.  That makes it more fragile than the rest of codex-ide, which
-primarily uses the public app-server API.  If Codex adds an officially
-supported thread deletion API, this implementation should be replaced to use
-that instead.
+Prefer the public app-server `thread/delete' API.  For compatibility with older
+Codex app-server builds, fall back to current Codex internal storage details
+under `CODEX_HOME`, specifically persisted rollout files under the sessions
+directory, only when app-server reports that `thread/delete' is unsupported.
 
-If a live session buffer is attached to THREAD-ID, prompt before tearing down
-that session and then remove the persisted thread data from disk.
+If a live session buffer is attached to THREAD-ID, prompt before deleting the
+thread and then tear down the local session buffer.
 
 When SKIP-CONFIRMATION is non-nil, delete without prompting.  This is intended
 for batch callers that already presented a single confirmation."
@@ -117,10 +170,7 @@ for batch callers that already presented a single confirmation."
   (setq thread-id (string-trim thread-id))
   (let* ((session (codex-ide--session-for-thread-id-any thread-id))
          (buffer (and session (codex-ide-session-buffer session)))
-         (buffer-name (and (buffer-live-p buffer) (buffer-name buffer)))
-         (rollout-path (codex-ide--thread-rollout-path thread-id)))
-    (unless rollout-path
-      (user-error "No stored Codex thread found for %s" thread-id))
+         (buffer-name (and (buffer-live-p buffer) (buffer-name buffer))))
     (unless (or skip-confirmation
                 (yes-or-no-p
                  (if buffer-name
@@ -132,9 +182,10 @@ for batch callers that already presented a single confirmation."
                            thread-id
                            (abbreviate-file-name (codex-ide--codex-home))))))
       (user-error "Canceled deletion of Codex thread %s" thread-id))
-    (when session
-      (codex-ide--delete-live-thread-session session))
-    (codex-ide--delete-thread-storage rollout-path)
+    (if (codex-ide--delete-thread-via-app-server thread-id)
+        (when session
+          (codex-ide--delete-live-thread-session session t))
+      (codex-ide--delete-thread-via-storage-fallback thread-id session))
     (message "Deleted Codex thread %s" thread-id)))
 
 (provide 'codex-ide-delete-session-thread)
