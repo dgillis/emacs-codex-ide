@@ -351,6 +351,16 @@ for batch callers that already presented a single confirmation.
 (register-definition-prefixes "codex-ide-section" '("codex-ide-section-"))
 
 
+;;; Generated autoloads from codex-ide-status-api.el
+
+(autoload 'codex-ide-status-notify-annotations-changed "codex-ide-status-api"
+  "Notify listeners and refresh live Codex status buffers.
+
+Optional integrations should call this after their external annotation data
+changes." t)
+(register-definition-prefixes "codex-ide-status-api" '("codex-ide-"))
+
+
 ;;; Generated autoloads from codex-ide-status-mode.el
 
 (defvar codex-ide-status-mode-transcript-preview-max-lines 40
@@ -370,6 +380,13 @@ Smaller values produce a subtler stripe with lower contrast.  Larger values
 produce a more visible stripe.  A value of 0 disables the effect entirely,
 while 1 would fully replace the background with the foreground color.")
 (custom-autoload 'codex-ide-status-mode-stripe-mix "codex-ide-status-mode" t)
+(defvar codex-ide-status-mode-before-title-min-width 10
+  "Minimum width reserved for external before-title status content.
+
+The column is present only when at least one visible row has before-title
+content.  It expands to fit longer content so integrations are never silently
+truncated.")
+(custom-autoload 'codex-ide-status-mode-before-title-min-width "codex-ide-status-mode" t)
 (autoload 'codex-ide-status-mode-nav-forward "codex-ide-status-mode"
   "Move point to the next focal point in a Codex status buffer." t)
 (autoload 'codex-ide-status-mode-nav-backward "codex-ide-status-mode"
@@ -378,6 +395,8 @@ while 1 would fully replace the background with the foreground color.")
   "Refresh the current Codex status buffer.
 
 (fn &optional IGNORE-AUTO NOCONFIRM)" t)
+(autoload 'codex-ide-status-run-action "codex-ide-status-mode"
+  "Select and run an extension action for the status row at point." t)
 (autoload 'codex-ide-status "codex-ide-status-mode"
   "Show the Codex status buffer for the current project." t)
 (register-definition-prefixes "codex-ide-status-mode" '("codex-ide-status-mode"))

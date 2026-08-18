@@ -110,6 +110,31 @@ Key bindings:
 - `M-p` and `M-n` cycle prompt history while point is in the active prompt.
 - `TAB` and `S-TAB` move between clickable buttons and file links.
 
+### Status extension API
+
+Optional integrations can extend the status view without depending on its
+internal section representation:
+
+- `codex-ide-list-thread-rows` returns normalized plists with thread ID, title,
+  directory, timestamps, technical status, raw thread metadata, and any linked
+  live session.
+- `codex-ide-status-before-title-functions` and
+  `codex-ide-status-after-title-functions` add display-only text around status
+  titles. Each function receives one normalized row.
+- `codex-ide-register-status-action` lets external integrations register
+  optional row actions. When actions are available, `a` opens their action
+  menu for the session at point.
+- `codex-ide-status-notify-annotations-changed` refreshes live status buffers
+  after an external data source changes.
+
+When at least one visible row supplies before-title content, the status view
+renders it as an aligned column. Its minimum width is controlled by
+`codex-ide-status-mode-before-title-min-width` and expands for longer values.
+
+These hooks are deliberately project-management-neutral. External integrations
+can provide annotations and navigation actions without adding dependencies to
+Codex IDE.
+
 ### Session diff buffer
 
 Codex IDE can show a canonical diff buffer for each session. Open it with

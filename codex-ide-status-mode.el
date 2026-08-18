@@ -14,6 +14,7 @@
 (require 'codex-ide-renderer)
 (require 'codex-ide-section)
 (require 'codex-ide-session-list)
+(require 'codex-ide-status-api)
 
 (defvar codex-ide-display-buffer-pop-up-action)
 (defvar codex-ide--display-buffer-other-window-pop-up-action)
@@ -42,6 +43,16 @@ Smaller values produce a subtler stripe with lower contrast.  Larger values
 produce a more visible stripe.  A value of 0 disables the effect entirely,
 while 1 would fully replace the background with the foreground color."
   :type 'number
+  :group 'codex-ide)
+
+;;;###autoload
+(defcustom codex-ide-status-mode-before-title-min-width 10
+  "Minimum width reserved for external before-title status content.
+
+The column is present only when at least one visible row has before-title
+content.  It expands to fit longer content so integrations are never silently
+truncated."
+  :type 'natnum
   :group 'codex-ide)
 
 (defface codex-ide-status-expanded-content-face
@@ -92,6 +103,7 @@ while 1 would fully replace the background with the foreground color."
 (define-key codex-ide-status-mode-map (kbd "+") #'codex-ide)
 (define-key codex-ide-status-mode-map (kbd "D") #'codex-ide-status-mode-delete-thing-at-point)
 (define-key codex-ide-status-mode-map (kbd "K") #'codex-ide-status-mode-kill-buffer-at-point)
+(define-key codex-ide-status-mode-map (kbd "a") #'codex-ide-status-run-action)
 (define-key codex-ide-status-mode-map (kbd "l") #'codex-ide-status-mode-refresh)
 (define-key codex-ide-status-mode-map
             (kbd "RET")
@@ -296,6 +308,32 @@ Only child `buffer' and `thread' sections support visit and delete actions."
      (codex-ide--prepare-session-operations)
      (codex-ide--show-or-resume-thread (alist-get 'id (codex-ide-section-value section))
                                        codex-ide-status-mode--directory))))
+
+(defun codex-ide-status-row-at-point ()
+  "Return the normalized public status row at point."
+  (let ((section (codex-ide-status-mode--actionable-section-at-point)))
+    (pcase (codex-ide-section-type section)
+      ('thread
+       (codex-ide-thread-row
+        (codex-ide-section-value section)
+        codex-ide-status-mode--directory))
+      ('buffer
+       (codex-ide-session-row (codex-ide-section-value section))))))
+
+;;;###autoload
+(defun codex-ide-status-run-action ()
+  "Select and run an extension action for the status row at point."
+  (interactive)
+  (let* ((row (codex-ide-status-row-at-point))
+         (actions (codex-ide-status-available-actions row))
+         (choices (mapcar (lambda (action)
+                            (cons (plist-get action :name) action))
+                          actions)))
+    (unless choices
+      (user-error "No extension actions are available for this Codex session"))
+    (let* ((name (completing-read "Codex session action: " choices nil t))
+           (action (cdr (assoc name choices))))
+      (funcall (plist-get action :function) row))))
 
 (defun codex-ide-status-mode--delete-buffer-session (session)
   "Delete SESSION's live buffer with list-mode-consistent confirmation."
@@ -672,18 +710,28 @@ The plist contains `:text', `:start', and `:end'."
 (defun codex-ide-status-mode--heading-layout (threads directory)
   "Return heading layout widths for THREADS in DIRECTORY."
   (let ((status-width 0)
-        (updated-width 0))
+        (updated-width 0)
+        (before-title-width 0)
+        (before-title-by-thread (make-hash-table :test #'equal)))
     (dolist (thread threads)
-      (let* ((session (codex-ide-status-mode--thread-session thread directory))
-             (status (if session
-                         (codex-ide-session-status session)
-                       "stored"))
+      (let* ((row (codex-ide-thread-row thread directory))
+             (status (plist-get row :technical-status))
              (label (codex-ide-renderer-status-label status))
-             (updated (or (codex-ide-human-time-ago (alist-get 'updatedAt thread)) "")))
+             (updated (or (codex-ide-human-time-ago
+                           (alist-get 'updatedAt thread)) ""))
+             (before-title (codex-ide-status-before-title-text row)))
+        (puthash (alist-get 'id thread) before-title before-title-by-thread)
         (setq status-width (max status-width (string-width label))
-              updated-width (max updated-width (string-width updated)))))
+              updated-width (max updated-width (string-width updated)))
+        (unless (string-empty-p before-title)
+          (setq before-title-width
+                (max codex-ide-status-mode-before-title-min-width
+                     before-title-width
+                     (string-width before-title))))))
     (list :status-width status-width
-          :updated-width updated-width)))
+          :updated-width updated-width
+          :before-title-width before-title-width
+          :before-title-by-thread before-title-by-thread)))
 
 (defun codex-ide-status-mode--thread-updated-at-time (thread)
   "Return THREAD's `updatedAt' value as an Emacs time."
@@ -1059,8 +1107,16 @@ Return nil when there is no agent reply."
          (updated-text (or (codex-ide-human-time-ago (alist-get 'updatedAt thread)) ""))
          (status-width (plist-get layout :status-width))
          (updated-width (plist-get layout :updated-width))
+         (before-title-width (or (plist-get layout :before-title-width) 0))
          (preview (codex-ide-status-mode--preview-line
                    (or first-prompt raw-preview)))
+         (row (codex-ide-thread-row thread directory))
+         (before-title-cache (plist-get layout :before-title-by-thread))
+         (before-title
+          (if before-title-cache
+              (or (gethash thread-id before-title-cache) "")
+            (codex-ide-status-before-title-text row)))
+         (after-title (codex-ide-status-after-title-text row))
          (title (concat
                  (codex-ide-status-mode--format-heading-status
                   (codex-ide-status-mode--pad-heading-part label status-width)
@@ -1069,7 +1125,18 @@ Return nil when there is no agent reply."
                  (codex-ide-status-mode--format-heading-updated
                   (codex-ide-status-mode--pad-heading-part updated-text updated-width))
                  "  "
-                 (codex-ide-status-mode--format-heading-preview preview))))
+                 (cond
+                  ((> before-title-width 0)
+                   (concat (codex-ide-status-mode--pad-heading-part
+                            before-title before-title-width)
+                           "  "))
+                  ((not (string-empty-p before-title))
+                   (concat before-title "  "))
+                  (t ""))
+                 (codex-ide-status-mode--format-heading-preview preview)
+                 (if (string-empty-p after-title)
+                     ""
+                   (concat "  " after-title)))))
     (codex-ide-section-insert
      'thread thread title
      (lambda (_section)
