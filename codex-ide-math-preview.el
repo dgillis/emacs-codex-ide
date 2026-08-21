@@ -227,7 +227,7 @@ continues without math previews."
          (max (point-min) (min end (point-max))))))))
 
 (defun codex-ide-math-preview--region-has-fragment-p (start end)
-  "Return non-nil when START through END contains a previewable fragment."
+  "Return non-nil if a previewable fragment occurs between START and END."
   (save-excursion
     (goto-char start)
     (condition-case nil
@@ -346,7 +346,7 @@ Interactively, use the active region or the entire current buffer."
        (list (region-beginning) (region-end))
      (list (point-min) (point-max))))
   (unless codex-ide-math-preview-mode
-    (user-error "codex-ide math preview mode is not enabled"))
+    (user-error "Codex IDE math preview mode is not enabled"))
   (codex-ide-math-preview--note-region
    (or start (point-min))
    (or end (point-max))))
