@@ -1500,6 +1500,7 @@ Return a plist containing inserted markers and updated writable ranges."
 			  codex-ide-markdown-table-original nil
 			  codex-ide-markdown-table-render-width nil
 			  codex-ide-markdown-code-content nil
+			  codex-ide-markdown-inline-code nil
 			  codex-ide-markdown nil))
             (goto-char next))
            ((get-text-property pos 'codex-ide-markdown)
@@ -1524,6 +1525,7 @@ Return a plist containing inserted markers and updated writable ranges."
 			      codex-ide-markdown-table-render-width nil
 			      codex-ide-markdown-code-content nil
 			      codex-ide-markdown-code-fontified nil
+			      codex-ide-markdown-inline-code nil
 			      codex-ide-markdown nil))
             (goto-char next))
            (t
@@ -2778,14 +2780,17 @@ TABLE-MAX-WIDTH is the effective table width to use for this pass."
              (add-text-properties
               code-start code-end
               '(face font-lock-keyword-face
+		     codex-ide-markdown-inline-code t
                      codex-ide-markdown t))
              (add-text-properties
               (match-beginning 0) code-start
               '(display ""
+			codex-ide-markdown-inline-code t
 			codex-ide-markdown t))
              (add-text-properties
               code-end (match-end 0)
               '(display ""
+			codex-ide-markdown-inline-code t
 			codex-ide-markdown t)))))
        (codex-ide-renderer--render-markdown-emphasis
         start

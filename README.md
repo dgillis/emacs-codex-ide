@@ -13,6 +13,7 @@ This package provides native integration with `codex app-server` which, unlike t
 
 - Runs Codex as an Emacs major mode with no terminal wrapper.
 - Renders code blocks with full Emacs major-mode syntax highlighting instead of terminal-style formatting.
+- Optionally renders LaTeX math in completed assistant messages with AUCTeX-quality previews.
 - Displays diffs using Emacs diff rendering, so patches look and read like they belong in Emacs, including a canonical session diff buffer that can follow live work or transcript position.
 - Turns Codex file and code references into clickable Emacs widgets that jump straight to real buffers.
 - Keeps approvals in-buffer with an interactive review flow for confirming commands and changes without leaving the session.
@@ -64,6 +65,7 @@ _Emacs-widget based interactive approvals_
 - Codex CLI installed and available on `PATH`
 - `transient` installed
 - `python3` and `emacsclient` available if you want the optional Emacs MCP bridge
+- AUCTeX and `texfrag` installed if you want optional LaTeX math previews
 
 ### Installing Codex CLI
 
@@ -109,6 +111,28 @@ Key bindings:
 - `C-M-p` and `C-M-n` move between prompt lines.
 - `M-p` and `M-n` cycle prompt history while point is in the active prompt.
 - `TAB` and `S-TAB` move between clickable buttons and file links.
+
+### LaTeX math previews
+
+Codex IDE can use the optional [`texfrag`](https://github.com/TobiasZawada/texfrag)
+package and AUCTeX's preview machinery to display LaTeX math as images.  Install
+AUCTeX, `texfrag`, and the LaTeX tools required by AUCTeX, then enable previews
+automatically for new session buffers:
+
+```emacs-lisp
+(setq codex-ide-math-preview-auto-enable t)
+```
+
+You can instead toggle previews in one session with
+`M-x codex-ide-math-preview-mode`.  The commands
+`M-x codex-ide-math-preview-refresh` and
+`M-x codex-ide-math-preview-clear` refresh or remove previews in the active
+region, or the whole buffer when no region is active.
+
+Previews recognize `$...$`, `$$...$$`, `\\(...\\)`, `\\[...\\]`, and LaTeX
+environments.  Rendering happens only after an assistant message is complete,
+so it does not repeatedly invoke LaTeX while a response is streaming.  Math in
+code blocks, inline code, tables, user prompts, and tool output is left as text.
 
 ### Session diff buffer
 

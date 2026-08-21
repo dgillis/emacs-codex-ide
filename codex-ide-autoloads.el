@@ -656,6 +656,22 @@ interval as the default.  Active loops are rescheduled from now.
 (register-definition-prefixes "codex-ide-loop" '("codex-ide-loop-"))
 
 
+;;; Generated autoloads from codex-ide-math-preview.el
+
+(autoload 'codex-ide-math-preview-mode "codex-ide-math-preview"
+"Preview LaTeX fragments in completed Codex assistant messages." t)
+(autoload 'codex-ide-math-preview-refresh "codex-ide-math-preview"
+"Refresh math previews between START and END.
+
+(fn &optional START END)" t)
+(autoload 'codex-ide-math-preview-clear "codex-ide-math-preview"
+"Clear math previews between START and END.
+
+(fn &optional START END)" t)
+(register-definition-prefixes "codex-ide-math-preview"
+                              '("codex-ide-math-preview-"))
+
+
 ;;; End of scraped data
 
 (provide 'codex-ide-autoloads)

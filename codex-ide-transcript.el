@@ -110,6 +110,13 @@
 (defvar codex-ide--current-agent-item-type nil
   "Item type associated with the agent transcript text being inserted.")
 
+(defvar codex-ide-transcript-agent-message-rendered-hook nil
+  "Hook run after a complete assistant message has been rendered.
+
+Each hook function receives BUFFER, START, and END.  START and END delimit the
+complete assistant message after final Markdown rendering.  Streaming renders
+do not run this hook.")
+
 (defvar codex-ide--current-item-detail-marker nil
   "Marker before the current item section's compact-hideable footer.")
 
@@ -4850,7 +4857,12 @@ When ITEM-ID is non-nil, render only when it matches SESSION's current message."
                    (codex-ide-session-current-message-start-marker session)))
         (when (eq (marker-buffer message-start) buffer)
           (with-current-buffer buffer
-            (let* ((stream-marker
+            (let* ((message-start-marker (copy-marker message-start))
+                   (message-end-marker
+                    (copy-marker
+                     (codex-ide--agent-message-render-end buffer)
+                     t))
+                   (stream-marker
                     (codex-ide--session-metadata-get
                      session
                      :agent-message-stream-render-start-marker))
@@ -4859,12 +4871,21 @@ When ITEM-ID is non-nil, render only when it matches SESSION's current message."
                              (eq (marker-buffer stream-marker) buffer))
                         (marker-position stream-marker)
                       (marker-position message-start)))
-                   (message-end (codex-ide--agent-message-render-end buffer)))
-              (when (< render-start message-end)
-                (codex-ide--maybe-render-markdown-region
-                 render-start
-                 message-end
-                 allow-trailing-tables))))
+                   (message-end (marker-position message-end-marker)))
+              (unwind-protect
+                  (progn
+                    (when (< render-start message-end)
+                      (codex-ide--maybe-render-markdown-region
+                       render-start
+                       message-end
+                       allow-trailing-tables))
+                    (run-hook-with-args
+                     'codex-ide-transcript-agent-message-rendered-hook
+                     buffer
+                     (marker-position message-start-marker)
+                     (marker-position message-end-marker)))
+                (set-marker message-start-marker nil)
+                (set-marker message-end-marker nil))))
           (codex-ide--session-metadata-put
            session
            :agent-message-stream-render-start-marker
