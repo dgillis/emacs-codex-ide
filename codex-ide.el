@@ -321,6 +321,7 @@ thread-list limit."
 (require 'codex-ide-threads)
 (require 'codex-ide-usage)
 (require 'codex-ide-transcript)
+(require 'codex-ide-math-preview)
 (require 'codex-ide-images)
 (require 'codex-ide-transient)
 (require 'codex-ide-mcp-bridge)
