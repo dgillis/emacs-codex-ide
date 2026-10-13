@@ -453,6 +453,7 @@
 			  ["Session"
 			   ("b" "Switch to session buffer" codex-ide-switch-to-buffer)
 			   ("p" "Send prompt from minibuffer" codex-ide-prompt)
+			   ("a" "Annotate selected region" codex-ide-annotate-region)
 			   ("i" "Attach image file" codex-ide-submit-image)
 			   ("I" "Attach clipboard image" codex-ide-submit-clipboard-image)
 			   ("S" "Steer active turn" codex-ide-steer

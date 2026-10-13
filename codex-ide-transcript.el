@@ -6995,6 +6995,41 @@ the mismatch warning only reflects meaningful behavior changes."
     (codex-ide--submit-queued-prompt session)))
 
 ;;;###autoload
+(defun codex-ide-annotate-region ()
+  "Append the active region and a note to the current Codex prompt draft.
+The draft is not submitted; use `codex-ide-submit' when it is ready."
+  (interactive)
+  (let ((region (codex-ide--buffer-selection-context (current-buffer))))
+    (unless region
+      (user-error "Select a region to annotate"))
+    (let* ((start (alist-get 'start region))
+           (end (alist-get 'end region))
+           (source (or (buffer-file-name) (buffer-name)))
+           (selection (buffer-substring-no-properties start end))
+           (note (read-from-minibuffer "Annotation: ")))
+      (when (string-empty-p (string-trim note))
+        (user-error "Annotation cannot be empty"))
+      (let* ((session (codex-ide--ensure-session-for-current-project))
+             (annotation
+              (format "Annotation for %s:%d:%d-%d:%d\nNote: %s\nSelected text:\n%s"
+                      source
+                      (alist-get 'start-line region)
+                      (alist-get 'start-column region)
+                      (alist-get 'end-line region)
+                      (alist-get 'end-column region)
+                      note selection)))
+        (with-current-buffer (codex-ide-session-buffer session)
+          (codex-ide--ensure-input-prompt session)
+          (unless (codex-ide--input-prompt-active-p session)
+            (user-error "No editable Codex prompt is available"))
+          (let ((draft (codex-ide--current-input session)))
+            (codex-ide--replace-current-input
+             session
+             (concat (unless (string-empty-p draft) (concat draft "\n\n"))
+                     annotation))))
+        (message "Annotation added; open the session buffer and press C-c RET to send")))))
+
+;;;###autoload
 (defun codex-ide-prompt ()
   "Prompt for a Codex message in the minibuffer and submit it from the Codex buffer."
   (interactive)
