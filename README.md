@@ -97,6 +97,14 @@ Use `M-x codex-ide-menu` as the main entry point. It opens a transient menu for 
 
 ![The main menu is the recommended starting point for everyday Codex IDE commands.](https://github.com/dgillis/emacs-codex-ide/blob/1c0bb00a35c8fcb20e8a30e28cdc56d774267049/screenshots/codex-ide-menu.png)
 
+To discuss several selected regions in one turn, select a region in a source
+buffer and run `M-x codex-ide-annotate-region` (or `a` in the main menu). Enter
+a note for that region, then repeat for other regions or files. Each note and
+its selected text are appended to the editable session prompt without sending
+it. Open the session buffer to review or edit the draft, then press `C-c RET`
+to send the annotations together. The minibuffer prompt command (`p` in the
+main menu) still sends immediately.
+
 ### `codex-ide-session-mode`
 
 `codex-ide-session-mode` is the buffer interface to Codex. It renders the conversation transcript, keeps the active prompt editable in-place, streams assistant output, turns file references into links, and handles interruption or approval flows from inside Emacs.

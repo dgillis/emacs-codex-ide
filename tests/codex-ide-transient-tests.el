@@ -65,6 +65,10 @@
 (ert-deftest codex-ide-menu-exposes-navigation-and-view-suffixes ()
   (should (transient-get-suffix 'codex-ide-menu "b"))
   (should (transient-get-suffix 'codex-ide-menu "p"))
+  (should (eq (codex-ide-test--transient-suffix-prop
+               (transient-get-suffix 'codex-ide-menu "a")
+               :command)
+              #'codex-ide-annotate-region))
   (should (transient-get-suffix 'codex-ide-menu "i"))
   (should (transient-get-suffix 'codex-ide-menu "I"))
   (should (transient-get-suffix 'codex-ide-menu "l"))
