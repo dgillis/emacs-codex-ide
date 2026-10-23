@@ -296,6 +296,48 @@ BODY may refer to the lexical variable `session'."
         (should (equal (get-text-property pos 'codex-ide-line) 3))
         (should (equal (get-text-property pos 'codex-ide-column) 2))))))
 
+(ert-deftest codex-ide-renderer-renders-web-link-as-openable-button ()
+  (with-temp-buffer
+    (let ((url "https://developers.openai.com/api/docs/guides/tools-computer-use")
+          opened-url)
+      (insert (format "См. [документации OpenAI](%s)." url))
+      (codex-ide-renderer-render-markdown-region (point-min) (point-max))
+      (codex-ide-renderer-render-markdown-region (point-min) (point-max))
+      (should (equal (buffer-string) "См. документации OpenAI."))
+      (goto-char (point-min))
+      (search-forward "документации OpenAI")
+      (let ((button (button-at (match-beginning 0))))
+        (should button)
+        (cl-letf (((symbol-function 'browse-url)
+                   (lambda (target &rest _args)
+                     (setq opened-url target))))
+          (button-activate button))
+        (should (equal opened-url url))))))
+
+(ert-deftest codex-ide-renderer-renders-web-link-in-table-as-button ()
+  (with-temp-buffer
+    (let ((url "https://developers.openai.com/")
+          opened-url)
+      (insert (format "| Guide |\n| --- |\n| [OpenAI](%s) |\n" url))
+      (codex-ide-renderer-render-markdown-region (point-min) (point-max) t)
+      (goto-char (point-min))
+      (search-forward "OpenAI")
+      (let ((button (button-at (match-beginning 0))))
+        (should button)
+        (cl-letf (((symbol-function 'browse-url)
+                   (lambda (target &rest _args)
+                     (setq opened-url target))))
+          (button-activate button))
+        (should (equal opened-url url))))))
+
+(ert-deftest codex-ide-renderer-does-not-activate-unsupported-link-scheme ()
+  (with-temp-buffer
+    (let ((markdown "[run](javascript:alert)"))
+      (insert markdown)
+      (codex-ide-renderer-render-markdown-region (point-min) (point-max))
+      (should (equal (buffer-string) markdown))
+      (should-not (button-at (point-min))))))
+
 (ert-deftest codex-ide-renderer-table-width-uses-rendered-link-label ()
   (with-temp-buffer
     (let ((codex-ide-renderer-markdown-table-max-width 20)

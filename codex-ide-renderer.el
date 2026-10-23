@@ -11,7 +11,7 @@
 ;; explicit inputs such as regions, markers, text properties, overlays, render
 ;; options, and insertion callbacks supplied by higher-level modules.  This
 ;; includes markdown rendering, prompt/transcript styling, separator formatting,
-;; file-link activation, transcript block insertion helpers, command-output
+;; file and web link activation, transcript block insertion helpers, command-output
 ;; presentation, approval/elicitation widgets, and lightweight status display
 ;; helpers.
 ;;
@@ -32,6 +32,7 @@
 
 ;;; Code:
 
+(require 'browse-url)
 (require 'button)
 (require 'cl-lib)
 (require 'color)
@@ -76,7 +77,7 @@ without making the renderer depend on transcript state.")
     map)
   "Base keymap used for Codex-owned action buttons.")
 
-(defconst codex-ide-renderer--file-link-nonsticky-properties
+(defconst codex-ide-renderer--markdown-link-nonsticky-properties
   '(action
     button
     category
@@ -85,13 +86,14 @@ without making the renderer depend on transcript state.")
     codex-ide-markdown-link-original
     codex-ide-markdown
     codex-ide-path
+    codex-ide-url
     display
     face
     follow-link
     help-echo
     keymap
     mouse-face)
-  "Properties that should not stick to text inserted after file links.")
+  "Properties that should not stick to text inserted after markdown links.")
 
 (define-key codex-ide-renderer-link-keymap
             (kbd "M-<return>")
@@ -931,6 +933,14 @@ Return a plist containing `:delete-start', `:boundary', and `:end' markers."
       (list (codex-ide-renderer--decode-file-link-target normalized) nil nil))
      (t nil))))
 
+(defun codex-ide-renderer--web-link-target (target)
+  "Return TARGET as a web URL when it uses HTTP or HTTPS, or nil."
+  (let ((normalized (codex-ide-renderer--normalize-file-link-target target)))
+    (when (string-match-p
+           "\\`https?://[^/?#[:space:]]+\\(?:[/?#][^[:space:]]*\\)?\\'"
+           normalized)
+      normalized)))
+
 (defun codex-ide-renderer-open-file-link (&optional _button)
   "Open the file link described by text properties at point."
   (interactive)
@@ -940,6 +950,10 @@ Return a plist containing `:delete-start', `:boundary', and `:end' markers."
   "Open the file link described by text properties at point in another window."
   (interactive)
   (codex-ide-renderer--visit-file-link #'find-file-other-window))
+
+(defun codex-ide-renderer-open-url-link (button)
+  "Open the web URL stored on BUTTON."
+  (browse-url (button-get button 'codex-ide-url)))
 
 (defun codex-ide-renderer--visit-file-link (open-file-fn)
   "Open the file link at point using OPEN-FILE-FN."
@@ -2150,23 +2164,19 @@ intentionally ignored."
           (let* ((label (codex-ide-renderer--normalize-markdown-link-label
                          (match-string 2 cell)))
                  (target (match-string 3 cell))
-                 (parsed (codex-ide-renderer-parse-file-link-target target)))
+                 (parsed (codex-ide-renderer-parse-file-link-target target))
+                 (web-url (codex-ide-renderer--web-link-target target)))
             (push
-             (if parsed
-                 (propertize
-                  label
-                  'face 'link
-                  'mouse-face 'highlight
-                  'help-echo target
-                  'codex-ide-table-link t
-                  'codex-ide-path (nth 0 parsed)
-                  'codex-ide-line (nth 1 parsed)
-                  'codex-ide-column (nth 2 parsed))
-               (propertize
-                label
-                'face 'link
-                'mouse-face 'highlight
-                'help-echo target))
+             (propertize
+              label
+              'face 'link
+              'mouse-face 'highlight
+              'help-echo target
+              'codex-ide-table-link (or parsed web-url)
+              'codex-ide-path (nth 0 parsed)
+              'codex-ide-line (nth 1 parsed)
+              'codex-ide-column (nth 2 parsed)
+              'codex-ide-url web-url)
              parts)))
          ((match-beginning 4)
           (push (propertize (match-string 4 cell)
@@ -2566,24 +2576,29 @@ Use LEFT, INTERSECTION, and RIGHT as the border junction characters."
           table-text)))))
 
 (defun codex-ide-renderer--buttonize-markdown-table-links (start end)
-  "Convert rendered file-link spans between START and END into buttons."
+  "Convert rendered link spans between START and END into buttons."
   (let ((pos start))
     (while (< pos end)
       (let ((next (or (next-single-property-change pos 'codex-ide-table-link nil end)
                       end)))
-        (when (and (get-text-property pos 'codex-ide-table-link)
-                   (get-text-property pos 'codex-ide-path))
-          (make-text-button
-           pos next
-           'action #'codex-ide-renderer-open-file-link
-           'follow-link t
-           'keymap codex-ide-renderer-link-keymap
-           'help-echo (get-text-property pos 'help-echo)
-           'face 'link
-           'codex-ide-markdown t
-           'codex-ide-path (get-text-property pos 'codex-ide-path)
-           'codex-ide-line (get-text-property pos 'codex-ide-line)
-           'codex-ide-column (get-text-property pos 'codex-ide-column)))
+        (when (get-text-property pos 'codex-ide-table-link)
+          (let ((path (get-text-property pos 'codex-ide-path)))
+            (make-text-button
+             pos next
+             'action (if path
+                         #'codex-ide-renderer-open-file-link
+                       #'codex-ide-renderer-open-url-link)
+             'follow-link t
+             'keymap (if path
+                         codex-ide-renderer-link-keymap
+                       codex-ide-renderer-action-button-keymap)
+             'help-echo (get-text-property pos 'help-echo)
+             'face 'link
+             'codex-ide-markdown t
+             'codex-ide-path path
+             'codex-ide-line (get-text-property pos 'codex-ide-line)
+             'codex-ide-column (get-text-property pos 'codex-ide-column)
+             'codex-ide-url (get-text-property pos 'codex-ide-url))))
         (setq pos next)))))
 
 (defun codex-ide-renderer--markdown-table-block-at-point (end &optional allow-trailing)
@@ -2747,16 +2762,21 @@ TABLE-MAX-WIDTH is the effective table width to use for this pass."
                   (label (match-string-no-properties 2))
                   (display-label (codex-ide-renderer--normalize-markdown-link-label label))
                   (target (match-string-no-properties 3))
-                  (parsed (codex-ide-renderer-parse-file-link-target target)))
-             (when parsed
+                  (parsed (codex-ide-renderer-parse-file-link-target target))
+                  (web-url (codex-ide-renderer--web-link-target target)))
+             (when (or parsed web-url)
                (delete-region match-start match-end)
                (goto-char match-start)
                (insert display-label)
 	       (make-text-button
                 match-start (point)
-                'action #'codex-ide-renderer-open-file-link
+                'action (if parsed
+                            #'codex-ide-renderer-open-file-link
+                          #'codex-ide-renderer-open-url-link)
                 'follow-link t
-                'keymap codex-ide-renderer-link-keymap
+                'keymap (if parsed
+                            codex-ide-renderer-link-keymap
+                          codex-ide-renderer-action-button-keymap)
                 'help-echo target
                 'face 'link
                 'codex-ide-markdown t
@@ -2764,8 +2784,9 @@ TABLE-MAX-WIDTH is the effective table width to use for this pass."
                 'codex-ide-path (nth 0 parsed)
                 'codex-ide-line (nth 1 parsed)
                 'codex-ide-column (nth 2 parsed)
+                'codex-ide-url web-url
                 'rear-nonsticky
-                codex-ide-renderer--file-link-nonsticky-properties)))))
+                codex-ide-renderer--markdown-link-nonsticky-properties)))))
        (goto-char start)
        (while (re-search-forward
                codex-ide-renderer--markdown-inline-code-pattern
