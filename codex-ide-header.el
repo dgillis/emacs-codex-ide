@@ -148,7 +148,7 @@ return a propertized string or nil.")
       (if (equal reset-date today)
           (format-time-string "%H:%M" reset-time)
         (format "%s%s"
-                (format-time-string "%b" reset-time)
+                (format-time-string "%H:%M %b" reset-time)
                 (string-to-number
                  (format-time-string "%d" reset-time)))))))
 
