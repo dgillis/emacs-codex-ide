@@ -14,7 +14,7 @@
   (let* ((system-time-locale "C")
          (now (encode-time 0 0 21 20 10 2026))
          (same-day-reset (encode-time 0 0 23 20 10 2026))
-         (overnight-reset (encode-time 0 0 2 21 10 2026))
+         (overnight-reset (encode-time 0 17 2 21 10 2026))
          (window `((usedPercent . 49)
                    (windowDurationMins . 300)
                    (resetsAt . ,(floor (float-time same-day-reset))))))
@@ -23,9 +23,9 @@
                      "49%→23:00"))
       (setf (alist-get 'resetsAt window) (floor (float-time overnight-reset)))
       (should (equal (codex-ide--format-rate-limit-window-summary window)
-                     "49%→02:00 Oct21"))
+                     "49%→02:17 Oct21"))
       (should (equal (codex-ide--format-rate-limit-window-summary window t)
-                     "49%%→02:00 Oct21")))))
+                     "49%%→02:17 Oct21")))))
 
 (provide 'codex-ide-header-tests)
 
