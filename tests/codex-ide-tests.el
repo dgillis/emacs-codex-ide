@@ -5650,11 +5650,11 @@
 					  (codex-ide--update-header-line session)
 					  (should
 					   (string-match-p
-					    "Quota: 20%→13:34 3%→Jun1 (prolite) limit:primary"
+					    "Quota: 20%→13:34 3%→15:42 Jun1 (prolite) limit:primary"
 					    (format-mode-line header-line-format)))
 					  (should
 					   (string-match-p
-					    "Quota: 20%%→13:34 3%%→Jun1 (prolite) limit:primary"
+					    "Quota: 20%%→13:34 3%%→15:42 Jun1 (prolite) limit:primary"
 					    (substring-no-properties header-line-format))))))))))
 
   (ert-deftest codex-ide-usage-notifications-schedule-coalesced-live-refresh ()
