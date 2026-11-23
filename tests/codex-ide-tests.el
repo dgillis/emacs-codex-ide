@@ -1818,6 +1818,47 @@
       (search-forward "$ echo hi")
       (should (invisible-p (match-beginning 0))))))
 
+(ert-deftest codex-ide-session-transcript-compact-hides-background-detail-appends ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (codex-ide-session-transcript-set-detail-level 'compact)
+    (let ((buffer (current-buffer)))
+      (with-temp-buffer
+        (setq-local codex-ide-session-transcript-detail-level 'standard)
+        (codex-ide--append-item-detail-text buffer "background detail\n")))
+    (goto-char (point-min))
+    (search-forward "background detail")
+    (should (invisible-p (match-beginning 0)))))
+
+(ert-deftest codex-ide-session-transcript-compact-hides-background-command-completion ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (codex-ide-session-transcript-set-detail-level 'compact)
+    (let ((session (make-codex-ide-session
+                    :buffer (current-buffer)
+                    :directory default-directory
+                    :status "idle"
+                    :item-states (make-hash-table :test 'equal))))
+      (setq-local codex-ide--session session)
+      (codex-ide--render-item-start
+       session
+       '((id . "search-1")
+         (type . "commandExecution")
+         (command . ["rg" "-n" "needle" "codex-ide.el"])))
+      (with-temp-buffer
+        (setq-local codex-ide-session-transcript-detail-level 'standard)
+        (codex-ide--handle-notification
+         session
+         '((method . "item/completed")
+           (params . ((item . ((id . "search-1")
+                               (type . "commandExecution")
+                               (status . "completed")
+                               (exitCode . 0)
+                               (aggregatedOutput . "codex-ide.el:10:needle\n"))))))))
+      (goto-char (point-min))
+      (search-forward "found 1 hit")
+      (should (invisible-p (match-beginning 0))))))
+
 (ert-deftest codex-ide-session-transcript-compact-hides-command-result-headers ()
   (with-temp-buffer
     (codex-ide-session-mode)

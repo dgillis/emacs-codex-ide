@@ -1002,29 +1002,33 @@ When FACE is non-nil, use it for the inserted line."
 (defun codex-ide--append-item-detail-text (buffer text &optional face properties)
   "Append semantic item detail TEXT to BUFFER.
 FACE defaults to `codex-ide-item-detail-face'."
-  (if-let* ((marker (codex-ide--item-detail-target-marker buffer)))
-      (codex-ide--insert-item-detail-text-at-marker
+  (when (buffer-live-p buffer)
+    (if-let* ((marker (codex-ide--item-detail-target-marker buffer)))
+        (codex-ide--insert-item-detail-text-at-marker
+         buffer
+         marker
+         text
+         face
+         properties)
+      (codex-ide--append-agent-text
        buffer
-       marker
        text
-       face
-       properties)
-    (codex-ide--append-agent-text
-     buffer
-     text
-     (or face 'codex-ide-item-detail-face)
-     (codex-ide--item-detail-text-properties properties))))
+       (or face 'codex-ide-item-detail-face)
+       (with-current-buffer buffer
+         (codex-ide--item-detail-text-properties properties))))))
 
 (defun codex-ide--insert-item-detail-text-at-marker
     (buffer marker text &optional face properties)
   "Insert semantic item detail TEXT in BUFFER at MARKER.
 Move MARKER after the inserted text."
-  (codex-ide--insert-agent-text-at-marker
-   buffer
-   marker
-   text
-   (or face 'codex-ide-item-detail-face)
-   (codex-ide--item-detail-text-properties properties)))
+  (when (buffer-live-p buffer)
+    (codex-ide--insert-agent-text-at-marker
+     buffer
+     marker
+     text
+     (or face 'codex-ide-item-detail-face)
+     (with-current-buffer buffer
+       (codex-ide--item-detail-text-properties properties)))))
 
 (defun codex-ide--item-detail-target-marker (buffer)
   "Return the active item detail insertion marker for BUFFER, if any."
