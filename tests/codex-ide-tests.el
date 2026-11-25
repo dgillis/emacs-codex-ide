@@ -2803,6 +2803,49 @@
                     (concat "printf '%s' '" patch "' | apply_patch"))
                    (list "printf" "%s" patch "|" "apply_patch")))))
 
+(ert-deftest codex-ide-command-analysis-distinguishes-literal-pipes ()
+  (should (equal (plist-get (codex-ide--command-analysis
+                            "nl -ba 'a|b' | sed -n '3,5p'")
+                           :read-summary)
+                 "Read a|b (lines 3 to 5)"))
+  (should-not (plist-get (codex-ide--command-analysis
+                         "nl -ba file \\| sed -n '3,5p'")
+                        :read-summary)))
+
+(ert-deftest codex-ide-command-execution-bounds-analysis-of-large-patches ()
+  (with-temp-buffer
+    (codex-ide-session-mode)
+    (let* ((session (make-codex-ide-session
+                     :buffer (current-buffer)
+                     :status "idle"
+                     :item-states (make-hash-table :test 'equal)))
+           (patch (concat "--- a/example\n+++ b/example\n@@ -1 +1 @@\n+"
+                          (make-string 36868 ?x)
+                          "\n"))
+           (script (format "printf '%%s' '%s' | apply_patch" patch))
+           (command (concat "/bin/zsh -lc " (shell-quote-argument script)))
+           (split-words (symbol-function 'codex-ide--split-shell-words))
+           parsed)
+      (setq-local codex-ide--session session)
+      (codex-ide--insert-input-prompt session "submitted prompt")
+      (codex-ide--begin-turn-display session)
+      (cl-letf (((symbol-function 'codex-ide--split-shell-words)
+                 (lambda (input &rest args)
+                   (push input parsed)
+                   (apply split-words input args)))
+                ((symbol-function 'codex-ide-renderer-fontify-code-block-region)
+                 (lambda (&rest _)
+                   (ert-fail "Large shell detail should skip fontification"))))
+        (codex-ide--render-item-start
+         session
+         `((id . "patch") (type . "commandExecution") (command . ,command))))
+      (should (equal parsed (list command)))
+      (let ((state (codex-ide--item-state session "patch")))
+        (should (string-prefix-p "Ran command: printf" (plist-get state :summary)))
+        (should (string-suffix-p "..." (plist-get state :summary)))
+        (should-not (plist-get state :search-request)))
+      (should (string-search (concat "  $ " script) (buffer-string))))))
+
 (ert-deftest codex-ide-command-execution-omits-shell-wrapper-in-detail ()
   (with-temp-buffer
     (codex-ide-session-mode)

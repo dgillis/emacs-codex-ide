@@ -1312,6 +1312,9 @@ PROPERTIES is appended to the inserted region.  Return (START . END)."
    :face 'codex-ide-command-output-face
    :help-echo "RET toggles command output"))
 
+(defconst codex-ide-renderer--shell-fontification-max-length 4096
+  "Maximum shell command length to syntax highlight in the transcript.")
+
 (defun codex-ide-renderer-insert-shell-command-detail (command &optional properties)
   "Insert COMMAND as an indented shell-highlighted detail line.
 PROPERTIES is appended to the inserted region.  Return (START . END)."
@@ -1329,10 +1332,11 @@ PROPERTIES is appended to the inserted region.  Return (START . END)."
      (point)
      (append (list 'face 'codex-ide-item-detail-face)
              properties))
-    (let ((inhibit-message t)
-          (message-log-max nil))
-      (codex-ide-renderer-fontify-code-block-region
-       command-start command-end "sh"))
+    (when (<= (length command) codex-ide-renderer--shell-fontification-max-length)
+      (let ((inhibit-message t)
+            (message-log-max nil))
+        (codex-ide-renderer-fontify-code-block-region
+         command-start command-end "sh")))
     (codex-ide-renderer-freeze-region start (point))
     (cons start (point))))
 
