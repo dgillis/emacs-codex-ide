@@ -2430,11 +2430,12 @@ When METADATA-LINE is non-nil, insert it beneath the submitted prompt."
    ((stringp command)
     (codex-ide--split-shell-words command))))
 
-(defun codex-ide--split-shell-words (command &optional mark-pipes)
+(defun codex-ide--split-shell-words (command &optional mark-pipes first-word-only)
   "Split COMMAND into shell-like words.
 This handles the simple quoting shapes emitted by command execution items
 without interpreting shell metacharacters inside quoted strings.
-With MARK-PIPES, emit the symbol `pipe' for unquoted, unescaped pipes."
+With MARK-PIPES, emit the symbol `pipe' for unquoted, unescaped pipes.
+With FIRST-WORD-ONLY, return at most the first token and stop scanning."
   (let ((index 0)
         (length (length command))
         quote
@@ -2442,7 +2443,7 @@ With MARK-PIPES, emit the symbol `pipe' for unquoted, unescaped pipes."
         in-word
         word
         words)
-    (while (< index length)
+    (while (and (< index length) (not (and first-word-only words)))
       (let ((char (aref command index)))
         (cond
          (escaping
@@ -2481,7 +2482,8 @@ With MARK-PIPES, emit the symbol `pipe' for unquoted, unescaped pipes."
     (unless (or quote escaping)
       (when in-word
         (push (mapconcat #'char-to-string (nreverse word) "") words))
-      (nreverse words))))
+      (setq words (nreverse words))
+      (if first-word-only (and words (list (car words))) words))))
 
 (defun codex-ide--shell-wrapper-inner-command (argv)
   "Return the shell script from shell wrapper ARGV, or nil."
@@ -2583,11 +2585,15 @@ WORDS is the same token list with pipeline separators marked as symbols."
     "--threads" "--type" "--type-add" "--type-clear" "--type-not")
   "Ripgrep options that consume the following argv element.")
 
+(defun codex-ide--rg-executable-p (word)
+  "Return non-nil when WORD names a ripgrep executable."
+  (and (stringp word)
+       (member (file-name-nondirectory word) '("rg" "ripgrep"))))
+
 (defun codex-ide--rg-search-request (argv)
   "Parse a simple ripgrep search from ARGV.
 Return (PATTERN PATHS), or nil when ARGV does not describe a search."
-  (when (and (consp argv)
-             (member (file-name-nondirectory (car argv)) '("rg" "ripgrep")))
+  (when (codex-ide--rg-executable-p (car argv))
     (let ((args (cdr argv))
           pattern
           paths
@@ -3624,20 +3630,28 @@ Return non-nil when an item result block was found."
                   (codex-ide--command-argv command)))
          (inner (codex-ide--shell-wrapper-inner-command outer))
          (display-command (or inner (codex-ide--shell-command-string command)))
-         (words (when (<= (length display-command)
-                          codex-ide--command-analysis-max-length)
-                  (if inner
-                      (or (codex-ide--split-shell-words inner t) outer)
-                    outer)))
+         (summarize (<= (length display-command)
+                        codex-ide--command-analysis-max-length))
+         (words (cond
+                 ((not inner)
+                  (when (or summarize (codex-ide--rg-executable-p (car outer)))
+                    outer))
+                 ((or summarize
+                      ;; Only oversized searches need their arguments at
+                      ;; completion, so check the executable first.
+                      (codex-ide--rg-executable-p
+                       (car (codex-ide--split-shell-words inner nil t))))
+                  (or (codex-ide--split-shell-words inner t) outer))))
          (argv (if (memq 'pipe words)
                    (mapcar (lambda (word) (if (eq word 'pipe) "|" word)) words)
                  words))
-         (read-summary (codex-ide--command-read-summary argv words))
+         (read-summary (when summarize
+                         (codex-ide--command-read-summary argv words)))
          (search-request (codex-ide--rg-search-request argv)))
     (list :display-command display-command
           :read-summary read-summary
           :search-request search-request
-          :search-summary (when search-request
+          :search-summary (when (and summarize search-request)
                             (codex-ide--search-summary
                              (car search-request) (cadr search-request))))))
 
