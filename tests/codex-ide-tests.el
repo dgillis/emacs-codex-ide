@@ -2788,6 +2788,21 @@
       (should (string-match-p "\\* Ran command: echo hi" (buffer-string)))
       (should (string-match-p "  \\$ echo hi" (buffer-string))))))
 
+(ert-deftest codex-ide-split-shell-words-preserves-quoting-and-escaping ()
+  (should (equal (codex-ide--split-shell-words
+                  "printf '' \"\" a\\ b 'c\\d' \"e\\\"f\" 'g|h' i\\|j|cat\n'λ'")
+                 '("printf" "" "" "a b" "c\\d" "e\"f" "g|h" "i|j" "|" "cat" "λ")))
+  (should-not (codex-ide--split-shell-words "echo 'unterminated"))
+  (should-not (codex-ide--split-shell-words "echo trailing\\")))
+
+(ert-deftest codex-ide-split-shell-words-preserves-large-quoted-patch ()
+  (let ((patch (concat "--- a/example\n+++ b/example\n@@ -1 +1 @@\n+"
+                       (make-string 36868 ?x)
+                       "\n")))
+    (should (equal (codex-ide--split-shell-words
+                    (concat "printf '%s' '" patch "' | apply_patch"))
+                   (list "printf" "%s" patch "|" "apply_patch")))))
+
 (ert-deftest codex-ide-command-execution-omits-shell-wrapper-in-detail ()
   (with-temp-buffer
     (codex-ide-session-mode)

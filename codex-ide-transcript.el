@@ -2439,53 +2439,48 @@ without interpreting shell metacharacters inside quoted strings."
         quote
         escaping
         in-word
-        (word "")
+        word
         words)
     (while (< index length)
       (let ((char (aref command index)))
         (cond
          (escaping
-          (setq word (concat word (char-to-string char))
-                in-word t
+          (push char word)
+          (setq in-word t
                 escaping nil))
          ((and quote (eq quote ?\'))
           (if (eq char quote)
               (setq quote nil)
-            (setq word (concat word (char-to-string char))
-                  in-word t)))
+            (push char word)))
          ((eq char ?\\)
           (setq escaping t
                 in-word t))
          (quote
           (if (eq char quote)
               (setq quote nil)
-            (setq word (concat word (char-to-string char))
-                  in-word t)))
+            (push char word)))
          ((or (eq char ?\') (eq char ?\"))
           (setq quote char
                 in-word t))
          ((memq char '(?\s ?\t ?\n))
           (when in-word
-            (push word words)
-            (setq word ""
+            (push (mapconcat #'char-to-string (nreverse word) "") words)
+            (setq word nil
                   in-word nil)))
          ((eq char ?|)
           (when in-word
-            (push word words)
-            (setq word ""
+            (push (mapconcat #'char-to-string (nreverse word) "") words)
+            (setq word nil
                   in-word nil))
           (push "|" words))
          (t
-          (setq word (concat word (char-to-string char))
-                in-word t))))
+          (push char word)
+          (setq in-word t))))
       (setq index (1+ index)))
-    (when (or quote escaping)
-      (setq words nil
-            in-word nil
-            word ""))
-    (when in-word
-      (push word words))
-    (nreverse words)))
+    (unless (or quote escaping)
+      (when in-word
+        (push (mapconcat #'char-to-string (nreverse word) "") words))
+      (nreverse words))))
 
 (defun codex-ide--split-shell-pipeline (command)
   "Split COMMAND on unquoted shell pipeline separators."
