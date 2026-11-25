@@ -1002,29 +1002,33 @@ When FACE is non-nil, use it for the inserted line."
 (defun codex-ide--append-item-detail-text (buffer text &optional face properties)
   "Append semantic item detail TEXT to BUFFER.
 FACE defaults to `codex-ide-item-detail-face'."
-  (if-let* ((marker (codex-ide--item-detail-target-marker buffer)))
-      (codex-ide--insert-item-detail-text-at-marker
+  (when (buffer-live-p buffer)
+    (if-let* ((marker (codex-ide--item-detail-target-marker buffer)))
+        (codex-ide--insert-item-detail-text-at-marker
+         buffer
+         marker
+         text
+         face
+         properties)
+      (codex-ide--append-agent-text
        buffer
-       marker
        text
-       face
-       properties)
-    (codex-ide--append-agent-text
-     buffer
-     text
-     (or face 'codex-ide-item-detail-face)
-     (codex-ide--item-detail-text-properties properties))))
+       (or face 'codex-ide-item-detail-face)
+       (with-current-buffer buffer
+         (codex-ide--item-detail-text-properties properties))))))
 
 (defun codex-ide--insert-item-detail-text-at-marker
     (buffer marker text &optional face properties)
   "Insert semantic item detail TEXT in BUFFER at MARKER.
 Move MARKER after the inserted text."
-  (codex-ide--insert-agent-text-at-marker
-   buffer
-   marker
-   text
-   (or face 'codex-ide-item-detail-face)
-   (codex-ide--item-detail-text-properties properties)))
+  (when (buffer-live-p buffer)
+    (codex-ide--insert-agent-text-at-marker
+     buffer
+     marker
+     text
+     (or face 'codex-ide-item-detail-face)
+     (with-current-buffer buffer
+       (codex-ide--item-detail-text-properties properties)))))
 
 (defun codex-ide--item-detail-target-marker (buffer)
   "Return the active item detail insertion marker for BUFFER, if any."
@@ -2426,101 +2430,70 @@ When METADATA-LINE is non-nil, insert it beneath the submitted prompt."
    ((stringp command)
     (codex-ide--split-shell-words command))))
 
-(defun codex-ide--split-shell-words (command)
+(defun codex-ide--split-shell-words (command &optional mark-pipes first-word-only)
   "Split COMMAND into shell-like words.
 This handles the simple quoting shapes emitted by command execution items
-without interpreting shell metacharacters inside quoted strings."
+without interpreting shell metacharacters inside quoted strings.
+With MARK-PIPES, emit the symbol `pipe' for unquoted, unescaped pipes.
+With FIRST-WORD-ONLY, return at most the first token and stop scanning."
   (let ((index 0)
         (length (length command))
         quote
         escaping
         in-word
-        (word "")
+        word
         words)
-    (while (< index length)
+    (while (and (< index length) (not (and first-word-only words)))
       (let ((char (aref command index)))
         (cond
          (escaping
-          (setq word (concat word (char-to-string char))
-                in-word t
+          (push char word)
+          (setq in-word t
                 escaping nil))
          ((and quote (eq quote ?\'))
           (if (eq char quote)
               (setq quote nil)
-            (setq word (concat word (char-to-string char))
-                  in-word t)))
+            (push char word)))
          ((eq char ?\\)
           (setq escaping t
                 in-word t))
          (quote
           (if (eq char quote)
               (setq quote nil)
-            (setq word (concat word (char-to-string char))
-                  in-word t)))
+            (push char word)))
          ((or (eq char ?\') (eq char ?\"))
           (setq quote char
                 in-word t))
          ((memq char '(?\s ?\t ?\n))
           (when in-word
-            (push word words)
-            (setq word ""
+            (push (mapconcat #'char-to-string (nreverse word) "") words)
+            (setq word nil
                   in-word nil)))
          ((eq char ?|)
           (when in-word
-            (push word words)
-            (setq word ""
+            (push (mapconcat #'char-to-string (nreverse word) "") words)
+            (setq word nil
                   in-word nil))
-          (push "|" words))
+          (push (if mark-pipes 'pipe "|") words))
          (t
-          (setq word (concat word (char-to-string char))
-                in-word t))))
-      (setq index (1+ index)))
-    (when (or quote escaping)
-      (setq words nil
-            in-word nil
-            word ""))
-    (when in-word
-      (push word words))
-    (nreverse words)))
-
-(defun codex-ide--split-shell-pipeline (command)
-  "Split COMMAND on unquoted shell pipeline separators."
-  (let ((index 0)
-        (length (length command))
-        quote
-        escaping
-        (part-start 0)
-        parts)
-    (while (< index length)
-      (let ((char (aref command index)))
-        (cond
-         (escaping
-          (setq escaping nil))
-         ((and quote (eq quote ?\'))
-          (when (eq char quote)
-            (setq quote nil)))
-         ((eq char ?\\)
-          (setq escaping t))
-         (quote
-          (when (eq char quote)
-            (setq quote nil)))
-         ((or (eq char ?\') (eq char ?\"))
-          (setq quote char))
-         ((eq char ?|)
-          (push (string-trim (substring command part-start index)) parts)
-          (setq part-start (1+ index)))))
+          (push char word)
+          (setq in-word t))))
       (setq index (1+ index)))
     (unless (or quote escaping)
-      (push (string-trim (substring command part-start)) parts)
-      (nreverse parts))))
+      (when in-word
+        (push (mapconcat #'char-to-string (nreverse word) "") words))
+      (setq words (nreverse words))
+      (if first-word-only (and words (list (car words))) words))))
 
 (defun codex-ide--shell-wrapper-inner-command (argv)
   "Return the shell script from shell wrapper ARGV, or nil."
-  (when (and (>= (length argv) 3)
+  (when (and (consp (cddr argv))
+             (stringp (car argv))
              (member (file-name-nondirectory (car argv))
                      '("bash" "sh" "zsh"))
              (member (cadr argv) '("-c" "-lc")))
-    (nth 2 argv)))
+    (let ((inner (nth 2 argv)))
+      (if (eq inner 'pipe) "|" inner))))
 
 (defun codex-ide--display-command-string (command)
   "Return the user-facing shell command string for COMMAND."
@@ -2528,12 +2501,6 @@ without interpreting shell metacharacters inside quoted strings."
                   (inner (codex-ide--shell-wrapper-inner-command argv)))
         inner)
       (codex-ide--shell-command-string command)))
-
-(defun codex-ide--display-command-argv (command)
-  "Return argv for COMMAND after removing common shell wrappers."
-  (let ((display-command (codex-ide--display-command-string command)))
-    (or (codex-ide--split-shell-words display-command)
-        (codex-ide--command-argv command))))
 
 (defun codex-ide--sed-print-request (argv)
   "Parse a simple `sed -n' print request from ARGV.
@@ -2590,31 +2557,21 @@ Return (START END FILES), or nil when ARGV does not describe one."
       (format "Read %s (line %d)" file start)
     (format "Read %s (lines %d to %d)" file start end)))
 
-(defun codex-ide--command-read-summary (command)
-  "Return a semantic read summary for COMMAND, or nil."
-  (let* ((display-command (codex-ide--display-command-string command))
-         (argv (codex-ide--display-command-argv command))
-         (sed-request (codex-ide--sed-print-request argv)))
-    (cond
-     ((and sed-request
-           (= (length (nth 2 sed-request)) 1))
-      (codex-ide--read-lines-summary
-       (car (nth 2 sed-request))
-       (nth 0 sed-request)
-       (nth 1 sed-request)))
-     ((and (stringp display-command)
-           (string-match-p "|" display-command))
-      (let ((parts (codex-ide--split-shell-pipeline display-command)))
-        (when (= (length parts) 2)
-          (let* ((left (codex-ide--split-shell-words (car parts)))
-                 (right (codex-ide--split-shell-words (cadr parts)))
-                 (file (codex-ide--nl-command-file left))
-                 (request (codex-ide--sed-print-request right)))
-            (when (and file request (null (nth 2 request)))
-              (codex-ide--read-lines-summary
-               file
-               (nth 0 request)
-               (nth 1 request))))))))))
+(defun codex-ide--command-read-summary (argv words)
+  "Return a semantic read summary for ARGV.
+WORDS is the same token list with pipeline separators marked as symbols."
+  (let ((sed-request (codex-ide--sed-print-request argv)))
+    (if (and sed-request (= (length (nth 2 sed-request)) 1))
+        (codex-ide--read-lines-summary
+         (car (nth 2 sed-request))
+         (nth 0 sed-request)
+         (nth 1 sed-request))
+      (when-let* ((pipe (memq 'pipe words))
+                  ((not (memq 'pipe (cdr pipe))))
+                  (file (codex-ide--nl-command-file (cl-ldiff words pipe)))
+                  (request (codex-ide--sed-print-request (cdr pipe)))
+                  ((null (nth 2 request))))
+        (codex-ide--read-lines-summary file (nth 0 request) (nth 1 request))))))
 
 (defconst codex-ide--rg-options-with-values
   '("-A" "-B" "-C" "-E" "-M" "-e" "-f" "-g" "-m" "-t" "-T"
@@ -2628,11 +2585,15 @@ Return (START END FILES), or nil when ARGV does not describe one."
     "--threads" "--type" "--type-add" "--type-clear" "--type-not")
   "Ripgrep options that consume the following argv element.")
 
+(defun codex-ide--rg-executable-p (word)
+  "Return non-nil when WORD names a ripgrep executable."
+  (and (stringp word)
+       (member (file-name-nondirectory word) '("rg" "ripgrep"))))
+
 (defun codex-ide--rg-search-request (argv)
   "Parse a simple ripgrep search from ARGV.
 Return (PATTERN PATHS), or nil when ARGV does not describe a search."
-  (when (and (consp argv)
-             (member (file-name-nondirectory (car argv)) '("rg" "ripgrep")))
+  (when (codex-ide--rg-executable-p (car argv))
     (let ((args (cdr argv))
           pattern
           paths
@@ -3659,11 +3620,40 @@ Return non-nil when an item result block was found."
   (when-let* ((overlay (codex-ide--item-result-overlay-at-point pos)))
     (codex-ide--toggle-item-result-overlay overlay)))
 
-(defun codex-ide--command-search-summary (command)
-  "Return a semantic search summary for COMMAND, or nil."
-  (when-let* ((request (codex-ide--rg-search-request
-			(codex-ide--display-command-argv command))))
-    (codex-ide--search-summary (car request) (cadr request))))
+(defconst codex-ide--command-analysis-max-length 4096
+  "Maximum displayed command length for semantic summaries.")
+
+(defun codex-ide--command-analysis (command)
+  "Return the display text and semantic summaries for COMMAND."
+  (let* ((outer (if (stringp command)
+                    (codex-ide--split-shell-words command t)
+                  (codex-ide--command-argv command)))
+         (inner (codex-ide--shell-wrapper-inner-command outer))
+         (display-command (or inner (codex-ide--shell-command-string command)))
+         (summarize (<= (length display-command)
+                        codex-ide--command-analysis-max-length))
+         (words (cond
+                 ((not inner)
+                  (when (or summarize (codex-ide--rg-executable-p (car outer)))
+                    outer))
+                 ((or summarize
+                      ;; Only oversized searches need their arguments at
+                      ;; completion, so check the executable first.
+                      (codex-ide--rg-executable-p
+                       (car (codex-ide--split-shell-words inner nil t))))
+                  (or (codex-ide--split-shell-words inner t) outer))))
+         (argv (if (memq 'pipe words)
+                   (mapcar (lambda (word) (if (eq word 'pipe) "|" word)) words)
+                 words))
+         (read-summary (when summarize
+                         (codex-ide--command-read-summary argv words)))
+         (search-request (codex-ide--rg-search-request argv)))
+    (list :display-command display-command
+          :read-summary read-summary
+          :search-request search-request
+          :search-summary (when (and summarize search-request)
+                            (codex-ide--search-summary
+                             (car search-request) (cadr search-request))))))
 
 (defconst codex-ide--command-summary-preview-max-width 96
   "Maximum display width for generic command summary previews.")
@@ -3682,26 +3672,25 @@ Return non-nil when an item result block was found."
               pos (1+ pos)))
       (concat (substring text 0 pos) ellipsis))))
 
-(defun codex-ide--command-summary-preview (command)
-  "Return a single-line preview for COMMAND in generic summaries."
-  (let* ((display-command (codex-ide--display-command-string command))
+(defun codex-ide--command-summary-preview (display-command)
+  "Return a single-line preview of DISPLAY-COMMAND."
+  (let* ((clipped (> (length display-command)
+                     codex-ide--command-analysis-max-length))
+         (prefix (if clipped
+                     (substring display-command 0 codex-ide--command-analysis-max-length)
+                   display-command))
          (single-line
           (replace-regexp-in-string
            "[\r\n]+"
            "↵"
-           (string-trim (or display-command "")))))
+           (string-trim prefix))))
+    (when clipped
+      (setq single-line (concat single-line "...")))
     (if (string-empty-p single-line)
         "command"
       (codex-ide--truncate-display-string
        single-line
        codex-ide--command-summary-preview-max-width))))
-
-(defun codex-ide--command-summary (command)
-  "Return the user-facing summary for shell COMMAND."
-  (or (codex-ide--command-read-summary command)
-      (codex-ide--command-search-summary command)
-      (format "Ran command: %s"
-              (codex-ide--command-summary-preview command))))
 
 (defun codex-ide--item-detail-line (text)
   "Format TEXT as an indented detail line."
@@ -4118,12 +4107,19 @@ CONTEXT is either nil for ordinary transcript rendering or `approval'."
             (codex-ide--set-item-result-body overlay display-text)
             (codex-ide--maybe-auto-open-file-change-diff trimmed buffer context)))))))
 
-(defun codex-ide--summarize-item-start (item)
-  "Build a one-line summary for ITEM start notifications."
+(defun codex-ide--summarize-item-start (item &optional command-analysis)
+  "Build a one-line summary for ITEM start notifications.
+COMMAND-ANALYSIS may supply the analysis for a command execution item."
   (let ((item-type (alist-get 'type item)))
     (pcase item-type
       ("commandExecution"
-       (codex-ide--command-summary (alist-get 'command item)))
+       (let ((analysis (or command-analysis
+                           (codex-ide--command-analysis (alist-get 'command item)))))
+         (or (plist-get analysis :read-summary)
+             (plist-get analysis :search-summary)
+             (format "Ran command: %s"
+                     (codex-ide--command-summary-preview
+                      (plist-get analysis :display-command))))))
       ("webSearch"
        (let* ((action (alist-get 'action item))
               (action-type (alist-get 'type action))
@@ -4446,17 +4442,16 @@ When COMPLETION is non-nil, render completion-specific state details."
               (append-detail text nil))))))
     (nreverse rendered-lines)))
 
-(defun codex-ide--render-item-start-details (session item)
-  "Render detail lines for ITEM in SESSION."
+(defun codex-ide--render-item-start-details (session item command-analysis)
+  "Render detail lines for ITEM in SESSION using COMMAND-ANALYSIS when present."
   (let ((buffer (codex-ide-session-buffer session))
         (item-type (alist-get 'type item)))
     (pcase item-type
       ("commandExecution"
-       (unless (or (codex-ide--command-read-summary (alist-get 'command item))
-                   (codex-ide--command-search-summary (alist-get 'command item)))
+       (unless (or (plist-get command-analysis :read-summary)
+                   (plist-get command-analysis :search-summary))
          (codex-ide--append-shell-command-detail
-          buffer
-          (codex-ide--display-command-string (alist-get 'command item))))
+          buffer (plist-get command-analysis :display-command)))
        (when-let* ((cwd (alist-get 'cwd item))
                    ((codex-ide--command-cwd-detail-visible-p session cwd)))
          (codex-ide--append-item-detail-text
@@ -4500,7 +4495,10 @@ When COMPLETION is non-nil, render completion-specific state details."
   (let* ((buffer (codex-ide-session-buffer session))
          (item-id (alist-get 'id item))
          (item-type (alist-get 'type item))
-         (summary (codex-ide--summarize-item-start item))
+         (command-analysis
+          (when (equal item-type "commandExecution")
+            (codex-ide--command-analysis (alist-get 'command item))))
+         (summary (codex-ide--summarize-item-start item command-analysis))
          (existing-state (copy-sequence
                           (or (codex-ide--item-state session item-id) '()))))
     (let ((codex-ide--current-agent-item-type item-type))
@@ -4517,7 +4515,8 @@ When COMPLETION is non-nil, render completion-specific state details."
                 (codex-ide--append-item-detail-footer buffer))
                (rendered-detail-lines
                 (let ((codex-ide--current-item-detail-marker detail-marker))
-                  (codex-ide--render-item-start-details session item))))
+                  (codex-ide--render-item-start-details
+                   session item command-analysis))))
           (let ((state existing-state))
             (setq state (plist-put state :type item-type))
             (setq state (plist-put state :item item))
@@ -4532,10 +4531,7 @@ When COMPLETION is non-nil, render completion-specific state details."
                   (plist-put
                    state
                    :search-request
-                   (and (equal item-type "commandExecution")
-                        (codex-ide--rg-search-request
-                         (codex-ide--display-command-argv
-                          (alist-get 'command item))))))
+                   (plist-get command-analysis :search-request)))
             (setq state (plist-put state :details-rendered t))
             (when (member item-type
                           '("commandExecution" "mcpToolCall" "fileChange"
@@ -5165,52 +5161,9 @@ When CLOSING-NOTE is non-nil, append it before restoring the prompt."
      (codex-ide--render-restored-mcp-completion session item))
     (_ nil)))
 
-(defun codex-ide--restored-command-analysis (command)
-  "Return cached restored rendering analysis for COMMAND."
-  (let* ((display-command (codex-ide--display-command-string command))
-         (argv (or (codex-ide--split-shell-words display-command)
-                   (codex-ide--command-argv command)))
-         (sed-request (codex-ide--sed-print-request argv))
-         read-summary
-         search-request
-         search-summary)
-    (setq read-summary
-          (cond
-           ((and sed-request
-                 (= (length (nth 2 sed-request)) 1))
-            (codex-ide--read-lines-summary
-             (car (nth 2 sed-request))
-             (nth 0 sed-request)
-             (nth 1 sed-request)))
-           ((and (stringp display-command)
-                 (string-match-p "|" display-command))
-            (let ((parts (codex-ide--split-shell-pipeline display-command)))
-              (when (= (length parts) 2)
-                (let* ((left (codex-ide--split-shell-words (car parts)))
-                       (right (codex-ide--split-shell-words (cadr parts)))
-                       (file (codex-ide--nl-command-file left))
-                       (request (codex-ide--sed-print-request right)))
-                  (when (and file request (null (nth 2 request)))
-                    (codex-ide--read-lines-summary
-                     file
-                     (nth 0 request)
-                     (nth 1 request)))))))))
-    (setq search-request (codex-ide--rg-search-request argv))
-    (setq search-summary
-          (when search-request
-            (codex-ide--search-summary
-             (car search-request)
-             (cadr search-request))))
-    (list :display-command display-command
-          :argv argv
-          :read-summary read-summary
-          :search-request search-request
-          :search-summary search-summary
-          :summary (or read-summary search-summary "Ran command"))))
-
 (defun codex-ide--restored-command-start-details (session item analysis)
   "Return restored command ITEM start detail entries for SESSION.
-ANALYSIS is from `codex-ide--restored-command-analysis'.
+ANALYSIS is from `codex-ide--command-analysis'.
 Each entry is either (:shell COMMAND) or (:detail TEXT)."
   (let ((details nil))
     (unless (or (plist-get analysis :read-summary)
@@ -5291,8 +5244,10 @@ Each entry is either (:shell COMMAND) or (:detail TEXT)."
          (item-id (alist-get 'id item))
          (item-type (alist-get 'type item))
          (command (alist-get 'command item))
-         (analysis (codex-ide--restored-command-analysis command))
-         (summary (plist-get analysis :summary))
+         (analysis (codex-ide--command-analysis command))
+         (summary (or (plist-get analysis :read-summary)
+                      (plist-get analysis :search-summary)
+                      "Ran command"))
          (details (codex-ide--restored-command-start-details
                    session item analysis))
          (existing-state (copy-sequence
