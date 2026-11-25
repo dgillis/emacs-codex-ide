@@ -121,62 +121,64 @@
          (file-path (codex-ide-test--make-project-file
                      project-dir "src/example.el" "(message \"hello\")\n")))
     (codex-ide-test-with-fixture project-dir
-				 (let ((codex-ide-session-baseline-prompt "Session instructions")
-				       (cases '((all t t)
-						(session t nil)
-						(prompt nil t)
-						(nil nil nil))))
-				   (with-current-buffer (find-file-noselect file-path)
-				     (setq-local default-directory (file-name-as-directory project-dir))
-				     (goto-char (point-min))
-				     (codex-ide--track-active-buffer (current-buffer)))
-				   (dolist (case cases)
-				     (let* ((codex-ide-emacs-context-policy (nth 0 case))
-					    (expect-session (nth 1 case))
-					    (expect-prompt (nth 2 case))
-					    (session (codex-ide--create-process-session))
-					    (text (alist-get
-						   'text
-						   (aref (let ((codex-ide--session session))
-							   (codex-ide--compose-turn-input "Explain this"))
-							 0))))
-				       (should (eq expect-session
-						   (not (not (string-match-p
-							       "\\[Emacs session context\\]"
-							       text)))))
-				       (should (eq expect-prompt
-						   (not (not (string-match-p
-							       "\\[Emacs prompt context\\]"
-							       text)))))
-				       (should (string-match-p "Explain this" text))))))))
+      (codex-ide-test-with-fake-processes
+	(let ((codex-ide-session-baseline-prompt "Session instructions")
+	      (cases '((all t t)
+		       (session t nil)
+		       (prompt nil t)
+		       (nil nil nil))))
+	  (with-current-buffer (find-file-noselect file-path)
+	    (setq-local default-directory (file-name-as-directory project-dir))
+	    (goto-char (point-min))
+	    (codex-ide--track-active-buffer (current-buffer)))
+	  (dolist (case cases)
+	    (let* ((codex-ide-emacs-context-policy (nth 0 case))
+		   (expect-session (nth 1 case))
+		   (expect-prompt (nth 2 case))
+		   (session (codex-ide--create-process-session))
+		   (text (alist-get
+			  'text
+			  (aref (let ((codex-ide--session session))
+				  (codex-ide--compose-turn-input "Explain this"))
+				0))))
+	      (should (eq expect-session
+			  (not (not (string-match-p
+				     "\\[Emacs session context\\]"
+				     text)))))
+	      (should (eq expect-prompt
+			  (not (not (string-match-p
+				     "\\[Emacs prompt context\\]"
+				     text)))))
+	      (should (string-match-p "Explain this" text)))))))))
 
 (ert-deftest codex-ide-compose-turn-input-can-suppress-emacs-context ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
          (file-path (codex-ide-test--make-project-file
                      project-dir "src/example.el" "(message \"hello\")\n")))
     (codex-ide-test-with-fixture project-dir
-				 (let ((codex-ide-session-baseline-prompt
-                                        "Session instructions")
-				       (codex-ide-emacs-context-policy 'all))
-				   (with-current-buffer (find-file-noselect file-path)
-				     (setq-local default-directory
-                                                 (file-name-as-directory project-dir))
-				     (codex-ide--track-active-buffer (current-buffer)))
-				   (let* ((session (codex-ide--create-process-session))
-					  (text (alist-get
-						 'text
-						 (aref (let ((codex-ide--session session))
-							 (codex-ide--compose-turn-input
-                                                          "Explain this"
-                                                          :suppress-context t))
-						       0))))
-				     (should (equal text "Explain this"))
-				     (should-not (string-match-p
-                                                  "\\[Emacs session context\\]"
-                                                  text))
-				     (should-not (string-match-p
-                                                  "\\[Emacs prompt context\\]"
-                                                  text)))))))
+      (codex-ide-test-with-fake-processes
+	(let ((codex-ide-session-baseline-prompt
+               "Session instructions")
+	      (codex-ide-emacs-context-policy 'all))
+	  (with-current-buffer (find-file-noselect file-path)
+	    (setq-local default-directory
+                        (file-name-as-directory project-dir))
+	    (codex-ide--track-active-buffer (current-buffer)))
+	  (let* ((session (codex-ide--create-process-session))
+		 (text (alist-get
+			'text
+			(aref (let ((codex-ide--session session))
+				(codex-ide--compose-turn-input
+                                 "Explain this"
+                                 :suppress-context t))
+			      0))))
+	    (should (equal text "Explain this"))
+	    (should-not (string-match-p
+                         "\\[Emacs session context\\]"
+                         text))
+	    (should-not (string-match-p
+                         "\\[Emacs prompt context\\]"
+                         text))))))))
 
 (ert-deftest codex-ide-compose-turn-input-includes-selected-region-when-active ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
@@ -206,73 +208,76 @@
 (ert-deftest codex-ide-compose-turn-input-appends-local-images ()
   (let ((project-dir (codex-ide-test--make-temp-project)))
     (codex-ide-test-with-fixture project-dir
-      (let* ((session (codex-ide--create-process-session))
-             (image-path (expand-file-name "screenshot.png" project-dir))
-             (input (let ((codex-ide--session session))
-                      (codex-ide--compose-turn-input
-                       "Describe this screenshot"
-                       :local-images (list image-path)
-                       :image-detail "high")))
-             (text-item (aref input 0))
-             (image-item (aref input 1)))
-        (should (= (length input) 2))
-        (should (equal (alist-get 'type text-item) "text"))
-        (should (string-match-p "Describe this screenshot"
-                                (alist-get 'text text-item)))
-        (should (equal (alist-get 'type image-item) "localImage"))
-        (should (equal (alist-get 'path image-item) image-path))
-        (should (equal (alist-get 'detail image-item) "high"))))))
+      (codex-ide-test-with-fake-processes
+        (let* ((session (codex-ide--create-process-session))
+               (image-path (expand-file-name "screenshot.png" project-dir))
+               (input (let ((codex-ide--session session))
+                        (codex-ide--compose-turn-input
+                         "Describe this screenshot"
+                         :local-images (list image-path)
+                         :image-detail "high")))
+               (text-item (aref input 0))
+               (image-item (aref input 1)))
+          (should (= (length input) 2))
+          (should (equal (alist-get 'type text-item) "text"))
+          (should (string-match-p "Describe this screenshot"
+                                  (alist-get 'text text-item)))
+          (should (equal (alist-get 'type image-item) "localImage"))
+          (should (equal (alist-get 'path image-item) image-path))
+          (should (equal (alist-get 'detail image-item) "high")))))))
 
 (ert-deftest codex-ide-compose-turn-input-appends-skill-items ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (codex-ide--session-metadata (make-hash-table :test 'eq)))
     (codex-ide-test-with-fixture project-dir
-      (let ((session (codex-ide--create-process-session)))
-        (codex-ide--session-metadata-put
-         session
-         :skills-list
-         (list (codex-ide-context-test--skill
-                "imagegen"
-                "Generate images.")
-               (codex-ide-context-test--skill
-                "skill-creator"
-                "Create skills.")))
-        (codex-ide--session-metadata-put session :skills-list-state 'ready)
-        (let* ((input (let ((codex-ide--session session))
-                        (codex-ide--compose-turn-input
-                         "Use $imagegen and $skill-creator")))
-               (text-item (aref input 0))
-               (first-skill (aref input 1))
-               (second-skill (aref input 2)))
-          (should (= (length input) 3))
-          (should (equal (alist-get 'type text-item) "text"))
-          (should (string-match-p "Use \\$imagegen and \\$skill-creator"
-                                  (alist-get 'text text-item)))
-          (should (equal (alist-get 'type first-skill) "skill"))
-          (should (equal (alist-get 'name first-skill) "imagegen"))
-          (should (equal (alist-get 'path first-skill)
-                         "/tmp/imagegen/SKILL.md"))
-          (should (equal (alist-get 'type second-skill) "skill"))
-          (should (equal (alist-get 'name second-skill) "skill-creator")))))))
+      (codex-ide-test-with-fake-processes
+        (let ((session (codex-ide--create-process-session)))
+          (codex-ide--session-metadata-put
+           session
+           :skills-list
+           (list (codex-ide-context-test--skill
+                  "imagegen"
+                  "Generate images.")
+                 (codex-ide-context-test--skill
+                  "skill-creator"
+                  "Create skills.")))
+          (codex-ide--session-metadata-put session :skills-list-state 'ready)
+          (let* ((input (let ((codex-ide--session session))
+                          (codex-ide--compose-turn-input
+                           "Use $imagegen and $skill-creator")))
+                 (text-item (aref input 0))
+                 (first-skill (aref input 1))
+                 (second-skill (aref input 2)))
+            (should (= (length input) 3))
+            (should (equal (alist-get 'type text-item) "text"))
+            (should (string-match-p "Use \\$imagegen and \\$skill-creator"
+                                    (alist-get 'text text-item)))
+            (should (equal (alist-get 'type first-skill) "skill"))
+            (should (equal (alist-get 'name first-skill) "imagegen"))
+            (should (equal (alist-get 'path first-skill)
+                           "/tmp/imagegen/SKILL.md"))
+            (should (equal (alist-get 'type second-skill) "skill"))
+            (should (equal (alist-get 'name second-skill) "skill-creator"))))))))
 
 (ert-deftest codex-ide-compose-turn-input-does-not-parse-context-as-skills ()
   (let ((project-dir (codex-ide-test--make-temp-project))
         (codex-ide--session-metadata (make-hash-table :test 'eq)))
     (codex-ide-test-with-fixture project-dir
-      (let ((codex-ide-session-baseline-prompt "$imagegen is context")
-            (session (codex-ide--create-process-session)))
-        (codex-ide--session-metadata-put
-         session
-         :skills-list
-         (list (codex-ide-context-test--skill
-                "imagegen"
-                "Generate images.")))
-        (codex-ide--session-metadata-put session :skills-list-state 'ready)
-        (let ((input (let ((codex-ide--session session))
-                       (codex-ide--compose-turn-input "Explain this"))))
-          (should (= (length input) 1))
-          (should (string-match-p "\\$imagegen is context"
-                                  (alist-get 'text (aref input 0)))))))))
+      (codex-ide-test-with-fake-processes
+        (let ((codex-ide-session-baseline-prompt "$imagegen is context")
+              (session (codex-ide--create-process-session)))
+          (codex-ide--session-metadata-put
+           session
+           :skills-list
+           (list (codex-ide-context-test--skill
+                  "imagegen"
+                  "Generate images.")))
+          (codex-ide--session-metadata-put session :skills-list-state 'ready)
+          (let ((input (let ((codex-ide--session session))
+                         (codex-ide--compose-turn-input "Explain this"))))
+            (should (= (length input) 1))
+            (should (string-match-p "\\$imagegen is context"
+                                    (alist-get 'text (aref input 0))))))))))
 
 (ert-deftest codex-ide-submit-prompt-sends-local-images ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
@@ -549,25 +554,26 @@
          (file-path (codex-ide-test--make-project-file
                      project-dir "src/example.el" "(message \"hello\")\n")))
     (codex-ide-test-with-fixture project-dir
-				 (let ((codex-ide-session-baseline-prompt "Session instructions")
-				       (session (codex-ide--create-process-session)))
-				   (with-current-buffer (find-file-noselect file-path)
-				     (setq-local default-directory (file-name-as-directory project-dir))
-				     (goto-char (point-min))
-				     (let ((context (codex-ide--make-buffer-context)))
-				       (puthash (alist-get 'project-dir context)
-						context
-						codex-ide--active-buffer-contexts)
-				       (let* ((prompt (codex-ide--format-buffer-context context))
-					      (text (alist-get 'text
-							       (aref (let ((codex-ide--session session))
-								       (codex-ide--compose-turn-input prompt))
-								     0))))
-					 (with-temp-buffer
-					   (insert text)
-					   (goto-char (point-min))
-					   (should (= 1 (how-many "\\[Emacs prompt context\\]" (point-min) (point-max)))))
-					 (should (string-match-p "\\[Emacs session context\\]" text)))))))))
+      (codex-ide-test-with-fake-processes
+	(let ((codex-ide-session-baseline-prompt "Session instructions")
+	      (session (codex-ide--create-process-session)))
+	  (with-current-buffer (find-file-noselect file-path)
+	    (setq-local default-directory (file-name-as-directory project-dir))
+	    (goto-char (point-min))
+	    (let ((context (codex-ide--make-buffer-context)))
+	      (puthash (alist-get 'project-dir context)
+		       context
+		       codex-ide--active-buffer-contexts)
+	      (let* ((prompt (codex-ide--format-buffer-context context))
+		     (text (alist-get 'text
+				      (aref (let ((codex-ide--session session))
+					      (codex-ide--compose-turn-input prompt))
+					    0))))
+		(with-temp-buffer
+		  (insert text)
+		  (goto-char (point-min))
+		  (should (= 1 (how-many "\\[Emacs prompt context\\]" (point-min) (point-max)))))
+		(should (string-match-p "\\[Emacs session context\\]" text))))))))))
 
 (ert-deftest codex-ide-prompt-uses-origin-buffer-context-for-non-file-buffers ()
   (let* ((project-dir (codex-ide-test--make-temp-project))
